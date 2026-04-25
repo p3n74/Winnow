@@ -40,6 +40,7 @@ export type StatusSnapshot = {
   retries: number;
   logsEnabled: boolean;
   logsPath: string;
+  sessionId?: string;
   lastSession: string;
 };
 
@@ -58,6 +59,7 @@ export async function getStatusSnapshot(config: WinnowConfig): Promise<StatusSna
     retries: config.translatorRetries,
     logsEnabled: config.logsEnabled,
     logsPath: config.logsDir,
+    sessionId: config.sessionId,
     lastSession: lastEvent,
   };
 }
@@ -70,6 +72,7 @@ export async function runStatus(config: WinnowConfig): Promise<number> {
   process.stdout.write(`profile=${snapshot.profile} dual_output=${snapshot.dualOutput}\n`);
   process.stdout.write(`timeout_ms=${snapshot.timeoutMs} retries=${snapshot.retries}\n`);
   process.stdout.write(`logs=${snapshot.logsEnabled ? "enabled" : "disabled"} path=${snapshot.logsPath}\n`);
-  process.stdout.write(`last_session=${snapshot.lastSession}\n`);
+  process.stdout.write(`session_id=${snapshot.sessionId || "none"}\n`);
+  process.stdout.write(`last_event=${snapshot.lastSession}\n`);
   return 0;
 }

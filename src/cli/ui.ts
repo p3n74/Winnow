@@ -9,6 +9,13 @@ import pty from "node-pty";
 import { WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
 import { saveProjectProfile } from "../config/projectProfile.js";
+import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
+import { 
+  defaultAgentTranscriptDir, 
+  getTranscriptDir, 
+  listCursorSessions, 
+  SessionSummary 
+} from "../cursor/sessionUtils.js";
 
 type UiOptions = {
   port: number;
@@ -38,7 +45,16 @@ type ProfileUpdateRequest = {
 type AgentStartRequest = {
   prompt: string;
   args?: string;
-  modelPreference?: "auto" | "composer";
+  modelPreference?: "default" | "auto" | "composer";
+  autonomyMode?: boolean;
+  sessionId?: string;
+};
+
+type AgentEvent = {
+  id: string;
+  ts: string;
+  kind: "user" | "assistant" | "stderr" | "status" | "tool" | "system";
+  content: string;
 };
 
 type AgentSession = {
@@ -52,6 +68,7 @@ type AgentSession = {
   error?: string;
   command: string;
   args: string[];
+  events: AgentEvent[];
 };
 
 type SessionStreamClient = {
@@ -66,13 +83,6 @@ type FileListEntry = {
   name: string;
   path: string;
   type: "dir" | "file";
-};
-
-type SessionSummary = {
-  id: string;
-  file: string;
-  updatedAt: string;
-  preview: string;
 };
 
 type SessionMessage = {
@@ -97,10 +107,11 @@ type LocalSessionRecord = {
   endedAt?: string;
   status: "running" | "done" | "error";
   args: string[];
-  modelPreference: "auto" | "composer";
+  modelPreference: "default" | "auto" | "composer";
   prompt: string;
   output: string;
   errorOutput: string;
+  events?: AgentEvent[];
 };
 
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
@@ -163,49 +174,70 @@ function buildMainTerminalHtml(token?: string): string {
     <title>Winnow Main Terminal Grid</title>
     <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm/css/xterm.css" />
     <style>
-      :root{--bg:#0a0b0f;--panel:#11131a;--line:#2b2f3b;--text:#d8deea;--muted:#8c94a7;}
+      :root{--bg:#090d14;--panel:#121927;--panel2:#0f1521;--line:#25324a;--lineSoft:#1a2436;--text:#d9e7ff;--muted:#8fa3c4;--accent:#6ec7ff;--radius:10px}
       *{box-sizing:border-box}
-      html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-      .root{display:grid;grid-template-columns:50% 50%;width:100%;height:100vh}
-      .left{display:grid;grid-template-rows:50% 50%;border-right:1px solid var(--line);min-width:0;min-height:0}
-      .leftBottom{display:grid;grid-template-columns:43% 57%;min-width:0;min-height:0}
-      .leftBottomLeft{display:grid;grid-template-rows:58% 42%;min-width:0;min-height:0;border-right:1px solid var(--line)}
-      .pane{min-width:0;min-height:0;border-bottom:1px solid var(--line)}
-      .leftBottom .pane{border-bottom:0}
-      .leftBottomLeft #pane3Wrap{border-bottom:1px solid var(--line)}
-      #pane1Wrap{border-bottom:1px solid var(--line)}
-      #pane2Wrap{border-left:1px solid var(--line)}
-      .paneInner{width:100%;height:100%;display:grid;grid-template-rows:28px 1fr;background:var(--panel)}
-      .paneHead{border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;padding:6px 8px;display:flex;align-items:center;justify-content:space-between}
-      .reconnect{border:1px solid var(--line);background:#151926;color:var(--text);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer}
-      .term{width:100%;height:100%;overflow:hidden}
+      html,body{margin:0;width:100%;height:100%;background:radial-gradient(1200px 700px at 30% -10%, #1a2740 0%, var(--bg) 52%);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+      .workspace{display:grid;grid-template-rows:44px 1fr;height:100vh;width:100%}
+      .toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(10,14,22,.78);backdrop-filter:blur(6px)}
+      .toolbarLeft,.toolbarRight{display:flex;gap:8px;align-items:center}
+      .brand{font-size:12px;color:var(--muted)}
+      .chip{font-size:11px;color:#b9d0ef;border:1px solid var(--line);padding:3px 8px;border-radius:999px;background:#121b2a}
+      .back{border:1px solid var(--line);background:#151d2d;color:var(--text);padding:5px 10px;border-radius:7px;font-size:12px;text-decoration:none}
+      .root{display:grid;grid-template-columns:48% 52%;gap:10px;padding:10px;min-width:0;min-height:0}
+      .left{display:grid;grid-template-rows:50% 50%;gap:10px;min-width:0;min-height:0}
+      .leftBottom{display:grid;grid-template-columns:42% 58%;gap:10px;min-width:0;min-height:0}
+      .leftBottomLeft{display:grid;grid-template-rows:58% 42%;gap:10px;min-width:0;min-height:0}
+      .pane{min-width:0;min-height:0;background:linear-gradient(180deg,rgba(20,29,45,.95) 0%,rgba(13,19,31,.95) 100%);border:1px solid var(--lineSoft);border-radius:var(--radius);overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.24)}
+      .paneInner{width:100%;height:100%;display:grid;grid-template-rows:34px 1fr}
+      .paneHead{border-bottom:1px solid var(--lineSoft);color:var(--muted);font-size:12px;padding:7px 10px;display:flex;align-items:center;justify-content:space-between;background:rgba(7,12,20,.55)}
+      .paneTitle{display:flex;align-items:center;gap:8px;color:#c8daf7}
+      .paneCmd{font-size:10px;color:#86a9d5;border:1px solid var(--line);padding:1px 6px;border-radius:999px;background:#111a2a}
+      .reconnect{border:1px solid var(--line);background:#172133;color:var(--text);border-radius:7px;padding:3px 9px;font-size:11px;cursor:pointer}
+      .reconnect:hover,.back:hover{border-color:var(--accent);color:#fff}
+      .term{width:100%;height:100%;overflow:hidden;background:var(--panel2)}
       .cursorHost{width:100%;height:100%;border:0;background:#0b1018}
-      .back{position:fixed;top:8px;left:8px;z-index:10;border:1px solid var(--line);background:#151926;color:var(--text);padding:4px 8px;border-radius:5px;font-size:12px;text-decoration:none}
+      @media (max-width: 1200px){
+        .root{grid-template-columns:1fr;grid-template-rows:56% 44%}
+      }
     </style>
   </head>
   <body>
-    <a class="back" href="${token ? `/?token=${encodeURIComponent(token)}` : "/"}">Back</a>
-    <div class="root">
+    <div class="workspace">
+      <div class="toolbar">
+        <div class="toolbarLeft">
+          <a class="back" href="${token ? `/?token=${encodeURIComponent(token)}` : "/"}">Back</a>
+          <span class="brand">Winnow Main Grid</span>
+        </div>
+        <div class="toolbarRight">
+          <span class="chip">1 ranger</span>
+          <span class="chip">2 cursor</span>
+          <span class="chip">3 htop</span>
+          <span class="chip">4 netwatch</span>
+          <span class="chip">5 shell</span>
+        </div>
+      </div>
+      <div class="root">
       <div class="left">
-        <div id="pane1Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>1 File Browser</span><button class="reconnect" data-pane="1">Reconnect</button></div><div id="pane1" class="term"></div></div></div>
+        <div id="pane1Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span><button class="reconnect" data-pane="1">Reconnect</button></div><div id="pane1" class="term"></div></div></div>
         <div class="leftBottom">
           <div class="leftBottomLeft">
-            <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>3 htop</span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
-            <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>4 netwatch</span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
+            <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">htop</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
+            <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">4 Network <span class="paneCmd">netwatch</span></span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
           </div>
-          <div id="pane5Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>5 Terminal</span><button class="reconnect" data-pane="5">Reconnect</button></div><div id="pane5" class="term"></div></div></div>
+          <div id="pane5Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">5 Terminal <span class="paneCmd">shell</span></span><button class="reconnect" data-pane="5">Reconnect</button></div><div id="pane5" class="term"></div></div></div>
         </div>
       </div>
       <div id="pane2Wrap" class="pane">
         <div class="paneInner">
-          <div class="paneHead"><span>2 Cursor</span></div>
+          <div class="paneHead"><span class="paneTitle">2 Cursor Workspace <span class="paneCmd">winnow-agent-ui</span></span></div>
           <iframe
             class="cursorHost"
             title="Cursor Panel"
-            src="${token ? `/?token=${encodeURIComponent(token)}&view=agent&embed=1` : "/?view=agent&embed=1"}"
+            src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
           ></iframe>
         </div>
       </div>
+    </div>
     </div>
     <script src="https://unpkg.com/@xterm/xterm/lib/xterm.js"></script>
     <script src="https://unpkg.com/@xterm/addon-fit/lib/addon-fit.js"></script>
@@ -225,7 +257,11 @@ function buildMainTerminalHtml(token?: string): string {
       function openPane(paneId){
         const mount = document.getElementById("pane" + paneId);
         mount.innerHTML = "";
-        const term = new Terminal({cursorBlink:true,fontSize:12,theme:{background:"#11131a"}});
+        const term = new Terminal({
+          cursorBlink:true,
+          fontSize:12,
+          theme:{background:"#0f1521",foreground:"#d9e7ff",cursor:"#86d6ff"}
+        });
         const fit = new FitAddon.FitAddon();
         term.loadAddon(fit);
         term.open(mount);
@@ -359,11 +395,6 @@ async function previewPath(pathValue?: string): Promise<{ path: string; content:
   return { path: absolute, content };
 }
 
-function defaultAgentTranscriptDir(): string {
-  const workspaceId = process.cwd().replace(/^\/+/, "").replace(/\//g, "-");
-  return join(homedir(), ".cursor", "projects", workspaceId, "agent-transcripts");
-}
-
 function localSessionDir(): string {
   return join(process.cwd(), ".winnow", "sessions");
 }
@@ -417,6 +448,14 @@ async function listLocalSessions(limit = 20): Promise<SessionSummary[]> {
 async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
   const content = await readFile(localSessionRecordPath(id), "utf8");
   const record = JSON.parse(content) as LocalSessionRecord;
+  if (Array.isArray(record.events) && record.events.length > 0) {
+    const messages = record.events.map((event) => ({
+      role: event.kind,
+      content: event.content,
+      timestamp: event.ts,
+    }));
+    return { id, messages };
+  }
   const messages: SessionMessage[] = [
     { role: "user", content: record.prompt, timestamp: record.startedAt },
   ];
@@ -455,47 +494,6 @@ function readStringDeep(value: unknown): string {
     }
   }
   return "";
-}
-
-function getTranscriptDir(overrideDir?: string): string {
-  return overrideDir || process.env.WINNOW_AGENT_TRANSCRIPTS_DIR || defaultAgentTranscriptDir();
-}
-
-async function listCursorSessions(limit = 20, overrideDir?: string): Promise<SessionSummary[]> {
-  const dir = getTranscriptDir(overrideDir);
-  const files = (await readdir(dir))
-    .filter((name) => name.endsWith(".jsonl"))
-    .map((name) => join(dir, name));
-
-  const summaries: SessionSummary[] = [];
-  for (const file of files) {
-    const fileInfo = await stat(file);
-    const content = await readFile(file, "utf8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    let preview = "";
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      try {
-        const row = JSON.parse(lines[i]) as Record<string, unknown>;
-        preview = readStringDeep(row).slice(0, 160);
-        if (preview) {
-          break;
-        }
-      } catch {
-        // ignore malformed line
-      }
-    }
-    const id = file.split("/").pop()!.replace(/\.jsonl$/, "");
-    summaries.push({
-      id,
-      file,
-      updatedAt: fileInfo.mtime.toISOString(),
-      preview: preview || "(no text preview)",
-    });
-  }
-
-  return summaries
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-    .slice(0, Math.max(1, limit));
 }
 
 async function readCursorSession(
@@ -675,7 +673,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   const pushStreamEvent = (
     sessionId: string,
-    event: "stdout" | "stderr" | "status" | "done",
+    event: "stdout" | "stderr" | "status" | "done" | "timeline",
     payload: unknown,
   ) => {
     const clients = streamClients.get(sessionId);
@@ -708,49 +706,124 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   });
 
   const parseArgs = (raw: string): string[] => raw.split(/\s+/).map((x) => x.trim()).filter(Boolean);
-  const ensureModelArg = (args: string[], preference: "auto" | "composer"): string[] => {
+  const ensureModelArg = (args: string[], preference: "default" | "auto" | "composer"): string[] => {
+    if (preference === "default") {
+      return args;
+    }
     if (args.includes("--model")) {
       return args;
     }
     const value = preference === "composer" ? "composer" : "auto";
     return [...args, "--model", value];
   };
+  const ensureExecutionArgs = (args: string[], autonomyEnabled: boolean, sessionId?: string): string[] => {
+    const next = [...args];
+    if (sessionId) {
+      if (!next.includes("--resume")) {
+        next.push("--resume", sessionId);
+      }
+      if (!next.includes("--print")) {
+        next.push("--print");
+      }
+    } else {
+      if (!next.includes("--print")) {
+        next.push("--print");
+      }
+    }
+    if (!next.includes("--output-format")) {
+      next.push("--output-format", "stream-json");
+    }
+    if (!next.includes("--stream-partial-output")) {
+      next.push("--stream-partial-output");
+    }
+    if (!autonomyEnabled) {
+      return next;
+    }
+    const hasForce = next.includes("-f") || next.includes("--force") || next.includes("--yolo");
+    if (!hasForce) {
+      next.push("--force");
+    }
+    const hasSandboxOverride = next.includes("--sandbox");
+    if (!hasSandboxOverride) {
+      next.push("--sandbox", "disabled");
+    }
+    return next;
+  };
 
   const startAgentSession = (payload: AgentStartRequest): AgentSession => {
     const nativeConfig = forceCursorNativeConfig(config);
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = (payload.sessionId || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const baseArgs = parseArgs(payload.args ?? "");
-    const args = ensureModelArg(baseArgs, payload.modelPreference ?? "auto");
-    const session: AgentSession = {
-      id,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      output: "",
-      errorOutput: "",
-      command: nativeConfig.cursorCommand,
-      args,
-    };
+    const autonomyEnabled = payload.autonomyMode !== false;
+    const args = ensureExecutionArgs(
+      ensureModelArg(baseArgs, payload.modelPreference ?? "default"),
+      autonomyEnabled,
+      id
+    );
+    const existing = sessions.get(id);
+    const session: AgentSession = existing
+      ? {
+          ...existing,
+          status: "running",
+          endedAt: undefined,
+          error: undefined,
+          command: nativeConfig.cursorCommand,
+          args,
+          startedAt: existing.startedAt || new Date().toISOString(),
+          events: existing.events ?? [],
+        }
+      : {
+          id,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          output: "",
+          errorOutput: "",
+          command: nativeConfig.cursorCommand,
+          args,
+          events: [],
+        };
     sessions.set(id, session);
     const startedAt = session.startedAt;
-    const modelPreference = payload.modelPreference ?? "auto";
+    const modelPreference = payload.modelPreference ?? "default";
     const prompt = payload.prompt;
 
-    void writeLocalSessionRecord({
-      id,
-      projectRoot: process.cwd(),
-      startedAt,
-      status: "running",
-      args,
-      modelPreference,
-      prompt,
-      output: "",
-      errorOutput: "",
-    });
+    const persistRecord = () =>
+      writeLocalSessionRecord({
+        id,
+        projectRoot: process.cwd(),
+        startedAt,
+        endedAt: session.endedAt,
+        status: session.status,
+        args,
+        modelPreference,
+        prompt,
+        output: session.output,
+        errorOutput: session.errorOutput,
+        events: session.events,
+      });
+
+    const pushEvent = (kind: AgentEvent["kind"], content: string) => {
+      const event: AgentEvent = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ts: new Date().toISOString(),
+        kind,
+        content,
+      };
+      session.events.push(event);
+      if (session.events.length > 2000) {
+        session.events = session.events.slice(-2000);
+      }
+      pushStreamEvent(id, "timeline", { sessionId: id, event });
+    };
+
+    pushEvent("user", prompt);
+
+    void persistRecord();
     void upsertLocalSessionIndex({
       id,
       startedAt,
       updatedAt: startedAt,
-      status: "running",
+      status: session.status,
       preview: prompt.slice(0, 160),
       source: "winnow-local",
     });
@@ -764,60 +837,78 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.status = "error";
       session.error = error.message;
       session.endedAt = new Date().toISOString();
+      pushEvent("status", `spawn error: ${error.message}`);
+      void persistRecord();
     });
 
+    let stdoutBuffer = "";
     child.stdout?.on("data", (buf: Buffer) => {
-      const chunk = buf.toString("utf8");
-      session.output += chunk;
-      pushStreamEvent(id, "stdout", { chunk, sessionId: id });
-      void writeLocalSessionRecord({
-        id,
-        projectRoot: process.cwd(),
-        startedAt,
-        status: session.status,
-        args,
-        modelPreference,
-        prompt,
-        output: session.output,
-        errorOutput: session.errorOutput,
-      });
+      stdoutBuffer += buf.toString("utf8");
+      const lines = stdoutBuffer.split("\n");
+      stdoutBuffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.type === "assistant" && data.message?.content) {
+            // Only process partial stream chunks to avoid double-printing full collapsed blocks
+            if (!data.model_call_id) {
+              const text = data.message.content.map((c: any) => c.text).join("");
+              session.output += text;
+              pushEvent("assistant", text);
+            }
+          } else if (data.type === "tool_call") {
+            const toolType = Object.keys(data.tool_call || {})[0] || "tool";
+            const toolData = (data.tool_call || {})[toolType] || {};
+            
+            let action = toolType.replace("ToolCall", "");
+            let target = "";
+            
+            if (toolData.args?.path) {
+              target = toolData.args.path.split("/").pop() || toolData.args.path;
+            } else if (toolData.args?.command) {
+              target = toolData.args.command;
+            } else if (toolData.args?.pattern) {
+              target = toolData.args.pattern;
+            } else if (toolData.args?.query) {
+              target = toolData.args.query;
+            }
+
+            const prefix = data.subtype === "started" ? "▶" : "✓";
+            pushEvent("tool", `${prefix} ${action} ${target}`.trim());
+            
+            if (data.subtype === "completed") {
+              // Add a newline to output to space out blocks after tool use
+              session.output += "\n";
+            }
+          } else if (data.type === "result") {
+            pushEvent("status", `result: ${data.subtype}`);
+          }
+        } catch (e) {
+          // If it fails to parse (e.g. not using stream-json for some reason), fallback to raw text
+          session.output += line + "\n";
+          pushEvent("assistant", line + "\n");
+        }
+      }
+      void persistRecord();
     });
     child.stderr?.on("data", (buf: Buffer) => {
       const chunk = buf.toString("utf8");
       session.errorOutput += chunk;
-      pushStreamEvent(id, "stderr", { chunk, sessionId: id });
-      void writeLocalSessionRecord({
-        id,
-        projectRoot: process.cwd(),
-        startedAt,
-        status: session.status,
-        args,
-        modelPreference,
-        prompt,
-        output: session.output,
-        errorOutput: session.errorOutput,
-      });
+      pushEvent("stderr", chunk);
+      void persistRecord();
     });
 
-    child.stdin?.write(`${payload.prompt}\n`);
+    child.stdin?.write(`${prompt}\n`);
     child.stdin?.end();
 
     child.on("close", (code: number | null) => {
       session.exitCode = code ?? 1;
       session.status = session.exitCode === 0 ? "done" : "error";
       session.endedAt = new Date().toISOString();
-      void writeLocalSessionRecord({
-        id,
-        projectRoot: process.cwd(),
-        startedAt,
-        endedAt: session.endedAt,
-        status: session.status,
-        args,
-        modelPreference,
-        prompt,
-        output: session.output,
-        errorOutput: session.errorOutput,
-      });
+      pushEvent("status", `exit=${session.exitCode} status=${session.status}`);
+      void persistRecord();
       void upsertLocalSessionIndex({
         id,
         startedAt,
@@ -1009,11 +1100,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         streamClients.set(id, current);
 
         res.write(`event: status\ndata: ${JSON.stringify({ status: session.status, sessionId: id })}\n\n`);
-        if (session.output) {
-          res.write(`event: stdout\ndata: ${JSON.stringify({ chunk: session.output, sessionId: id })}\n\n`);
-        }
-        if (session.errorOutput) {
-          res.write(`event: stderr\ndata: ${JSON.stringify({ chunk: session.errorOutput, sessionId: id })}\n\n`);
+        if (session.events?.length) {
+          for (const event of session.events.slice(-500)) {
+            res.write(`event: timeline\ndata: ${JSON.stringify({ sessionId: id, event })}\n\n`);
+          }
+        } else {
+          if (session.output) {
+            res.write(`event: stdout\ndata: ${JSON.stringify({ chunk: session.output, sessionId: id })}\n\n`);
+          }
+          if (session.errorOutput) {
+            res.write(`event: stderr\ndata: ${JSON.stringify({ chunk: session.errorOutput, sessionId: id })}\n\n`);
+          }
         }
         if (session.status !== "running") {
           res.write(`event: done\ndata: ${JSON.stringify({ sessionId: id })}\n\n`);
@@ -1054,6 +1151,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/agent" && req.method === "GET") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(buildAgentWindowPageHtml(options.token));
+      return;
+    }
+
     if (url.pathname === "/" && req.method === "GET") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -1074,7 +1178,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .body.single{grid-template-columns:100%}
       .leftCol,.rightCol{display:grid;gap:8px;min-height:0}
       .leftCol{grid-template-rows:26% 16% 18% 20% 20%}
-      .rightCol{grid-template-rows:58% 42%}
+      .rightCol{grid-template-rows:100%}
       .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
       .title{font-size:12px;color:#9dc4df;margin-bottom:6px}
       .muted{color:var(--muted)}
@@ -1088,6 +1192,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .entry{display:block;border:0;background:transparent;color:var(--text);text-align:left;padding:3px 4px;width:100%}
       .entry:hover{background:#103047}
       .small{font-size:11px}
+      .hint{font-size:11px;color:var(--muted)}
+      .quickbar{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+      .quickbar button{padding:4px 8px;font-size:11px}
+      .runRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+      .kbd{border:1px solid var(--line);border-bottom-width:2px;padding:1px 6px;border-radius:6px;background:#0a1a28;color:#9dc4df;font-size:10px}
+      .statusBadge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:#9dc4df;background:#0a1a28}
+      .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:6px 0}
+      .metric{border:1px solid var(--line);border-radius:6px;padding:6px;background:#081827}
+      .metricLabel{font-size:10px;color:var(--muted)}
+      .metricValue{font-size:12px;color:var(--text)}
+      #chatHistory{overflow:auto;border:1px solid var(--line);border-radius:6px;background:#06131e;padding:8px;flex:1;min-height:140px}
+      .chatMsg{margin-bottom:8px;border:1px solid #0f2d45;border-radius:6px;padding:6px;background:#091a29}
+      .chatRole{font-size:10px;color:#9dc4df;margin-bottom:4px;text-transform:uppercase}
+      .chatText{white-space:pre-wrap;font-size:12px}
     </style>
   </head>
   <body>
@@ -1097,7 +1215,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         <button class="tab active" data-view="os">Winnow UI</button>
         <button class="tab" data-view="agent">Cursor Agent</button>
         <button class="tab" data-view="settings">Settings</button>
-        <button class="tab" onclick="openMainGrid()">Main Grid</button>
+        <button id="mainGridBtn" class="tab">Main Grid</button>
+        <a id="agentWindowLink" class="tab" href="${options.token ? "/agent?token=" + encodeURIComponent(options.token) : "/agent"}" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center">Agent window</a>
       </div>
       <div class="body">
         <div class="leftCol">
@@ -1160,30 +1279,48 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         </div>
         <div class="rightCol">
           <div class="panel">
-            <div class="title">Agent Console (Cursor Native)</div>
-            <div class="row small">
+            <div class="title">Agent Workspace (Cursor Native)</div>
+            <div class="runRow small">
               <label>Model Pref</label>
               <select id="agentModelPref">
+                <option value="default">default</option>
                 <option value="auto">auto</option>
                 <option value="composer">composer</option>
               </select>
+              <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
+              <label><input id="continueMode" type="checkbox" /> continue session</label>
               <label>Cursor Args</label>
               <input id="agentArgs" style="width:55%" placeholder="optional args passed to cursor-agent" />
               <button onclick="startAgentRun()">Run Agent</button>
+              <span class="kbd">Ctrl/Cmd+Enter</span>
             </div>
-            <div class="small muted" id="agentSessionInfo">No active session.</div>
-            <pre id="agentOutput">No run yet.</pre>
-          </div>
-          <div class="panel">
-            <div class="title">Prompt + Diff</div>
             <div class="row small">
-              <button onclick="refreshWorkspace()">Refresh</button>
-              <button onclick="stageSelected()">Stage Selected</button>
+              <label>Resume Session</label>
+              <select id="agentSessionSelect" style="min-width:260px">
+                <option value="">(new session)</option>
+              </select>
+              <button onclick="refreshSessions()">Reload Sessions</button>
+              <button onclick="startFreshSession()">Start Fresh</button>
             </div>
-            <div id="workspaceFiles"></div>
-            <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent..."></textarea>
-            <div class="small muted" style="margin:6px 0">Current git diff</div>
-            <pre id="workspaceDiff">Loading...</pre>
+            <div class="quickbar">
+              <button onclick="appendPrompt('Implement the requested change with tests, then summarize what changed.')">Implement + tests</button>
+              <button onclick="appendPrompt('Review this code for bugs and edge cases, then propose a minimal patch.')">Review code</button>
+              <button onclick="appendPrompt('Refactor this code for readability without changing behavior.')">Refactor safely</button>
+              <button onclick="clearPrompt()">Clear prompt</button>
+            </div>
+            <div class="small"><span class="statusBadge" id="agentStatusBadge">idle</span> <span id="agentSessionInfo">No active session.</span></div>
+            <div class="hint">Tip: use <code>--resume &lt;sessionId&gt;</code> in Cursor Args to continue a session.</div>
+            <div class="metrics">
+              <div class="metric"><div class="metricLabel">Prompt tokens est</div><div class="metricValue" id="metricPromptTokens">0</div></div>
+              <div class="metric"><div class="metricLabel">Output tokens est</div><div class="metricValue" id="metricOutputTokens">0</div></div>
+              <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
+              <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
+            </div>
+            <div class="small muted" style="margin:6px 0">Thinking trace</div>
+            <pre id="agentThinking">No thinking trace yet.</pre>
+            <div class="small muted" style="margin:6px 0">Chat history</div>
+            <div id="chatHistory"></div>
+            <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
           </div>
         </div>
       </div>
@@ -1199,7 +1336,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
       }
       function openMainGrid(){
-        window.location.href = withToken('/main');
+        window.location.assign(withToken('/main'));
       }
       async function refresh(){
         const state = await fetch(withToken('/api/state')).then(r=>r.json());
@@ -1279,6 +1416,162 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       let streamSource = null;
       let selectedSyncedSession = null;
       let selectedSyncedMessages = [];
+      let selectedResumeSessionId = null;
+      let cachedSessionRows = [];
+      let agentMetrics = {
+        startedAtMs: 0,
+        promptChars: 0,
+        outputChars: 0,
+        chunkCount: 0,
+      };
+      let thinkingEvents = [];
+      let lastTraceAtMs = 0;
+      const seenTimelineIds = new Set();
+      function estimateTokens(chars){
+        return Math.max(0, Math.ceil(chars / 4));
+      }
+      function formatElapsed(ms){
+        if(ms <= 0){ return '0s'; }
+        const sec = Math.floor(ms / 1000);
+        if(sec < 60){ return sec + 's'; }
+        const min = Math.floor(sec / 60);
+        const rem = sec % 60;
+        return min + 'm ' + rem + 's';
+      }
+      function refreshMetrics(){
+        document.getElementById('metricPromptTokens').textContent = String(estimateTokens(agentMetrics.promptChars));
+        document.getElementById('metricOutputTokens').textContent = String(estimateTokens(agentMetrics.outputChars));
+        document.getElementById('metricChunks').textContent = String(agentMetrics.chunkCount);
+        const elapsed = agentMetrics.startedAtMs ? Date.now() - agentMetrics.startedAtMs : 0;
+        document.getElementById('metricElapsed').textContent = formatElapsed(elapsed);
+      }
+      function appendChat(role, text){
+        const root = document.getElementById('chatHistory');
+        if(!root){ return; }
+
+        const lastMsg = root.lastElementChild;
+        if (lastMsg) {
+          const roleEl = lastMsg.querySelector(".chatRole");
+          if (roleEl && roleEl.textContent === role) {
+            const textEl = lastMsg.querySelector(".chatText");
+            if (textEl) {
+              textEl.textContent += text;
+              root.scrollTop = root.scrollHeight;
+              return;
+            }
+          }
+        }
+
+        const msg = document.createElement('div');
+        msg.className = 'chatMsg';
+        const roleEl = document.createElement('div');
+        roleEl.className = 'chatRole';
+        roleEl.textContent = role;
+        const textEl = document.createElement('div');
+        textEl.className = 'chatText';
+        textEl.textContent = text;
+        msg.appendChild(roleEl);
+        msg.appendChild(textEl);
+        root.appendChild(msg);
+        root.scrollTop = root.scrollHeight;
+      }
+      function clearChat(){
+        const root = document.getElementById('chatHistory');
+        if(root){ root.innerHTML = ''; }
+        seenTimelineIds.clear();
+      }
+      function appendFromTimelineEvent(ev){
+        if(!ev || !ev.id){ return; }
+        if(seenTimelineIds.has(ev.id)){ return; }
+        seenTimelineIds.add(ev.id);
+        const kind = String(ev.kind || 'system');
+        
+        if (kind === 'tool' || kind === 'status' || kind === 'system') {
+          pushTrace(ev.content || "");
+          return;
+        }
+
+        let lane = 'system';
+        if(kind === 'user'){ lane = 'user'; }
+        else if(kind === 'assistant'){ lane = 'assistant'; }
+        else if(kind === 'stderr'){ lane = 'stderr'; }
+        
+        appendChat(lane, ev.content || '');
+        if(kind === 'assistant' || kind === 'stderr'){
+          agentMetrics.outputChars += (ev.content || '').length;
+          agentMetrics.chunkCount += 1;
+        }
+        refreshMetrics();
+      }
+      function loadHistoryIntoPanels(messages){
+        clearChat();
+        thinkingEvents = [];
+        lastTraceAtMs = Date.now();
+        for(const msg of (messages || [])){
+          const role = String(msg.role || 'entry').toLowerCase();
+          
+          if (role === 'tool' || role === 'status' || role === 'system') {
+            pushTrace(msg.content || "");
+            continue;
+          }
+
+          let lane = 'assistant';
+          if(role === 'user' || role.includes('user') || role.includes('human')){
+            lane = 'user';
+          } else if(role === 'stderr' || role.includes('stderr') || role.includes('error')){
+            lane = 'stderr';
+          }
+
+          appendChat(lane, msg.content || '');
+        }
+        const thinkingBlock = document.getElementById('agentThinking');
+        if(thinkingEvents.length === 0){
+          thinkingBlock.textContent = 'No thinking trace found in this session history.';
+        }
+      }
+      function updateResumeSelect(rows){
+        cachedSessionRows = Array.isArray(rows) ? rows : [];
+        const select = document.getElementById('agentSessionSelect');
+        if(!select){ return; }
+        const prev = selectedResumeSessionId || select.value || '';
+        const options = ['<option value="">(new session)</option>']
+          .concat(cachedSessionRows.map((s) => {
+            const label = '[' + (s.updatedAt || '').replace('T',' ').slice(0,19) + '] ' + String(s.id || '').slice(0,8) + '  ' + (s.preview || '');
+            return '<option value="' + s.id + '">' + label.replace(/"/g, '&quot;') + '</option>';
+          }));
+        select.innerHTML = options.join('');
+        const nextValue = cachedSessionRows.some((s) => s.id === prev) ? prev : '';
+        select.value = nextValue;
+        selectedResumeSessionId = nextValue || null;
+      }
+      function updateArgsResume(id){
+        // Intentionally no-op so optional args remain fully user-controlled.
+        // Resume routing is applied internally when building the request payload.
+        void id;
+      }
+      function startFreshSession(){
+        selectedResumeSessionId = null;
+        const select = document.getElementById('agentSessionSelect');
+        if(select){ select.value = ''; }
+        updateArgsResume(null);
+        appendChat('system', 'Switched to new session mode.');
+      }
+      function traceNow(){
+        const d = new Date();
+        return d.toTimeString().slice(0,8);
+      }
+      function pushTrace(line){
+        if(!line){ return; }
+        thinkingEvents.push('[' + traceNow() + '] ' + line);
+        if(thinkingEvents.length > 120){
+          thinkingEvents = thinkingEvents.slice(-120);
+        }
+        const block = document.getElementById('agentThinking');
+        block.textContent = thinkingEvents.join('\\n');
+        block.scrollTop = block.scrollHeight;
+        lastTraceAtMs = Date.now();
+      }
+
       function setView(view){
         document.querySelectorAll('.tab').forEach((tab) => {
           tab.classList.toggle('active', tab.getAttribute('data-view') === view);
@@ -1306,9 +1599,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const res = await fetch(withToken('/api/agent/' + activeSessionId)).then(r=>r.json());
         if(!res.ok){ return; }
         const s = res.session;
-        const output = (s.output || '') + (s.errorOutput ? ('\\n[stderr]\\n' + s.errorOutput) : '');
-        document.getElementById('agentOutput').textContent = output || 'Running...';
         document.getElementById('agentSessionInfo').textContent = 'session=' + s.id + ' status=' + s.status + (s.exitCode !== undefined ? (' exit=' + s.exitCode) : '');
+        document.getElementById('agentStatusBadge').textContent = s.status;
+        agentMetrics.outputChars = (s.output || '').length + (s.errorOutput || '').length;
+        refreshMetrics();
+        const streamDead = !streamSource || streamSource.readyState !== 1;
+        if(streamDead && Array.isArray(s.events)){
+          for(const ev of s.events){
+            appendFromTimelineEvent(ev);
+          }
+        }
         if(s.status !== 'running' && pollTimer){
           clearInterval(pollTimer);
           pollTimer = null;
@@ -1323,22 +1623,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       function attachStream(sessionId){
         closeStream();
         streamSource = new EventSource(withToken('/api/agent/' + sessionId + '/stream'));
-        streamSource.addEventListener('stdout', (evt) => {
-          const data = JSON.parse(evt.data || '{}');
-          const out = document.getElementById('agentOutput');
-          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + (data.chunk || '');
-        });
-        streamSource.addEventListener('stderr', (evt) => {
-          const data = JSON.parse(evt.data || '{}');
-          const out = document.getElementById('agentOutput');
-          const prefix = out.textContent && !out.textContent.endsWith('\\n') ? '\\n' : '';
-          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + prefix + '[stderr]\\n' + (data.chunk || '');
+        streamSource.addEventListener('timeline', (evt) => {
+          try{
+            const data = JSON.parse(evt.data || '{}');
+            if(data.event){
+              appendFromTimelineEvent(data.event);
+            }
+          }catch(_e){}
         });
         streamSource.addEventListener('status', (evt) => {
           const data = JSON.parse(evt.data || '{}');
           document.getElementById('agentSessionInfo').textContent = 'session=' + sessionId + ' status=' + (data.status || 'running') + (data.exitCode !== undefined ? (' exit=' + data.exitCode) : '');
+          document.getElementById('agentStatusBadge').textContent = data.status || 'running';
+          refreshMetrics();
         });
         streamSource.addEventListener('done', () => {
+          pushTrace('stream completed');
           closeStream();
           if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
           pollAgent();
@@ -1351,30 +1651,69 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       async function startAgentRun(){
         const prompt = document.getElementById('agentPrompt').value.trim();
         if(!prompt){
-          document.getElementById('agentOutput').textContent = 'Prompt is required.';
+          appendChat('system', 'Prompt is required.');
           return;
         }
+        const continueMode = document.getElementById('continueMode').checked;
+        const select = document.getElementById('agentSessionSelect');
+        const pickedSession = (select?.value || selectedResumeSessionId || '').trim();
+        const resumeSessionId = continueMode ? (pickedSession || selectedResumeSessionId || activeSessionId || '') : '';
+        const baseArgs = (document.getElementById('agentArgs').value || '').trim();
+        const cleanedArgs = baseArgs.replace(/(?:^|\s)--resume\s+\S+/g, '').trim();
+        const effectiveArgs = resumeSessionId
+          ? (cleanedArgs ? cleanedArgs + ' --resume ' + resumeSessionId : '--resume ' + resumeSessionId)
+          : cleanedArgs;
         const payload = {
           prompt,
-          args: document.getElementById('agentArgs').value,
-          modelPreference: document.getElementById('agentModelPref').value
+          args: effectiveArgs,
+          modelPreference: document.getElementById('agentModelPref').value,
+          autonomyMode: document.getElementById('autonomyMode').checked,
+          sessionId: resumeSessionId || undefined
         };
         const res = await fetch(withToken('/api/agent/start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
         if(!res.ok){
-          document.getElementById('agentOutput').textContent = 'Failed to start: ' + JSON.stringify(res);
+          appendChat('system', 'Failed to start: ' + JSON.stringify(res));
           return;
         }
         activeSessionId = res.sessionId;
-        document.getElementById('agentOutput').textContent = 'Running...';
+        if(continueMode){
+          selectedResumeSessionId = activeSessionId;
+        }
+        clearChat();
+        thinkingEvents = [];
+        lastTraceAtMs = Date.now();
+        document.getElementById('agentThinking').textContent = '';
+        pushTrace('session started');
+        document.getElementById('agentStatusBadge').textContent = 'running';
         document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
+        agentMetrics = {
+          startedAtMs: Date.now(),
+          promptChars: prompt.length,
+          outputChars: 0,
+          chunkCount: 0,
+        };
+        refreshMetrics();
         if(pollTimer){ clearInterval(pollTimer); }
         pollTimer = setInterval(pollAgent, 1000);
         attachStream(activeSessionId);
         pollAgent();
+        setTimeout(refreshSessions, 500);
+      }
+      function appendPrompt(text){
+        const area = document.getElementById('agentPrompt');
+        const current = area.value.trim();
+        area.value = current ? (current + "\\n\\n" + text) : text;
+        area.focus();
+      }
+      function clearPrompt(){
+        const area = document.getElementById('agentPrompt');
+        area.value = '';
+        area.focus();
       }
       async function refreshSessions(){
         const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
         document.getElementById('sessionDirInfo').textContent = 'dir: ' + (data.dir || '(unknown)');
+        updateResumeSelect(data.sessions || []);
         const rows = (data.sessions || []).map((s, idx) =>
           '<button class="entry sync-session" data-session-id="' + s.id + '"' + (idx===0 ? ' style="border:1px solid var(--accent)"' : '') + '>' +
           '[' + (s.updatedAt || '').replace('T',' ').slice(0,19) + '] ' + s.id.slice(0,8) + '  ' + (s.preview || '') +
@@ -1384,14 +1723,19 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.querySelectorAll('.sync-session').forEach((el) => {
           el.onclick = () => loadSession(el.getAttribute('data-session-id'));
         });
-        const first = document.querySelector('.sync-session');
-        if(first){ await loadSession(first.getAttribute('data-session-id')); }
+        if(selectedResumeSessionId){ await loadSession(selectedResumeSessionId); }
       }
       async function loadSession(id){
         if(!id){ return; }
         selectedSyncedSession = id;
+        selectedResumeSessionId = id;
+        activeSessionId = id;
+        updateArgsResume(id);
+        const select = document.getElementById('agentSessionSelect');
+        if(select){ select.value = id; }
         const data = await fetch(withToken('/api/sessions/' + id)).then(r=>r.json());
         selectedSyncedMessages = data.messages || [];
+        loadHistoryIntoPanels(selectedSyncedMessages);
         const preview = selectedSyncedMessages.slice(-8).map((m) => '[' + m.role + '] ' + m.content).join('\\n\\n');
         document.getElementById('sessionPreview').textContent = preview || 'No message content.';
         document.querySelectorAll('.sync-session').forEach((el) => {
@@ -1403,11 +1747,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           document.getElementById('result').textContent = 'Select a synced session first.';
           return;
         }
-        const argsEl = document.getElementById('agentArgs');
-        const existing = (argsEl.value || '').trim();
-        const resumeArg = '--resume ' + selectedSyncedSession;
-        argsEl.value = existing.includes('--resume') ? existing : (existing ? existing + ' ' : '') + resumeArg;
-        document.getElementById('result').textContent = 'Agent args updated with resume session: ' + selectedSyncedSession;
+        selectedResumeSessionId = selectedSyncedSession;
+        const select = document.getElementById('agentSessionSelect');
+        if(select){ select.value = selectedSyncedSession; }
+        document.getElementById('result').textContent = 'Resume target set to session: ' + selectedSyncedSession;
       }
       function useSelectedPrompt(){
         if(!selectedSyncedMessages || selectedSyncedMessages.length === 0){
@@ -1422,7 +1765,6 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.getElementById('result').textContent = 'Loaded prompt from synced session.';
       }
       refresh();
-      refreshWorkspace();
       refreshDir();
       refreshSessions();
       document.querySelectorAll('.tab').forEach((tab) => {
@@ -1430,7 +1772,33 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if(!targetView){ return; }
         tab.onclick = () => setView(targetView);
       });
+      const mainGridBtn = document.getElementById('mainGridBtn');
+      if(mainGridBtn){
+        mainGridBtn.addEventListener('click', (evt) => {
+          evt.preventDefault();
+          openMainGrid();
+        });
+      }
+      const sessionSelect = document.getElementById('agentSessionSelect');
+      if(sessionSelect){
+        sessionSelect.addEventListener('change', () => {
+          const value = sessionSelect.value || '';
+          selectedResumeSessionId = value || null;
+          updateArgsResume(selectedResumeSessionId);
+          if(value){
+            loadSession(value);
+          }
+        });
+      }
+      document.getElementById('agentPrompt').addEventListener('keydown', (evt) => {
+        const withCmd = evt.metaKey || evt.ctrlKey;
+        if(withCmd && evt.key === 'Enter'){
+          evt.preventDefault();
+          startAgentRun();
+        }
+      });
       setView(INITIAL_VIEW);
+      setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);
     </script>
   </body>

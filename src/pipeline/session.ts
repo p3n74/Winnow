@@ -162,15 +162,38 @@ async function runWithStreamingTranslation(
   });
 }
 
+function getEffectiveArgs(config: WinnowConfig, args: string[], isInteractiveLoop: boolean): string[] {
+  let effectiveArgs = [...args];
+  if (config.sessionId) {
+    if (!effectiveArgs.includes("--resume")) {
+      effectiveArgs.push("--resume", config.sessionId);
+    }
+    if (!effectiveArgs.includes("--print")) {
+      effectiveArgs.push("--print");
+    }
+  } else if (isInteractiveLoop || isTranslationActive(config)) {
+    // If we are in an interactive loop or translating, we generally want --print 
+    // so we can capture and process the output.
+    if (!effectiveArgs.includes("--print")) {
+      effectiveArgs.push("--print");
+    }
+  }
+  return effectiveArgs;
+}
+
 export async function runWinnowSession({ config, args, stdinOverride }: SessionOptions): Promise<number> {
   const logger = new SessionLogger(config);
   const start = Date.now();
+  const isInteractiveLoop = stdinOverride !== undefined;
+  const effectiveArgs = getEffectiveArgs(config, args, isInteractiveLoop);
+
   await logger.log({
     event: "session_start",
     timestamp: new Date().toISOString(),
     backend: config.translatorBackend,
     inputMode: config.inputMode,
     outputMode: config.outputMode,
+    detail: config.sessionId ? `session_id: ${config.sessionId}` : undefined,
   });
 
   const stdinText = stdinOverride ?? (await readStdinIfPiped());
@@ -178,7 +201,7 @@ export async function runWinnowSession({ config, args, stdinOverride }: SessionO
   if (!isTranslationActive(config)) {
     const code = await runCursorAgent({
       command: config.cursorCommand,
-      args,
+      args: effectiveArgs,
       stdinText,
     });
     await logger.log({
@@ -211,7 +234,7 @@ export async function runWinnowSession({ config, args, stdinOverride }: SessionO
   }
 
   if (config.outputMode !== "off") {
-    const code = await runWithStreamingTranslation(config, args, translatedInput);
+    const code = await runWithStreamingTranslation(config, effectiveArgs, translatedInput);
     await logger.log({
       event: "session_end",
       timestamp: new Date().toISOString(),
@@ -223,7 +246,7 @@ export async function runWinnowSession({ config, args, stdinOverride }: SessionO
     return code;
   }
 
-  const result = await runAndCapture(config.cursorCommand, args, translatedInput);
+  const result = await runAndCapture(config.cursorCommand, effectiveArgs, translatedInput);
 
   if (result.stderr) {
     process.stderr.write(result.stderr);

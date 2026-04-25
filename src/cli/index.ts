@@ -25,6 +25,7 @@ type CliOptions = {
   translatorTimeoutMs?: number;
   translatorRetries?: number;
   cursorCommand?: string;
+  session?: string;
   port?: number;
   open?: boolean;
   host?: string;
@@ -66,6 +67,9 @@ export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConf
 
   if (options.cursorCommand) {
     merged.cursorCommand = options.cursorCommand;
+  }
+  if (options.session) {
+    merged.sessionId = options.session;
   }
   if (options.translatorTimeoutMs !== undefined) {
     merged.translatorTimeoutMs = options.translatorTimeoutMs;
@@ -128,6 +132,7 @@ export function buildProgram(): Command {
     .option("--deepseek-model <model>", "deepseek API model")
     .option("--deepseek-base-url <url>", "deepseek API base URL")
     .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--session <id>", "resume specific cursor session ID")
     .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
     .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
@@ -154,6 +159,7 @@ export function buildProgram(): Command {
     .option("--deepseek-model <model>", "deepseek API model")
     .option("--deepseek-base-url <url>", "deepseek API base URL")
     .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--session <id>", "resume specific cursor session ID")
     .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
     .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
@@ -171,6 +177,7 @@ export function buildProgram(): Command {
     .option("--deepseek-base-url <url>", "deepseek API base URL")
     .option("--deepseek-model <model>", "deepseek API model")
     .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--session <id>", "resume specific cursor session ID")
     .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
     .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")

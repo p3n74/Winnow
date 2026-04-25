@@ -1,6 +1,6 @@
 # Winnow
 
-Winnow is a terminal-first wrapper around `cursor-agent` that keeps Cursor account/model compatibility while adding optional Chinese translation via Ollama.
+Winnow is a terminal-first wrapper around `cursor-agent` that keeps Cursor account/model compatibility while adding optional Chinese translation via Ollama/DeepSeek, plus a local companion web UI.
 
 ## Why
 
@@ -76,6 +76,7 @@ Common flags:
 - `--model <ollama-model>`
 - `--deepseek-model <deepseek-model>`
 - `--deepseek-base-url <deepseek-base-url>`
+- `--ollama-base-url <ollama-base-url>`
 - `--translator-timeout-ms <ms>`
 - `--translator-retries <count>`
 
@@ -121,6 +122,11 @@ npm run ui
 
 `npm run ui` auto-switches to Node 22 via `nvm` when needed.
 If PTY support is not available, it auto-rebuilds `node-pty` before launch.
+You can also run it directly via CLI:
+
+```bash
+npm run dev -- ui
+```
 
 Optional flags:
 
@@ -136,11 +142,12 @@ Optional flags:
 
 UI capabilities:
 
-- Fixed five-pane terminal layout matching the split-grid design
-- Real PTY-backed interactive terminals in every pane (input, resize, fullscreen TUIs)
-- Default pane commands: `ranger`, `cursor-agent`, `htop`, `netwatch`, and shell
-- Per-pane reconnect button to respawn terminal process
-- Token protection is enforced on both HTTP and WebSocket connections
+- Dashboard view with status, logs, runtime profile controls, and git diff + selective staging
+- Built-in "Cursor Agent" run panel (prompt + args + model preference + stream output)
+- Session sync browser for Cursor transcripts and local Winnow runs (resume and prompt reuse helpers)
+- Main grid layout: PTY terminals for panes `1/3/4/5`, with pane `2` as embedded agent workspace
+- Per-pane reconnect button to respawn terminal process in the main grid
+- Token protection enforced on both HTTP and WebSocket connections
 - Main grid PTY terminals require supported Node runtime (`>=20 <23`)
 
 Terminal app prerequisites:
@@ -149,6 +156,11 @@ Terminal app prerequisites:
 - `htop` installed and available on `PATH`
 - `netwatch` available on `PATH`
 - `cursor-agent` installed and authenticated
+
+Session storage:
+
+- Local UI-run agent sessions are stored in `.winnow/sessions`
+- Cursor transcript sync defaults to `~/.cursor/projects/<workspace-id>/agent-transcripts`
 
 ## Notes
 

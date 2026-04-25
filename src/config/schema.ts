@@ -31,6 +31,7 @@ export const configSchema = z.object({
   cursorCommand: z.string().default("cursor-agent"),
   logsEnabled: envBool.default(true),
   logsDir: z.string().default(".winnow/logs"),
+  sessionId: z.string().optional(),
 });
 
 export type WinnowConfig = z.infer<typeof configSchema>;
