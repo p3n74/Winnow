@@ -26,6 +26,7 @@
     "winnow": "dist/cli/index.js"
   },
   "dependencies": {
+    "better-sqlite3": "^11.8.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "commander": "^14.0.3",
@@ -34,6 +35,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^25.6.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",

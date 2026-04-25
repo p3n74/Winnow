@@ -2,7 +2,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { accessSync, constants as fsConstants, readFileSync } from "node:fs";
 import { arch, cpus, freemem, homedir, loadavg, networkInterfaces, platform, totalmem, uptime } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import pty from "node-pty";
@@ -11,6 +11,18 @@ import { getStatusSnapshot } from "./status.js";
 import { saveProjectProfile } from "../config/projectProfile.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
 import { listProjects, registerProject } from "../config/projects.js";
+import {
+  finalizeRun,
+  queryFilters,
+  queryLastAgentRun,
+  queryRuns,
+  querySummary,
+  queryTimeseries,
+  recordRunUsage,
+  upsertRunStart,
+  usageDbStatus,
+} from "../data/usageStore.js";
+import { buildDiskDashboard } from "../data/diskSnapshotService.js";
 import {
   ensureCursorWorkspaceLayout,
   ensureCursorWorkspaceLayoutSync,
@@ -170,20 +182,24 @@ function buildMainTerminalHtml(token?: string): string {
     <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm/css/xterm.css" />
     <style>
       :root {
-        --bg: #09090b;
-        --panel: #18181b;
-        --panel2: #27272a;
-        --line: #3f3f46;
-        --text: #e4e4e7;
-        --text-strong: #fafafa;
-        --muted: #a1a1aa;
-        --accent: #3b82f6;
-        --accent-hover: #60a5fa;
-        --danger: #ef4444;
-        --success: #10b981;
+        --bg: #000000;
+        --panel: #000000;
+        --panel2: #0a0a0a;
+        --line: rgba(34, 211, 238, 0.32);
+        --line-faint: rgba(34, 211, 238, 0.12);
+        --text: #7dd3fc;
+        --text-strong: #22d3ee;
+        --text-neon: #5eead4;
+        --muted: rgba(125, 211, 252, 0.58);
+        --accent: #22d3ee;
+        --accent-hover: #67e8f9;
+        --red-pastel: #fecaca;
+        --red-neon: #f87171;
+        --danger: #f87171;
+        --success: #2dd4bf;
         --radius: 8px;
         --radius-sm: 6px;
-        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --shadow: none;
         --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       }
@@ -207,11 +223,11 @@ function buildMainTerminalHtml(token?: string): string {
         padding: 0 16px;
         border-bottom: 1px solid var(--line);
         background: var(--panel);
-        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        box-shadow: none;
         z-index: 10;
       }
       .toolbarLeft, .toolbarRight { display: flex; gap: 12px; align-items: center; }
-      .brand { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+      .brand { font-size: 13px; font-weight: 700; color: var(--text-neon); }
       .chip {
         font-size: 11px;
         font-weight: 600;
@@ -235,7 +251,7 @@ function buildMainTerminalHtml(token?: string): string {
         align-items: center;
         transition: all 0.2s;
       }
-      .back:hover { background: rgba(255,255,255,0.05); color: var(--text-strong); }
+      .back:hover { background: var(--line-faint); color: var(--text-neon); }
       .root { display: grid; grid-template-columns: 45fr 55fr; gap: 16px; padding: 16px; min-width: 0; min-height: 0; }
       .left { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
       .leftBottom { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; min-width: 0; min-height: 0; }
@@ -348,7 +364,7 @@ function buildMainTerminalHtml(token?: string): string {
         const term = new Terminal({
           cursorBlink:true,
           fontSize:12,
-          theme:{background:"#09090b",foreground:"#e4e4e7",cursor:"#3b82f6", selectionBackground: "rgba(59, 130, 246, 0.3)"}
+          theme:{background:"#000000",foreground:"#7dd3fc",cursor:"#5eead4", selectionBackground: "rgba(34, 211, 238, 0.28)"}
         });
         const fit = new FitAddon.FitAddon();
         term.loadAddon(fit);
@@ -1004,6 +1020,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       source: "winnow-local",
     });
 
+    upsertRunStart({
+      id,
+      projectPath: uiWorkspace.dir,
+      projectName: basename(uiWorkspace.dir),
+      source: "cursor-agent",
+      modelPref: modelPreference,
+      startedAt,
+      status: "running",
+      promptPreview: prompt,
+    });
+
     const child = spawn(nativeConfig.cursorCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: uiWorkspace.dir,
@@ -1016,6 +1043,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.endedAt = new Date().toISOString();
       pushEvent("status", `spawn error: ${error.message}`);
       void persistRecord();
+      finalizeRun(id, "error", 1, session.endedAt);
     });
 
     let stdoutBuffer = "";
@@ -1061,6 +1089,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             }
           } else if (data.type === "result") {
             if (data.subtype === "success") {
+              if (data.usage) {
+                recordRunUsage(id, {
+                  inputTokens: Number(data.usage.inputTokens) || 0,
+                  outputTokens: Number(data.usage.outputTokens) || 0,
+                  model: typeof data.model === "string" ? data.model : undefined,
+                });
+              }
               const usage = data.usage ? ` (Tokens: ${data.usage.inputTokens} IN / ${data.usage.outputTokens} OUT)` : "";
               pushEvent("status", `✓ Run completed${usage}`);
             } else {
@@ -1092,6 +1127,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const msg = session.exitCode === 0 ? "✨ Session closed successfully." : `❌ Session ended with error (exit code: ${session.exitCode})`;
       pushEvent("status", msg);
       void persistRecord();
+      finalizeRun(id, session.status, session.exitCode ?? null, session.endedAt);
       void upsertLocalSessionIndex({
         id,
         startedAt,
@@ -1143,9 +1179,93 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/dashboard/last-agent-run" && req.method === "GET") {
+      const r = queryLastAgentRun();
+      if (!r.ok) {
+        sendJson(res, 200, {
+          ok: false,
+          reason: r.reason,
+          run: null,
+          transcriptBase: cursorTranscriptDirForUi(),
+        });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        run: r.run,
+        transcriptBase: cursorTranscriptDirForUi(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/dashboard/disk" && req.method === "GET") {
+      try {
+        const body = await buildDiskDashboard({
+          volumePath: uiWorkspace.dir,
+        });
+        sendJson(res, 200, { ...body, workspaceRoot: uiWorkspace.dir });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const projects = await listProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (url.pathname === "/api/usage/status" && req.method === "GET") {
+      sendJson(res, 200, usageDbStatus());
+      return;
+    }
+
+    if (url.pathname === "/api/usage/summary" && req.method === "GET") {
+      const rawRange = url.searchParams.get("range") ?? "all";
+      const range = (["today", "7d", "30d", "all"].includes(rawRange) ? rawRange : "all") as "today" | "7d" | "30d" | "all";
+      sendJson(res, 200, querySummary(range));
+      return;
+    }
+
+    if (url.pathname === "/api/usage/timeseries" && req.method === "GET") {
+      const rawRange = url.searchParams.get("range") ?? "7d";
+      const allowedRanges = ["24h", "7d", "30d", "90d", "all"] as const;
+      const range = allowedRanges.includes(rawRange as (typeof allowedRanges)[number])
+        ? (rawRange as (typeof allowedRanges)[number])
+        : "7d";
+      const rawBucket = url.searchParams.get("bucket") ?? "day";
+      const allowedBuckets = ["hour", "day", "week"] as const;
+      const bucket = allowedBuckets.includes(rawBucket as (typeof allowedBuckets)[number])
+        ? (rawBucket as (typeof allowedBuckets)[number])
+        : "day";
+      const body = queryTimeseries({
+        range,
+        bucket,
+        projectPath: url.searchParams.get("projectPath") ?? undefined,
+        model: url.searchParams.get("model") ?? undefined,
+        source: url.searchParams.get("source") ?? undefined,
+      });
+      sendJson(res, 200, body);
+      return;
+    }
+
+    if (url.pathname === "/api/usage/runs" && req.method === "GET") {
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      const body = queryRuns({
+        limit: Number.isFinite(limit) ? limit : 50,
+        projectPath: url.searchParams.get("projectPath") ?? undefined,
+        model: url.searchParams.get("model") ?? undefined,
+        source: url.searchParams.get("source") ?? undefined,
+        from: url.searchParams.get("from") ?? undefined,
+        to: url.searchParams.get("to") ?? undefined,
+      });
+      sendJson(res, 200, body);
+      return;
+    }
+
+    if (url.pathname === "/api/usage/filters" && req.method === "GET") {
+      sendJson(res, 200, queryFilters());
       return;
     }
 
@@ -1417,36 +1537,45 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     <title>Winnow Console UI</title>
     <style>
       :root {
-        --bg: #09090b;
-        --panel: #18181b;
-        --panel2: #27272a;
-        --line: #3f3f46;
-        --text: #e4e4e7;
-        --text-strong: #fafafa;
-        --muted: #a1a1aa;
-        --accent: #3b82f6;
-        --accent-hover: #60a5fa;
-        --danger: #ef4444;
-        --success: #10b981;
+        /* True black (OLED: pixels off). Primary = pastel + neon cyan; accents = red family. */
+        --bg: #000000;
+        --panel: #000000;
+        --panel2: #0a0a0a;
+        --line: rgba(34, 211, 238, 0.32);
+        --line-faint: rgba(34, 211, 238, 0.12);
+        --text: #7dd3fc;
+        --text-strong: #22d3ee;
+        --text-neon: #5eead4;
+        --muted: rgba(125, 211, 252, 0.58);
+        --accent: #22d3ee;
+        --accent-hover: #67e8f9;
+        --red-pastel: #fecaca;
+        --red-neon: #f87171;
+        --danger: #f87171;
+        --success: #2dd4bf;
         --radius: 8px;
         --radius-sm: 6px;
-        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --shadow: none;
         --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       }
       * { box-sizing: border-box; }
-      html, body {
+      html { height: 100%; }
+      body {
         margin: 0;
         padding: 0;
-        height: 100%;
+        min-height: 100%;
         background: var(--bg);
         color: var(--text);
         font-family: var(--font-sans);
         font-size: 13px;
         line-height: 1.5;
         -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
-      .app { display: flex; flex-direction: column; height: 100vh; }
+      /* Main shell: at least one viewport tall; content grows and window scrolls (no column trap). */
+      .app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
       .topbar {
         height: 48px;
         display: flex;
@@ -1455,7 +1584,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         padding: 0 16px;
         border-bottom: 1px solid var(--line);
         background: var(--panel);
-        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        box-shadow: none;
         z-index: 10;
       }
       .tab {
@@ -1472,14 +1601,31 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         display: inline-flex;
         align-items: center;
       }
-      .tab:hover { color: var(--text-strong); background: rgba(255, 255, 255, 0.05); }
-      .tab.active { color: var(--text-strong); background: var(--panel2); border-color: var(--line); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-      .body { flex: 1; display: grid; grid-template-columns: 38% 62%; gap: 16px; padding: 16px; min-height: 0; }
+      .tab:hover { color: var(--text-strong); background: rgba(34, 211, 238, 0.08); }
+      .tab.active { color: var(--text-neon); background: var(--panel2); border-color: var(--line); font-weight: 600; }
+      .body {
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-columns: minmax(360px, 40%) minmax(520px, 1fr);
+        gap: 16px;
+        padding: 16px;
+        align-content: start;
+        min-height: calc(100vh - 48px);
+        min-height: calc(100dvh - 48px);
+      }
       .body.single { grid-template-columns: 100%; }
-      .leftCol, .rightCol { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; padding-right: 4px; }
+      .leftCol, .rightCol {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 0;
+        overflow: visible;
+        padding-right: 0;
+        align-items: stretch;
+      }
       .leftCol > .panel { flex-shrink: 0; }
-      .leftCol > .panel.flex-panel { flex: 1; flex-shrink: 1; }
-      .rightCol > .panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .leftCol > .panel.flex-panel { flex: 0 0 auto; min-height: 0; }
+      .rightCol > .panel { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
       .panel {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -1492,7 +1638,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         min-height: 0;
         box-shadow: var(--shadow);
       }
-      .title { font-size: 14px; font-weight: 600; color: var(--text-strong); letter-spacing: 0.01em; margin: 0; }
+      .title { font-size: 14px; font-weight: 700; color: var(--text-neon); letter-spacing: 0.02em; margin: 0; }
+      strong, b { color: var(--text-strong); font-weight: 700; }
+      code { font-family: var(--font-mono); color: var(--text-strong); font-weight: 600; font-size: 0.95em; }
+      .hint { font-size: 12px; color: var(--muted); margin: 0; font-style: italic; }
+      .metricLabel { font-style: italic; }
+      .dashboardSubline, #sysRefreshedAt, #diskMeasuredAt { font-style: italic; }
+      .projectTime { font-style: italic; }
       .muted { color: var(--muted); }
       .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       input, select, button, textarea {
@@ -1505,9 +1657,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         font-size: 13px;
         transition: border-color 0.15s, box-shadow 0.15s;
       }
-      input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+      input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.22); }
       button { cursor: pointer; font-weight: 500; background: var(--panel2); }
-      button:hover { background: var(--line); border-color: #52525b; color: var(--text-strong); }
+      button:hover { background: var(--line-faint); border-color: var(--accent); color: var(--text-neon); }
       pre {
         margin: 0;
         background: var(--bg);
@@ -1516,11 +1668,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         padding: 10px;
         white-space: pre-wrap;
         overflow: auto;
-        flex: 1;
+        flex: 0 0 auto;
         min-height: 0;
         font-size: 12px;
         font-family: var(--font-mono);
-        color: #d4d4d8;
+        color: var(--text);
       }
       #agentThinking {
         flex-shrink: 0;
@@ -1550,7 +1702,6 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .entry { display: block; border: 0; background: transparent; color: var(--text); text-align: left; padding: 4px 8px; width: 100%; border-radius: 4px; margin: 0; }
       .entry:hover { background: var(--panel2); color: var(--text-strong); }
       .small { font-size: 12px; }
-      .hint { font-size: 12px; color: var(--muted); margin: 0; }
       .quickbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
       .quickbar button { padding: 4px 10px; font-size: 12px; border-radius: 99px; }
       .runRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; }
@@ -1584,6 +1735,81 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .metrics.dashboardMetrics {
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
+      .body.dashboard-mode {
+        gap: 18px;
+        padding: 18px;
+      }
+      .body.dashboard-mode .leftCol {
+        max-width: 1200px;
+        margin: 0 auto;
+        width: 100%;
+        overflow: visible;
+      }
+      .body.dashboard-mode .panel {
+        padding: 18px;
+        gap: 14px;
+      }
+      .body.dashboard-mode .title {
+        font-size: 15px;
+        letter-spacing: 0.015em;
+      }
+      .body.dashboard-mode .dashboard-panel {
+        min-height: 0;
+      }
+      .body.dashboard-mode .dashboard-system {
+        flex-shrink: 0;
+      }
+      .body.dashboard-mode .dashboard-lastrun,
+      .body.dashboard-mode .dashboard-disk {
+        flex-shrink: 0;
+      }
+      /* Token usage card: do not flex-shrink (was clipping chart at 100% zoom). */
+      .body.dashboard-mode .leftCol > .panel.dashboard-usage.flex-panel {
+        flex: 0 0 auto;
+        align-self: stretch;
+        min-height: 0;
+      }
+      .body.dashboard-mode .leftCol > .panel.dashboard-projects.flex-panel {
+        flex: 0 0 auto;
+        min-height: 0;
+      }
+      .body.dashboard-mode .panel.dashboard-usage {
+        overflow-x: hidden;
+        overflow-y: visible;
+      }
+      #usageMainWrap {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 0;
+        flex: 0 0 auto;
+        overflow-x: hidden;
+        overflow-y: visible;
+      }
+      .body.dashboard-mode .dashboard-projects {
+        min-height: 0;
+      }
+      .body.dashboard-mode .dashboard-usage .hint {
+        color: var(--muted);
+      }
+      .body.dashboard-mode .dashboard-usage .metrics.dashboardMetrics,
+      .body.dashboard-mode .dashboard-system .metrics.dashboardMetrics {
+        gap: 10px;
+      }
+      .body.dashboard-mode .metric {
+        background: linear-gradient(180deg, rgba(5, 25, 30, 0.55), rgba(0, 0, 0, 0.98));
+        border-color: var(--line);
+      }
+      #usageKpiTodayIn, #usageKpiLifeIn { color: var(--text-strong); font-weight: 700; }
+      #usageKpiTodayOut, #usageKpiLifeOut { color: var(--red-pastel); font-weight: 700; }
+      #usageKpiCostLife { color: var(--red-neon); font-weight: 700; }
+      .body.dashboard-mode .metricLabel {
+        font-size: 10px;
+        letter-spacing: 0.06em;
+      }
+      .body.dashboard-mode .metricValue {
+        font-size: 15px;
+      }
       .dashboardSubline {
         display: flex;
         justify-content: space-between;
@@ -1591,6 +1817,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         align-items: center;
         color: var(--muted);
         font-size: 12px;
+      }
+      .body.dashboard-mode .dashboardSubline {
+        padding-top: 4px;
+        border-top: 1px solid var(--line-faint);
       }
       .projectToolbar {
         display: flex;
@@ -1609,9 +1839,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         border: 1px solid var(--line);
         background: var(--panel2);
         border-radius: 99px;
-        padding: 2px 8px;
+        padding: 3px 9px;
         font-size: 11px;
         color: var(--muted);
+      }
+      .body.dashboard-mode .projectMetaBadge {
+        color: var(--text);
+        border-color: var(--line);
       }
       .projectCard {
         width: 100%;
@@ -1626,6 +1860,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         gap: 16px;
         align-items: flex-start;
         overflow: hidden;
+        transition: background 0.15s, border-color 0.15s;
       }
       .projectMain {
         flex: 1;
@@ -1639,8 +1874,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         border-bottom: 0;
       }
       .projectName {
-        font-weight: 600;
-        color: var(--text-strong);
+        font-weight: 700;
+        color: var(--text-neon);
       }
       .projectPath {
         margin-top: 4px;
@@ -1657,13 +1892,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         text-align: right;
       }
       #chatHistory {
-        overflow-y: auto;
+        overflow: visible;
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
         background: var(--bg);
         padding: 12px;
-        flex: 1;
-        min-height: 140px;
+        flex: 0 0 auto;
+        min-height: 160px;
         margin: 0;
       }
       .chatMsg {
@@ -1672,11 +1907,169 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         border-radius: var(--radius-sm);
         padding: 12px;
         background: var(--panel);
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        box-shadow: none;
       }
       .chatMsg:last-child { margin-bottom: 0; }
-      .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; }
-      .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: #d4d4d8; }
+      .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-style: italic; }
+      .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: var(--text); }
+      .usageToolbar { margin-top: 4px; }
+      .usageToolbar select { max-width: 100%; width: 100%; min-width: 0; }
+      .body.dashboard-mode .usageToolbar {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(180px, 1fr));
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--line-faint);
+        gap: 8px;
+      }
+      .body.dashboard-mode .usageToolbar label {
+        font-size: 11px;
+        color: var(--muted);
+        font-style: italic;
+        font-weight: 600;
+      }
+      .usageControl {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .usageActions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: flex-end;
+        grid-column: 1 / -1;
+      }
+      .usageActions .stackedToggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .usageChartWrap {
+        position: relative;
+        width: 100%;
+        height: 220px;
+        min-height: 200px;
+        max-height: 260px;
+        flex: 0 0 auto;
+        align-self: stretch;
+        margin-top: 2px;
+      }
+      .usageChartWrap canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+      }
+      .usageChartEmpty {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: 12px;
+        font-style: italic;
+        border: 1px dashed var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--line-faint);
+        pointer-events: none;
+      }
+      .usageRecentRunsLabel { margin-top: 10px; }
+      .usageRunsWrap {
+        overflow: auto;
+        flex: 0 0 auto;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        max-height: 220px;
+        margin-top: 4px;
+      }
+      .body.dashboard-mode .usageRunsWrap {
+        border-color: var(--line);
+      }
+      #projectList.projectList {
+        overflow: auto;
+        flex: 1;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 6px;
+        background: var(--bg);
+        min-height: 160px;
+      }
+      .body.dashboard-mode #projectList.projectList {
+        border-color: var(--line);
+      }
+      .usageTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .usageTable th, .usageTable td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+      .usageTable th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--bg); z-index: 1; }
+      .body.dashboard-mode .usageTable th {
+        background: #000000;
+        color: var(--text-neon);
+        font-style: italic;
+        border-bottom-color: var(--line);
+      }
+      .body.dashboard-mode .usageTable td {
+        border-bottom-color: var(--line-faint);
+      }
+      .usageTokIn { color: var(--text-strong); font-weight: 600; }
+      .usageTokOut { color: var(--red-pastel); font-weight: 600; }
+      .usageCost { color: var(--red-neon); font-weight: 700; }
+      .body.dashboard-mode .usageTable tbody tr:hover td {
+        background: var(--line-faint);
+      }
+      @media (max-width: 1280px) {
+        .body {
+          grid-template-columns: minmax(320px, 42%) minmax(0, 1fr);
+          gap: 14px;
+          padding: 14px;
+        }
+        .body.dashboard-mode {
+          gap: 14px;
+          padding: 14px;
+        }
+      }
+      @media (max-width: 960px) {
+        .body {
+          grid-template-columns: 1fr;
+        }
+        .body.dashboard-mode .panel {
+          padding: 14px;
+        }
+        .body.dashboard-mode .dashboardSubline {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .body.dashboard-mode .metrics.dashboardMetrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .body.dashboard-mode .usageToolbar select {
+          max-width: none;
+          min-width: 140px;
+        }
+        .body.dashboard-mode .usageToolbar {
+          grid-template-columns: repeat(2, minmax(140px, 1fr));
+        }
+      }
+      @media (max-width: 780px) {
+        .body.dashboard-mode .usageToolbar {
+          grid-template-columns: 1fr;
+        }
+        .usageActions {
+          justify-content: flex-start;
+        }
+        .usageChartWrap {
+          height: 200px;
+          min-height: 180px;
+          max-height: 220px;
+        }
+      }
+      @media (max-width: 640px) {
+        .body.dashboard-mode .metrics.dashboardMetrics {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1690,7 +2083,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       <div class="body">
         <div class="leftCol">
           <!-- Dashboard specific panels -->
-          <div class="panel dashboard-only">
+          <div class="panel dashboard-only dashboard-panel dashboard-system">
             <div class="title">System Status</div>
             <div class="metrics dashboardMetrics">
               <div class="metric"><div class="metricLabel">Platform</div><div class="metricValue" id="sysPlatform">...</div></div>
@@ -1706,14 +2099,94 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             </div>
           </div>
 
-          <div class="panel flex-panel dashboard-only">
+          <div class="panel dashboard-only dashboard-panel dashboard-lastrun">
+            <div class="title">Last agent run</div>
+            <div id="lastRunContent" class="muted small">Loading…</div>
+          </div>
+
+          <div class="panel dashboard-only dashboard-panel dashboard-disk">
+            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div class="title" style="margin:0">Disk &amp; project sizes</div>
+              <div class="row small">
+                <button type="button" id="diskRefreshBtn" onclick="refreshDiskDashboard()">Refresh</button>
+                <span class="muted" id="diskMeasuredAt"></span>
+              </div>
+            </div>
+            <div id="diskContent" class="small muted">Loading…</div>
+            <p class="hint" id="diskNote" style="display:none"></p>
+          </div>
+
+          <div id="usageTokenSection" class="panel dashboard-only flex-panel dashboard-panel dashboard-usage">
+            <div class="title">Token usage (global)</div>
+            <p class="hint" id="usageDbHint">Costs are <strong>estimates</strong> from token counts. Set per-model USD per 1k tokens in <code>~/.winnow/pricing.json</code>.</p>
+            <div id="usageUnavailable" class="muted small" style="display:none;padding:8px 0"></div>
+            <div id="usageMainWrap">
+              <div class="metrics dashboardMetrics" id="usageKpis">
+                <div class="metric"><div class="metricLabel">In (today)</div><div class="metricValue" id="usageKpiTodayIn">0</div></div>
+                <div class="metric"><div class="metricLabel">Out (today)</div><div class="metricValue" id="usageKpiTodayOut">0</div></div>
+                <div class="metric"><div class="metricLabel">In (lifetime)</div><div class="metricValue" id="usageKpiLifeIn">0</div></div>
+                <div class="metric"><div class="metricLabel">Out (lifetime)</div><div class="metricValue" id="usageKpiLifeOut">0</div></div>
+                <div class="metric"><div class="metricLabel">Runs today</div><div class="metricValue" id="usageKpiRunsToday">0</div></div>
+                <div class="metric"><div class="metricLabel">Est. cost (life)</div><div class="metricValue" id="usageKpiCostLife">$0</div></div>
+              </div>
+              <div class="projectToolbar usageToolbar">
+                <div class="usageControl">
+                  <label class="small muted" for="usageChartRange">Chart range</label>
+                  <select id="usageChartRange">
+                    <option value="24h">24h</option>
+                    <option value="7d" selected>7d</option>
+                    <option value="30d">30d</option>
+                    <option value="90d">90d</option>
+                    <option value="all">All</option>
+                  </select>
+                </div>
+                <div class="usageControl">
+                  <label class="small muted" for="usageChartBucket">Bucket</label>
+                  <select id="usageChartBucket">
+                    <option value="hour">Hour</option>
+                    <option value="day" selected>Day</option>
+                    <option value="week">Week</option>
+                  </select>
+                </div>
+                <div class="usageControl">
+                  <label class="small muted" for="usageFilterProject">Project</label>
+                  <select id="usageFilterProject"><option value="">(all)</option></select>
+                </div>
+                <div class="usageControl">
+                  <label class="small muted" for="usageFilterModel">Model</label>
+                  <select id="usageFilterModel"><option value="">(all)</option></select>
+                </div>
+                <div class="usageControl">
+                  <label class="small muted" for="usageFilterSource">Source</label>
+                  <select id="usageFilterSource"><option value="">(all)</option></select>
+                </div>
+                <div class="usageActions">
+                  <label class="small muted stackedToggle"><input type="checkbox" id="usageStacked" /> Stacked</label>
+                  <button type="button" onclick="refreshUsageDashboard()">Refresh</button>
+                </div>
+              </div>
+              <div class="usageChartWrap">
+                <canvas id="usageChartCanvas"></canvas>
+                <div id="usageChartEmpty" class="usageChartEmpty">No chartable usage data for this filter/range.</div>
+              </div>
+              <div class="small muted usageRecentRunsLabel">Recent runs</div>
+              <div class="usageRunsWrap">
+                <table class="usageTable" id="usageRunsTable">
+                  <thead><tr><th>Started</th><th>Project</th><th>Model</th><th>In</th><th>Out</th><th>Cost</th><th>Status</th></tr></thead>
+                  <tbody id="usageRunsBody"><tr><td colspan="7" class="muted small">Loading…</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel flex-panel dashboard-only dashboard-panel dashboard-projects">
             <div class="title">Recent Projects</div>
             <div class="projectToolbar">
               <input id="projectFilter" placeholder="Filter by name or path..." />
               <button onclick="refreshProjects()">Refresh</button>
               <span class="projectMetaBadge" id="projectCountBadge">0 projects</span>
             </div>
-            <div id="projectList" style="overflow:auto;flex:1;border:1px solid var(--line);border-radius:var(--radius-sm);padding:4px;background:var(--bg)">
+            <div id="projectList" class="projectList">
               <div class="muted small" style="padding:8px">Loading projects...</div>
             </div>
             <div class="hint">Directories containing a <code>.winnow</code> folder are registered as projects.</div>
@@ -1834,6 +2307,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         </div>
       </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script>
       const AUTH_TOKEN = ${JSON.stringify(options.token ?? "")};
       const PAGE_PARAMS = new URLSearchParams(window.location.search);
@@ -1847,6 +2321,290 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       function openMainGrid(){
         window.location.assign(withToken('/main'));
       }
+
+      let usageChartInstance = null;
+      let usageRefreshTimer = null;
+
+      function destroyUsageChart(){
+        if(usageChartInstance){
+          usageChartInstance.destroy();
+          usageChartInstance = null;
+        }
+      }
+
+      function fmtTok(n){
+        return Number(n || 0).toLocaleString();
+      }
+
+      /** Compact token counts for chart axes (keeps plot small, labels readable). */
+      function fmtTokAxis(value){
+        const n = Number(value);
+        if(!Number.isFinite(n) || n === 0){
+          return '0';
+        }
+        const abs = Math.abs(n);
+        const fmt = function(x, suffix){
+          const s = x >= 100 ? String(Math.round(x)) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
+          return s.replace(/\.0+$/, '').replace(/(\.\d)0$/, '$1') + suffix;
+        };
+        if(abs >= 1e9){
+          return fmt(n / 1e9, 'B');
+        }
+        if(abs >= 1e6){
+          return fmt(n / 1e6, 'M');
+        }
+        if(abs >= 1e3){
+          return fmt(n / 1e3, 'k');
+        }
+        return String(Math.round(n));
+      }
+
+      function fmtMoney(n){
+        return '$' + Number(n || 0).toFixed(4);
+      }
+
+      function populateUsageSelect(selectId, items, valueKey, labelFn, withAll){
+        const sel = document.getElementById(selectId);
+        if(!sel){ return; }
+        const prev = sel.value;
+        sel.innerHTML = '';
+        if(withAll){
+          const o = document.createElement('option');
+          o.value = '';
+          o.textContent = '(all)';
+          sel.appendChild(o);
+        }
+        for(const item of items || []){
+          const o = document.createElement('option');
+          o.value = String(item[valueKey] ?? '');
+          o.textContent = labelFn(item);
+          sel.appendChild(o);
+        }
+        if(prev && Array.from(sel.options).some((x) => x.value === prev)){
+          sel.value = prev;
+        }
+      }
+
+      function renderUsageChart(ts){
+        const canvas = document.getElementById('usageChartCanvas');
+        const empty = document.getElementById('usageChartEmpty');
+        if(!canvas || typeof Chart === 'undefined'){ return; }
+        destroyUsageChart();
+        const buckets = Array.isArray(ts && ts.buckets) ? ts.buckets : [];
+        const points = buckets
+          .map((b) => {
+            const inVal = Number(b && b.in);
+            const outVal = Number(b && b.out);
+            return {
+              label: String((b && b.ts) || '').replace('T', ' ').slice(0, 16),
+              inVal: Number.isFinite(inVal) ? inVal : 0,
+              outVal: Number.isFinite(outVal) ? outVal : 0,
+            };
+          })
+          .filter((p) => p.label.length > 0);
+        const labels = points.map((p) => p.label);
+        const ins = points.map((p) => p.inVal);
+        const outs = points.map((p) => p.outVal);
+        const hasData = labels.length > 0 && (ins.some((n) => n > 0) || outs.some((n) => n > 0));
+        if(empty){
+          empty.style.display = hasData ? 'none' : 'flex';
+        }
+        if(!hasData){
+          return;
+        }
+        const stackedEl = document.getElementById('usageStacked');
+        const stacked = stackedEl ? stackedEl.checked : false;
+        const ctx = canvas.getContext('2d');
+        if(!ctx){ return; }
+        usageChartInstance = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Input tokens',
+                data: ins,
+                borderColor: '#22d3ee',
+                backgroundColor: 'rgba(34,211,238,0.14)',
+                fill: stacked,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                tension: 0.3,
+                borderWidth: 2
+              },
+              {
+                label: 'Output tokens',
+                data: outs,
+                borderColor: '#f87171',
+                backgroundColor: 'rgba(248,113,113,0.14)',
+                fill: stacked,
+                pointRadius: 0,
+                pointHoverRadius: 3,
+                tension: 0.3,
+                borderWidth: 2
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            layout: { padding: { top: 6, right: 10, bottom: 2, left: 4 } },
+            scales: {
+              y: {
+                stacked: Boolean(stacked),
+                beginAtZero: true,
+                ticks: {
+                  color: 'rgba(125, 211, 252, 0.85)',
+                  precision: 0,
+                  font: { size: 13, weight: '600', family: 'ui-monospace, Menlo, monospace' },
+                  callback: function(v){
+                    return fmtTokAxis(v);
+                  }
+                },
+                grid: { color: 'rgba(34, 211, 238, 0.12)' },
+                title: {
+                  display: true,
+                  text: 'Tokens',
+                  color: 'rgba(94, 234, 212, 0.9)',
+                  font: { size: 12, weight: '600' }
+                }
+              },
+              x: {
+                ticks: {
+                  color: 'rgba(125, 211, 252, 0.75)',
+                  autoSkip: true,
+                  maxTicksLimit: 10,
+                  maxRotation: 0,
+                  minRotation: 0,
+                  font: { size: 12, weight: '500' }
+                },
+                grid: { color: 'rgba(34, 211, 238, 0.08)' }
+              }
+            },
+            plugins: {
+              legend: {
+                position: 'top',
+                labels: {
+                  color: '#5eead4',
+                  boxWidth: 14,
+                  boxHeight: 14,
+                  padding: 16,
+                  font: { size: 13, weight: '600' }
+                }
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context){
+                    return context.dataset.label + ': ' + fmtTok(context.parsed.y || 0);
+                  }
+                }
+              }
+            }
+          }
+        });
+        requestAnimationFrame(function(){
+          if(usageChartInstance && typeof usageChartInstance.resize === 'function'){
+            usageChartInstance.resize();
+          }
+        });
+      }
+
+      async function refreshUsageChartAndRuns(){
+        const rangeEl = document.getElementById('usageChartRange');
+        const bucketEl = document.getElementById('usageChartBucket');
+        const projEl = document.getElementById('usageFilterProject');
+        const modelEl = document.getElementById('usageFilterModel');
+        const srcEl = document.getElementById('usageFilterSource');
+        const range = (rangeEl && rangeEl.value) || '7d';
+        const bucket = (bucketEl && bucketEl.value) || 'day';
+        const projectPath = (projEl && projEl.value) || '';
+        const model = (modelEl && modelEl.value) || '';
+        const source = (srcEl && srcEl.value) || '';
+        const qs = new URLSearchParams({ range: range, bucket: bucket });
+        if(projectPath){ qs.set('projectPath', projectPath); }
+        if(model){ qs.set('model', model); }
+        if(source){ qs.set('source', source); }
+        const ts = await fetch(withToken('/api/usage/timeseries?' + qs.toString())).then((r) => r.json());
+        if(ts.ok){
+          renderUsageChart(ts);
+        } else {
+          destroyUsageChart();
+        }
+        const qsRuns = new URLSearchParams({ limit: '50' });
+        if(projectPath){ qsRuns.set('projectPath', projectPath); }
+        if(model){ qsRuns.set('model', model); }
+        if(source){ qsRuns.set('source', source); }
+        const runsRes = await fetch(withToken('/api/usage/runs?' + qsRuns.toString())).then((r) => r.json());
+        const tbody = document.getElementById('usageRunsBody');
+        if(!tbody){ return; }
+        if(!runsRes.ok){
+          tbody.innerHTML = '<tr><td colspan="7" class="muted small">Runs unavailable.</td></tr>';
+          return;
+        }
+        if(!runsRes.runs || runsRes.runs.length === 0){
+          tbody.innerHTML = '<tr><td colspan="7" class="muted small">No recorded runs yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = runsRes.runs.map(function(row){
+          const esc = function(s){
+            return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\"/g,'&quot;');
+          };
+          return '<tr>' +
+            '<td class="small">' + esc((row.startedAt || '').replace('T',' ').slice(0,19)) + '</td>' +
+            '<td class="small" title="' + esc(row.projectPath) + '">' + esc(row.projectName) + '</td>' +
+            '<td class="small muted">' + esc(row.model || row.modelPref || '—') + '</td>' +
+            '<td class="small usageTokIn">' + fmtTok(row.inputTokens) + '</td>' +
+            '<td class="small usageTokOut">' + fmtTok(row.outputTokens) + '</td>' +
+            '<td class="small usageCost">' + fmtMoney(row.costUsd) + '</td>' +
+            '<td class="small">' + esc(row.status) + '</td>' +
+            '</tr>';
+        }).join('');
+      }
+
+      async function refreshUsageDashboard(){
+        const status = await fetch(withToken('/api/usage/status')).then((r) => r.json());
+        const unavail = document.getElementById('usageUnavailable');
+        const wrap = document.getElementById('usageMainWrap');
+        const hint = document.getElementById('usageDbHint');
+        if(!status.available){
+          if(unavail){
+            unavail.style.display = 'block';
+            unavail.textContent = 'Usage database unavailable: ' + (status.reason || 'unknown');
+          }
+          if(wrap){ wrap.style.display = 'none'; }
+          if(hint){ hint.style.display = 'none'; }
+          return;
+        }
+        if(unavail){ unavail.style.display = 'none'; }
+        if(wrap){ wrap.style.display = ''; }
+        if(hint){ hint.style.display = ''; }
+
+        const sum = await fetch(withToken('/api/usage/summary?range=all')).then((r) => r.json());
+        if(!sum.ok){
+          if(unavail){
+            unavail.style.display = 'block';
+            unavail.textContent = 'Usage summary unavailable: ' + (sum.reason || '');
+          }
+          if(wrap){ wrap.style.display = 'none'; }
+          return;
+        }
+        document.getElementById('usageKpiTodayIn').textContent = fmtTok(sum.today.inputTokens);
+        document.getElementById('usageKpiTodayOut').textContent = fmtTok(sum.today.outputTokens);
+        document.getElementById('usageKpiLifeIn').textContent = fmtTok(sum.lifetime.inputTokens);
+        document.getElementById('usageKpiLifeOut').textContent = fmtTok(sum.lifetime.outputTokens);
+        document.getElementById('usageKpiRunsToday').textContent = String(sum.today.runs);
+        document.getElementById('usageKpiCostLife').textContent = fmtMoney(sum.lifetime.costUsd);
+
+        const filt = await fetch(withToken('/api/usage/filters')).then((r) => r.json());
+        if(filt.ok){
+          populateUsageSelect('usageFilterProject', filt.projects, 'path', function(p){ return p.name + ' — ' + p.path; }, true);
+          populateUsageSelect('usageFilterModel', (filt.models || []).map(function(m){ return { model: m }; }), 'model', function(p){ return p.model; }, true);
+          populateUsageSelect('usageFilterSource', (filt.sources || []).map(function(s){ return { source: s }; }), 'source', function(p){ return p.source; }, true);
+        }
+        await refreshUsageChartAndRuns();
+      }
+
       async function refreshSystemInfo() {
         try {
           const sys = await fetch(withToken('/api/system')).then(r => r.json());
@@ -1882,6 +2640,121 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (days < 30) return days + 'd ago';
         const months = Math.floor(days / 30);
         return months + 'mo ago';
+      }
+
+      function fmtBytes(n) {
+        const x = Number(n) || 0;
+        if (x < 1024) {
+          return String(x) + ' B';
+        }
+        if (x < 1024 * 1024) {
+          return (x / 1024).toFixed(1) + ' KB';
+        }
+        if (x < 1024 * 1024 * 1024) {
+          return (x / 1024 / 1024).toFixed(1) + ' MB';
+        }
+        return (x / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+      }
+      function escAttr(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function refreshLastAgentPanel() {
+        const el = document.getElementById('lastRunContent');
+        if (!el) { return; }
+        el.textContent = 'Loading…';
+        try {
+          const d = await fetch(withToken('/api/dashboard/last-agent-run')).then((r) => r.json());
+          if (d && d.run) {
+            const r = d.run;
+            const ms = r.durationMs;
+            let dur = '—';
+            if (ms != null && Number.isFinite(ms)) {
+              if (ms < 60000) {
+                dur = String(Math.max(0, Math.round(ms / 1000))) + 's';
+              } else {
+                const m = Math.floor(ms / 60000);
+                const s = Math.round((ms % 60000) / 1000);
+                dur = m + 'm ' + s + 's';
+              }
+            }
+            const model = (r.model || r.modelPref || '—');
+            const status = (r.status || '—');
+            const ex = (r.exitCode == null) ? '—' : String(r.exitCode);
+            const tok = (fmtTok(r.inputTokens || 0) + ' / ' + fmtTok(r.outputTokens || 0));
+            const started = (r.startedAt || '').replace('T', ' ').slice(0, 19);
+            const prev = (r.promptPreview || '').slice(0, 120) + (r.promptPreview && r.promptPreview.length > 120 ? '…' : '');
+            el.innerHTML =
+              '<div class="metrics dashboardMetrics" style="margin-top:0">' +
+              '<div class="metric"><div class="metricLabel">Status</div><div class="metricValue">' + escAttr(status) + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Exit</div><div class="metricValue">' + escAttr(ex) + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Model</div><div class="metricValue">' + escAttr(model) + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Duration</div><div class="metricValue">' + escAttr(dur) + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Tokens in/out</div><div class="metricValue">' + escAttr(tok) + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Started</div><div class="metricValue">' + escAttr(started) + '</div></div>' +
+              '</div>' +
+              '<p class="hint" style="margin-top:6px">Project: <code>' + escAttr(r.projectPath) + '</code><br/>' +
+              'Transcripts: <code>' + escAttr(d.transcriptBase || '—') + '</code> · run id: <code>' + escAttr(r.id) + '</code></p>' +
+              (prev ? ('<p class="small muted" style="margin:0">Prompt: ' + escAttr(prev) + '</p>') : '');
+            return;
+          }
+          if (d && d.ok === false && d.reason) {
+            el.innerHTML = '<span class="muted">Database: ' + escAttr(d.reason) + '</span>';
+            return;
+          }
+          el.innerHTML = '<span class="muted">No completed agent runs in the local usage log yet. Start a run from the Agent tab to record it.</span>';
+        } catch (e) {
+          el.textContent = 'Could not load last agent run.';
+        }
+      }
+
+      async function refreshDiskDashboard() {
+        const c = document.getElementById('diskContent');
+        const note = document.getElementById('diskNote');
+        const at = document.getElementById('diskMeasuredAt');
+        const btn = document.getElementById('diskRefreshBtn');
+        if (!c) { return; }
+        if (btn) { btn.disabled = true; }
+        c.textContent = 'Measuring (may take a minute on large projects)…';
+        if (at) { at.textContent = ''; }
+        if (note) { note.style.display = 'none'; }
+        try {
+          const d = await fetch(withToken('/api/dashboard/disk')).then((r) => r.json());
+          if (d && d.ok) {
+            const totL = d.volume && d.volume.ok && d.volume.totalBytes ? fmtBytes(d.volume.totalBytes) : '—';
+            const freeL = d.volume && d.volume.ok ? fmtBytes(d.volume.freeBytes) : '—';
+            const pvol = d.volume && d.volume.path ? d.volume.path : '—';
+            if (d.note && note) {
+              note.textContent = d.note;
+              note.style.display = 'block';
+            } else if (note) {
+              note.style.display = 'none';
+            }
+            if (d.measuredAt && at) {
+              const t = d.measuredAt.replace('T', ' ').slice(0, 19);
+              at.textContent = 'Updated ' + t;
+            }
+            const rows = (d.projects || []).map(function (p) {
+              const tag = p.truncated ? ' (est.)' : '';
+              return '<tr><td class="small">' + escAttr(p.name) + '</td><td class="small">' + escAttr(p.path) + '</td><td class="small">' + escAttr(fmtBytes(p.sizeBytes)) + tag + '</td></tr>';
+            }).join('');
+            c.innerHTML =
+              '<p class="small" style="margin:0 0 8px 0">Volume of workspace: <code>' + escAttr(pvol) + '</code> — free ' + escAttr(freeL) + (totL !== '—' ? (' / ' + escAttr(totL) + ' total') : '') + '</p>' +
+              (d.workspaceRoot ? ('<p class="hint" style="margin:0 0 6px 0">Workspace: <code>' + escAttr(d.workspaceRoot) + '</code></p>') : '') +
+              (rows
+                ? ('<div style="overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm);max-height:180px"><table class="usageTable"><thead><tr><th>Project</th><th>Path</th><th>Size (latest)</th></tr></thead><tbody>' + rows + '</tbody></table></div>')
+                : '<p class="muted">No projects registered. Use a folder with a <code>.winnow</code> directory.</p>');
+          } else {
+            c.textContent = (d && d.error) ? d.error : 'Disk info unavailable';
+          }
+        } catch (e) {
+          c.textContent = 'Failed to load disk information.';
+        } finally {
+          if (btn) { btn.disabled = false; }
+        }
       }
 
       function renderProjects(projects) {
@@ -2210,6 +3083,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
 
       function setView(view){
+        if(usageRefreshTimer){
+          clearInterval(usageRefreshTimer);
+          usageRefreshTimer = null;
+        }
         document.querySelectorAll('.tab').forEach((tab) => {
           tab.classList.toggle('active', tab.getAttribute('data-view') === view);
         });
@@ -2220,6 +3097,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         
         // Reset visibility
         body.classList.remove('single');
+        body.classList.remove('dashboard-mode');
         leftCol.style.display = '';
         rightCol.style.display = '';
         allPanels.forEach((el) => el.style.display = '');
@@ -2233,8 +3111,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           dashboardOnly.forEach(el => el.style.display = '');
           rightCol.style.display = 'none';
           body.classList.add('single');
+          body.classList.add('dashboard-mode');
           refreshSystemInfo();
+          void refreshLastAgentPanel();
+          void refreshDiskDashboard();
           refreshProjects();
+          refreshUsageDashboard();
+          usageRefreshTimer = setInterval(refreshUsageDashboard, 15000);
         } else if (view === 'agent') {
           dashboardOnly.forEach(el => el.style.display = 'none');
           agentOnly.forEach(el => el.style.display = '');
@@ -2511,6 +3394,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       if(projectFilter){
         projectFilter.addEventListener('input', () => renderProjects(allProjects));
       }
+      ['usageChartRange','usageChartBucket','usageFilterProject','usageFilterModel','usageFilterSource','usageStacked'].forEach(function(id){
+        const el = document.getElementById(id);
+        if(el){
+          el.addEventListener('change', function(){ void refreshUsageChartAndRuns(); });
+        }
+      });
       setView(INITIAL_VIEW);
       setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);

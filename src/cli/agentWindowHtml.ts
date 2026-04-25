@@ -13,27 +13,40 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
     <title>Agent — Winnow</title>
     <style>
       :root {
-        --vscode-editor-background: #1e1e1e;
-        --vscode-sideBar-background: #252526;
-        --vscode-activityBar-background: #333333;
-        --vscode-titleBar-activeBackground: #3c3c3c;
-        --vscode-panel-border: #2b2b2b;
-        --vscode-input-background: #3c3c3c;
-        --vscode-button-background: #0e639c;
-        --vscode-foreground: #cccccc;
-        --vscode-descriptionForeground: #9d9d9d;
-        --accent: #007fd4;
-        --accent-soft: #6ec7ff;
+        --bg: #000000;
+        --panel2: #0a0a0a;
+        --line: rgba(34, 211, 238, 0.32);
+        --line-faint: rgba(34, 211, 238, 0.12);
+        --text: #7dd3fc;
+        --text-strong: #22d3ee;
+        --text-neon: #5eead4;
+        --muted: rgba(125, 211, 252, 0.58);
+        --red-pastel: #fecaca;
+        --red-neon: #f87171;
+        --vscode-editor-background: var(--bg);
+        --vscode-sideBar-background: var(--panel2);
+        --vscode-activityBar-background: #000000;
+        --vscode-titleBar-activeBackground: var(--panel2);
+        --vscode-panel-border: var(--line);
+        --vscode-input-background: var(--panel2);
+        --vscode-button-background: #0e7490;
+        --vscode-foreground: var(--text);
+        --vscode-descriptionForeground: var(--muted);
+        --accent: #22d3ee;
+        --accent-soft: #5eead4;
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
         height: 100%;
-        background: var(--vscode-editor-background);
-        color: var(--vscode-foreground);
+        background: var(--bg);
+        color: var(--text);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         font-size: 13px;
+        -webkit-font-smoothing: antialiased;
       }
+      strong, b { color: var(--text-strong); font-weight: 700; }
+      code { font-family: ui-monospace, Menlo, monospace; color: var(--text-neon); font-weight: 600; font-size: 0.95em; }
       body.embed .hide-embed { display: none !important; }
       body.embed .split { flex: 1; }
       .workbench { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
@@ -45,19 +58,20 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         justify-content: space-between;
         padding: 0 10px;
         background: var(--vscode-titleBar-activeBackground);
-        border-bottom: 1px solid #1b1b1b;
+        border-bottom: 1px solid var(--line);
         font-size: 12px;
         user-select: none;
       }
-      .title-brand { display: flex; align-items: center; gap: 8px; color: #ccc; }
+      .title-brand { display: flex; align-items: center; gap: 8px; color: var(--text-neon); font-weight: 700; }
       .title-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent-soft); }
       .title-bar nav a {
-        color: var(--vscode-descriptionForeground);
+        color: var(--muted);
         text-decoration: none;
         margin-left: 12px;
         font-size: 11px;
+        font-style: italic;
       }
-      .title-bar nav a:hover { color: #fff; }
+      .title-bar nav a:hover { color: var(--text-neon); }
       .body { flex: 1; min-height: 0; display: flex; min-width: 0; }
       .activity-bar {
         width: 48px;
@@ -74,13 +88,14 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         width: 36px;
         height: 36px;
         border-radius: 4px;
-        background: #3c3c3c;
+        background: var(--panel2);
         display: flex;
         align-items: center;
         justify-content: center;
-        color: #fff;
+        color: var(--text);
         font-size: 10px;
         font-weight: 700;
+        border: 1px solid var(--line);
         border-left: 3px solid var(--accent-soft);
       }
       .split { flex: 1; min-width: 0; display: flex; min-height: 0; }
@@ -98,7 +113,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        color: var(--vscode-descriptionForeground);
+        color: var(--muted);
+        font-style: italic;
+        font-weight: 600;
         border-bottom: 1px solid var(--vscode-panel-border);
       }
       .main-panel {
@@ -116,63 +133,75 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       input, select, button, textarea {
         background: var(--vscode-input-background);
-        border: 1px solid #555;
-        color: var(--vscode-foreground);
+        border: 1px solid var(--line);
+        color: var(--text);
         border-radius: 4px;
         padding: 5px 8px;
         font-family: inherit;
         font-size: 12px;
       }
+      input:focus, select:focus, textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.22);
+      }
       button {
         cursor: pointer;
         background: var(--vscode-button-background);
-        border-color: #1177bb;
-        color: #fff;
+        border-color: var(--accent);
+        color: #000;
+        font-weight: 600;
       }
-      button:hover { filter: brightness(1.08); }
-      button.secondary { background: transparent; border-color: #555; color: var(--vscode-foreground); }
+      button:hover { filter: brightness(1.12); }
+      button.secondary { background: transparent; border-color: var(--line); color: var(--text); }
       .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-      .muted { color: var(--vscode-descriptionForeground); }
+      .muted { color: var(--muted); }
       .small { font-size: 11px; }
-      .hint { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+      .hint { font-size: 11px; color: var(--muted); margin-top: 6px; font-style: italic; }
       .quickbar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-      .quickbar button { background: #3c3c3c; border-color: #555; color: #e0e0e0; font-size: 11px; }
+      .quickbar button { background: var(--line-faint); border-color: var(--line); color: var(--text-neon); font-size: 11px; }
       .kbd {
-        border: 1px solid #555;
+        border: 1px solid var(--line);
         padding: 1px 6px;
         border-radius: 4px;
         font-size: 10px;
-        color: #9d9d9d;
-        background: #2d2d2d;
+        color: var(--muted);
+        background: var(--bg);
+        font-style: italic;
       }
       .statusBadge {
         display: inline-block;
         padding: 2px 8px;
         border-radius: 10px;
         font-size: 11px;
-        background: #333;
-        border: 1px solid #555;
+        background: var(--panel2);
+        border: 1px solid var(--line);
+        color: var(--text-neon);
+        font-weight: 700;
       }
       .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
-      .metric { border: 1px solid #2b2b2b; border-radius: 4px; padding: 6px; background: #252526; }
-      .metricLabel { font-size: 10px; color: #9d9d9d; }
-      .metricValue { font-size: 12px; }
+      .metric { border: 1px solid var(--line); border-radius: 4px; padding: 6px; background: var(--bg); }
+      .metricLabel { font-size: 10px; color: var(--muted); font-style: italic; }
+      .metricValue { font-size: 12px; font-weight: 600; color: var(--text); }
+      #metricPromptTokens, #metricChunks, #metricElapsed { color: var(--text-strong); }
+      #metricOutputTokens { color: var(--red-pastel); }
       .chat-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px 12px 8px; }
       #chatHistory { min-height: 80px; }
       .chatMsg {
         margin-bottom: 10px;
         border-radius: 6px;
         padding: 10px 12px;
-        border: 1px solid #3c3c3c;
+        border: 1px solid var(--line);
         max-width: 920px;
-        background: #252526;
+        background: var(--bg);
       }
-      .chatRole { font-size: 10px; text-transform: uppercase; color: #9d9d9d; margin-bottom: 6px; }
+      .chatRole { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; font-weight: 700; font-style: italic; }
       .chatText {
         white-space: pre-wrap;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12px;
         line-height: 1.45;
+        color: var(--text);
       }
       #agentThinking {
         flex-shrink: 0;
@@ -181,27 +210,29 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-size: 11px;
         margin: 0 12px;
         padding: 8px;
-        background: #252526;
-        border: 1px solid #333;
+        background: var(--panel2);
+        border: 1px solid var(--line);
         border-radius: 4px;
         font-family: ui-monospace, Menlo, monospace;
         white-space: pre-wrap;
+        color: var(--muted);
+        font-style: italic;
       }
       .composer {
         flex-shrink: 0;
         border-top: 1px solid var(--vscode-panel-border);
         padding: 10px 12px 12px;
-        background: #252526;
+        background: var(--bg);
       }
       #agentPrompt { width: 100%; min-height: 88px; resize: vertical; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
       .composer-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
       #sessionList {
-        border: 1px solid #333;
+        border: 1px solid var(--line);
         border-radius: 4px;
         overflow: auto;
         max-height: 200px;
         margin: 0 8px;
-        background: #1e1e1e;
+        background: var(--bg);
       }
       #sessionDirInfo { padding: 6px 10px; font-size: 10px; }
       #sessionPreview {
@@ -211,12 +242,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         overflow: auto;
         margin: 8px;
         padding: 8px;
-        background: #1e1e1e;
-        border: 1px solid #333;
+        background: var(--panel2);
+        border: 1px solid var(--line);
         border-radius: 4px;
         font-family: ui-monospace, Menlo, monospace;
+        color: var(--text);
       }
-      #result { font-size: 10px; margin: 0 10px 8px; color: #9d9d9d; min-height: 14px; }
+      #result { font-size: 10px; margin: 0 10px 8px; color: var(--muted); min-height: 14px; font-style: italic; }
       .entry {
         display: block;
         width: 100%;
@@ -229,7 +261,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-size: 11px;
         font-family: inherit;
       }
-      .entry:hover { background: #2a2d2e; }
+      .entry:hover { background: var(--line-faint); color: var(--text-neon); }
       .session-actions { padding: 0 8px 8px; display: flex; gap: 6px; flex-wrap: wrap; }
     </style>
   </head>
