@@ -46,7 +46,8 @@ type PaneId = "1" | "2" | "3" | "4" | "5";
 
 const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
   "1": "ranger",
-  "2": "cursor-agent",
+  /** Pane 2 is the embed workspace (iframe); the shell PTY is opened only from the Workspace↔Terminal tab in that pane. */
+  "2": "",
   "3": "htop",
   "4": "netwatch",
   "5": process.env.SHELL || "zsh",
@@ -300,6 +301,48 @@ function buildMainTerminalHtml(token?: string): string {
       .reconnect:hover { border-color: var(--line); background: var(--panel2); color: var(--text-strong); }
       .term { width: 100%; height: 100%; overflow: hidden; background: var(--bg); padding: 4px; }
       .cursorHost { width: 100%; height: 100%; border: 0; background: var(--bg); }
+      .paneTabs { display: flex; gap: 4px; align-items: center; }
+      .paneTab {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--muted);
+        border-radius: var(--radius-sm);
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: var(--font-sans);
+        transition: all 0.15s;
+      }
+      .paneTab:hover { color: var(--text-strong); background: var(--panel2); }
+      .paneTab.paneTabActive {
+        border-color: var(--line);
+        color: var(--text-neon);
+        background: var(--panel2);
+        box-shadow: 0 0 0 1px var(--line-faint);
+      }
+      .pane2Body {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .pane2View {
+        position: absolute;
+        inset: 0;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane2View.isHidden {
+        visibility: hidden;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .pane2View:not(.isHidden) { z-index: 1; }
+      .pane2View .cursorHost { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
       @media (max-width: 1200px) {
         .root { grid-template-columns: 1fr; grid-template-rows: 56% 44%; }
       }
@@ -314,7 +357,7 @@ function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger</span>
-          <span class="chip">2 cursor</span>
+          <span class="chip">2 agent · shell</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -333,12 +376,28 @@ function buildMainTerminalHtml(token?: string): string {
       </div>
       <div id="pane2Wrap" class="pane">
         <div class="paneInner">
-          <div class="paneHead"><span class="paneTitle">2 Cursor Workspace <span class="paneCmd">winnow-agent-ui</span></span></div>
-          <iframe
-            class="cursorHost"
-            title="Cursor Panel"
-            src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
-          ></iframe>
+          <div class="paneHead">
+            <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI and system shell">
+                <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
+              </div>
+              <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
+            </div>
+          </div>
+          <div class="pane2Body">
+            <div id="pane2Workspace" class="pane2View">
+              <iframe
+                class="cursorHost"
+                title="Cursor Panel"
+                src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
+              ></iframe>
+            </div>
+            <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
+              <div id="pane2term" class="term"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -349,6 +408,7 @@ function buildMainTerminalHtml(token?: string): string {
       const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
       const panes = ["1","3","4","5"];
       const paneState = new Map();
+      const PANE2_ID = "2";
       function withToken(path){
         if(!AUTH_TOKEN){ return path; }
         const glue = path.includes("?") ? "&" : "?";
@@ -378,6 +438,27 @@ function buildMainTerminalHtml(token?: string): string {
         ws.addEventListener("error",()=>{ term.write("\\r\\n\\x1b[31m[connection error]\\x1b[0m\\r\\n"); });
         term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN){ ws.send(JSON.stringify({type:"input",data})); }});
       }
+      function openPane2Terminal(){
+        const mount = document.getElementById("pane2term");
+        if(!mount || paneState.has(PANE2_ID)){ return; }
+        mount.innerHTML = "";
+        const term = new Terminal({
+          cursorBlink:true,
+          fontSize:12,
+          theme:{background:"#000000",foreground:"#7dd3fc",cursor:"#5eead4", selectionBackground: "rgba(34, 211, 238, 0.28)"}
+        });
+        const fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open(mount);
+        fit.fit();
+        const ws = new WebSocket(wsPath(PANE2_ID));
+        paneState.set(PANE2_ID,{term,fit,ws});
+        ws.addEventListener("open",()=>{ ws.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); });
+        ws.addEventListener("message",(event)=>{ if(typeof event.data==="string"){ term.write(event.data); }});
+        ws.addEventListener("close",()=>{ term.write("\\r\\n\\x1b[33m[connection closed]\\x1b[0m\\r\\n"); });
+        ws.addEventListener("error",()=>{ term.write("\\r\\n\\x1b[31m[connection error]\\x1b[0m\\r\\n"); });
+        term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN){ ws.send(JSON.stringify({type:"input",data})); }});
+      }
       function resizeAll(){
         panes.forEach((paneId)=>{
           const current = paneState.get(paneId);
@@ -387,7 +468,46 @@ function buildMainTerminalHtml(token?: string): string {
             current.ws.send(JSON.stringify({type:"resize",cols:current.term.cols,rows:current.term.rows}));
           }
         });
+        const p2 = paneState.get(PANE2_ID);
+        if(p2){
+          p2.fit.fit();
+          if(p2.ws.readyState===WebSocket.OPEN){
+            p2.ws.send(JSON.stringify({type:"resize",cols:p2.term.cols,rows:p2.term.rows}));
+          }
+        }
       }
+      function setPane2Tab(mode){
+        const wsEl = document.getElementById("pane2Workspace");
+        const tsEl = document.getElementById("pane2TerminalWrap");
+        const chip = document.getElementById("pane2ModeChip");
+        const tw = document.getElementById("pane2TabWorkspace");
+        const tt = document.getElementById("pane2TabTerminal");
+        const recon = document.getElementById("reconnectPane2");
+        const isTerm = mode === "terminal";
+        if(wsEl && tsEl){
+          wsEl.classList.toggle("isHidden", isTerm);
+          tsEl.classList.toggle("isHidden", !isTerm);
+          tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
+        }
+        if(chip){ chip.textContent = isTerm ? "login shell" : "winnow-agent-ui"; }
+        if(tw && tt){
+          tw.classList.toggle("paneTabActive", !isTerm);
+          tt.classList.toggle("paneTabActive", isTerm);
+          tw.setAttribute("aria-selected", (!isTerm).toString());
+          tt.setAttribute("aria-selected", isTerm.toString());
+        }
+        if(recon){ recon.hidden = !isTerm; }
+        if(isTerm){
+          openPane2Terminal();
+          requestAnimationFrame(()=>{
+            resizeAll();
+            const cur = paneState.get(PANE2_ID);
+            if(cur && cur.term){ cur.term.focus(); }
+          });
+        }
+      }
+      document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
+      document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       window.addEventListener("resize", resizeAll);
       panes.forEach((paneId)=>openPane(paneId));
       document.querySelectorAll(".reconnect").forEach((btn)=>{
@@ -395,7 +515,13 @@ function buildMainTerminalHtml(token?: string): string {
           const paneId = btn.getAttribute("data-pane");
           const current = paneState.get(paneId);
           if(current && current.ws){ current.ws.close(); }
-          openPane(paneId);
+          if(paneId === PANE2_ID){
+            paneState.delete(PANE2_ID);
+            openPane2Terminal();
+            requestAnimationFrame(resizeAll);
+          } else {
+            openPane(paneId);
+          }
         });
       });
       setTimeout(resizeAll, 120);

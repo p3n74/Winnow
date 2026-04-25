@@ -207,7 +207,11 @@ export function buildProgram(): Command {
     .option("--host <host>", "UI bind host (use 0.0.0.0 for LAN access)", "127.0.0.1")
     .option("--token <token>", "6-char UI access token (required as ?token=...)")
     .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
-    .option("--pane2-cmd <cmd>", "pane 2 command", "cursor-agent")
+    .option(
+      "--pane2-cmd <cmd>",
+      "pane 2 shell: optional command run before login shell (empty = plain shell only)",
+      "",
+    )
     .option("--pane3-cmd <cmd>", "pane 3 command", "htop")
     .option("--pane4-cmd <cmd>", "pane 4 command", "netwatch")
     .option("--pane5-cmd <cmd>", "pane 5 command", process.env.SHELL || "zsh")
@@ -225,7 +229,7 @@ export function buildProgram(): Command {
         token,
         paneCommands: {
           "1": opts.pane1Cmd ?? "ranger",
-          "2": opts.pane2Cmd ?? "cursor-agent",
+          "2": opts.pane2Cmd ?? "",
           "3": opts.pane3Cmd ?? "htop",
           "4": opts.pane4Cmd ?? "netwatch",
           "5": opts.pane5Cmd ?? process.env.SHELL ?? "zsh",
