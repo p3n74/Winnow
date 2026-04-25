@@ -103,6 +103,24 @@ Status:
 npm run status
 ```
 
+Lightweight UI companion:
+
+```bash
+npm run ui
+```
+
+Optional flags:
+
+- `-- --port 3210` set UI port
+- `-- --no-open` keep browser closed
+
+UI capabilities:
+
+- Live status dashboard (backend/model/mode/retries/log state)
+- Quick controls for backend/model/glossary/mode
+- Recent session logs viewer
+- Saves changes into `.winnow/profile.json`
+
 ## Notes
 
 - If Ollama is unavailable, Winnow falls back to original output with a warning.

@@ -10,6 +10,7 @@
     "test:watch": "vitest tests",
     "doctor": "tsx src/cli/index.ts doctor",
     "status": "tsx src/cli/index.ts status",
+    "ui": "tsx src/cli/index.ts ui",
     "release:check": "npm run build && npm test"
   },
   "keywords": [],

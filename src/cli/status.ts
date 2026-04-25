@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WinnowConfig } from "../config/schema.js";
 
-async function readLastLogEvent(config: WinnowConfig): Promise<string> {
+export async function readLastLogEvent(config: WinnowConfig): Promise<string> {
   try {
     const dir = join(process.cwd(), config.logsDir);
     const files = (await readdir(dir))
@@ -29,18 +29,47 @@ async function readLastLogEvent(config: WinnowConfig): Promise<string> {
   }
 }
 
-export async function runStatus(config: WinnowConfig): Promise<number> {
+export type StatusSnapshot = {
+  backend: WinnowConfig["translatorBackend"];
+  model: string;
+  inputMode: WinnowConfig["inputMode"];
+  outputMode: WinnowConfig["outputMode"];
+  profile: WinnowConfig["profile"];
+  dualOutput: boolean;
+  timeoutMs: number;
+  retries: number;
+  logsEnabled: boolean;
+  logsPath: string;
+  lastSession: string;
+};
+
+export async function getStatusSnapshot(config: WinnowConfig): Promise<StatusSnapshot> {
   const activeModel =
     config.translatorBackend === "deepseek_api" ? config.deepseekModel : config.ollamaTranslationModel;
   const lastEvent = await readLastLogEvent(config);
-  process.stdout.write(`backend=${config.translatorBackend}\n`);
-  process.stdout.write(`model=${activeModel}\n`);
-  process.stdout.write(`input_mode=${config.inputMode} output_mode=${config.outputMode}\n`);
-  process.stdout.write(`profile=${config.profile} dual_output=${config.dualOutput}\n`);
-  process.stdout.write(
-    `timeout_ms=${config.translatorTimeoutMs} retries=${config.translatorRetries}\n`,
-  );
-  process.stdout.write(`logs=${config.logsEnabled ? "enabled" : "disabled"} path=${config.logsDir}\n`);
-  process.stdout.write(`last_session=${lastEvent}\n`);
+  return {
+    backend: config.translatorBackend,
+    model: activeModel,
+    inputMode: config.inputMode,
+    outputMode: config.outputMode,
+    profile: config.profile,
+    dualOutput: config.dualOutput,
+    timeoutMs: config.translatorTimeoutMs,
+    retries: config.translatorRetries,
+    logsEnabled: config.logsEnabled,
+    logsPath: config.logsDir,
+    lastSession: lastEvent,
+  };
+}
+
+export async function runStatus(config: WinnowConfig): Promise<number> {
+  const snapshot = await getStatusSnapshot(config);
+  process.stdout.write(`backend=${snapshot.backend}\n`);
+  process.stdout.write(`model=${snapshot.model}\n`);
+  process.stdout.write(`input_mode=${snapshot.inputMode} output_mode=${snapshot.outputMode}\n`);
+  process.stdout.write(`profile=${snapshot.profile} dual_output=${snapshot.dualOutput}\n`);
+  process.stdout.write(`timeout_ms=${snapshot.timeoutMs} retries=${snapshot.retries}\n`);
+  process.stdout.write(`logs=${snapshot.logsEnabled ? "enabled" : "disabled"} path=${snapshot.logsPath}\n`);
+  process.stdout.write(`last_session=${snapshot.lastSession}\n`);
   return 0;
 }

@@ -7,6 +7,7 @@ import { runWinnowSession } from "../pipeline/session.js";
 import { runInteractiveSession } from "./sessionMode.js";
 import { runDoctor } from "./doctor.js";
 import { runStatus } from "./status.js";
+import { runUiServer } from "./ui.js";
 
 type CliOptions = {
   zh?: boolean;
@@ -24,6 +25,8 @@ type CliOptions = {
   translatorTimeoutMs?: number;
   translatorRetries?: number;
   cursorCommand?: string;
+  port?: number;
+  open?: boolean;
 };
 
 export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
@@ -185,11 +188,15 @@ export function buildProgram(): Command {
 
   program
     .command("ui")
-    .description("Start optional local web UI (placeholder for phase 2)")
-    .action(() => {
-      process.stdout.write(
-        "UI mode is planned for phase 2. Use terminal mode now with: winnow --zh <args>\n",
-      );
+    .description("Start lightweight local web companion UI")
+    .option("--port <port>", "UI server port", Number, 3210)
+    .option("--no-open", "do not auto-open browser")
+    .action(async (opts: CliOptions) => {
+      const config = await getConfig(opts);
+      await runUiServer(config, {
+        port: opts.port ?? 3210,
+        openBrowser: opts.open ?? true,
+      });
     });
 
   return program;
