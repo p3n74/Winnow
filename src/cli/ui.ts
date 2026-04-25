@@ -395,81 +395,107 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Winnow UI</title>
+    <title>Winnow Console UI</title>
     <style>
-      body{font-family:system-ui,Arial,sans-serif;max-width:960px;margin:20px auto;padding:0 16px}
-      .row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
-      input,select,button{padding:6px 8px}
-      pre{background:#111;color:#ddd;padding:12px;border-radius:8px;max-height:300px;overflow:auto}
-      .card{border:1px solid #ddd;border-radius:8px;padding:12px;margin:12px 0}
+      :root{--bg:#071521;--panel:#0a1d2c;--panel2:#0d2436;--line:#12344b;--text:#cce6ff;--muted:#7fa3bd;--accent:#2ec4ff;}
+      *{box-sizing:border-box}
+      html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+      .app{display:flex;flex-direction:column;height:100vh}
+      .topbar{height:40px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line);background:#06131e}
+      .tab{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--muted)}
+      .tab.active{color:var(--text);border-color:var(--accent)}
+      .body{flex:1;display:grid;grid-template-columns:38% 62%;gap:8px;padding:8px;min-height:0}
+      .leftCol,.rightCol{display:grid;gap:8px;min-height:0}
+      .leftCol{grid-template-rows:24% 20% 26% 30%}
+      .rightCol{grid-template-rows:58% 42%}
+      .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+      .title{font-size:12px;color:#9dc4df;margin-bottom:6px}
+      .muted{color:var(--muted)}
+      .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      input,select,button,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:12px}
+      button{cursor:pointer}
+      button:hover{border-color:var(--accent)}
+      pre{margin:0;background:#06131e;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;overflow:auto;flex:1;min-height:0;font-size:12px}
+      textarea{width:100%;min-height:110px;resize:vertical}
+      #workspaceFiles{overflow:auto;max-height:120px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e}
+      .small{font-size:11px}
     </style>
   </head>
   <body>
-    <h1>Winnow UI</h1>
-    <div class="card">
-      <h3>Status</h3>
-      <pre id="status">Loading...</pre>
-    </div>
-    <div class="card">
-      <h3>Controls</h3>
-      <div class="row">
-        <label>Backend</label>
-        <select id="backend"><option value="ollama">ollama</option><option value="deepseek_api">deepseek_api</option></select>
-        <button onclick="saveBackend()">Save</button>
+    <div class="app">
+      <div class="topbar">
+        <div class="tab">OS default</div>
+        <div class="tab active">Winnow UI</div>
+        <div class="tab">Cursor Agent</div>
+        <div class="tab">Settings</div>
       </div>
-      <div class="row">
-        <label>Model</label>
-        <input id="model" placeholder="deepseek-v4-flash" />
-        <button onclick="saveModel()">Save</button>
+      <div class="body">
+        <div class="leftCol">
+          <div class="panel">
+            <div class="title">Workspace Changes</div>
+            <div class="row small">
+              <button onclick="refreshWorkspace()">Refresh</button>
+              <button onclick="stageSelected()">Stage Selected</button>
+            </div>
+            <div id="workspaceFiles"></div>
+          </div>
+          <div class="panel">
+            <div class="title">Profile Controls</div>
+            <div class="row small">
+              <label>Backend</label>
+              <select id="backend"><option value="ollama">ollama</option><option value="deepseek_api">deepseek_api</option></select>
+              <button onclick="saveBackend()">Save</button>
+            </div>
+            <div class="row small">
+              <label>Model</label>
+              <input id="model" placeholder="deepseek-v4-flash" />
+              <button onclick="saveModel()">Save</button>
+            </div>
+            <div class="row small">
+              <label>Glossary</label>
+              <input id="glossary" style="width:62%" placeholder="PR:拉取请求,branch:分支" />
+              <button onclick="saveGlossary()">Save</button>
+            </div>
+            <div class="row small">
+              <button onclick="setMode('zh')">ZH</button>
+              <button onclick="setMode('dual')">Dual</button>
+              <button onclick="setMode('raw')">Raw</button>
+            </div>
+            <pre id="result">Ready.</pre>
+          </div>
+          <div class="panel">
+            <div class="title">Status</div>
+            <pre id="status">Loading...</pre>
+          </div>
+          <div class="panel">
+            <div class="title">Recent Logs</div>
+            <pre id="logs">Loading...</pre>
+          </div>
+        </div>
+        <div class="rightCol">
+          <div class="panel">
+            <div class="title">Agent Console (Cursor Native)</div>
+            <div class="row small">
+              <label>Model Pref</label>
+              <select id="agentModelPref">
+                <option value="auto">auto</option>
+                <option value="composer">composer</option>
+              </select>
+              <label>Cursor Args</label>
+              <input id="agentArgs" style="width:55%" placeholder="optional args passed to cursor-agent" />
+              <button onclick="startAgentRun()">Run Agent</button>
+            </div>
+            <div class="small muted" id="agentSessionInfo">No active session.</div>
+            <pre id="agentOutput">No run yet.</pre>
+          </div>
+          <div class="panel">
+            <div class="title">Prompt + Diff</div>
+            <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent..."></textarea>
+            <div class="small muted" style="margin:6px 0">Current git diff</div>
+            <pre id="workspaceDiff">Loading...</pre>
+          </div>
+        </div>
       </div>
-      <div class="row">
-        <label>Glossary</label>
-        <input id="glossary" style="width:480px" placeholder="PR:拉取请求,branch:分支" />
-        <button onclick="saveGlossary()">Save</button>
-      </div>
-      <div class="row">
-        <button onclick="setMode('zh')">Mode: ZH</button>
-        <button onclick="setMode('dual')">Mode: Dual</button>
-        <button onclick="setMode('raw')">Mode: Raw</button>
-      </div>
-      <pre id="result"></pre>
-    </div>
-    <div class="card">
-      <h3>Agent Console (Cursor Native)</h3>
-      <p>Runs <code>cursor-agent</code> directly with translation disabled. Uses Cursor-side model preference (auto or composer).</p>
-      <div class="row">
-        <label>Model Pref</label>
-        <select id="agentModelPref">
-          <option value="auto">auto</option>
-          <option value="composer">composer</option>
-        </select>
-      </div>
-      <div class="row">
-        <label>Cursor Args</label>
-        <input id="agentArgs" style="width:560px" placeholder="optional args passed to cursor-agent" />
-      </div>
-      <div class="row">
-        <textarea id="agentPrompt" style="width:100%;min-height:120px;padding:8px" placeholder="Describe the coding task for Cursor agent..."></textarea>
-      </div>
-      <div class="row">
-        <button onclick="startAgentRun()">Run Agent</button>
-        <span id="agentSessionInfo"></span>
-      </div>
-      <pre id="agentOutput">No run yet.</pre>
-    </div>
-    <div class="card">
-      <h3>Recent Logs</h3>
-      <pre id="logs">Loading...</pre>
-    </div>
-    <div class="card">
-      <h3>Workspace Changes</h3>
-      <div class="row">
-        <button onclick="refreshWorkspace()">Refresh</button>
-        <button onclick="stageSelected()">Stage Selected</button>
-      </div>
-      <div id="workspaceFiles"></div>
-      <h4>Diff</h4>
-      <pre id="workspaceDiff">Loading...</pre>
     </div>
     <script>
       async function refresh(){
@@ -486,7 +512,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const list = files.map((f, idx) =>
           '<label style="display:block"><input type="checkbox" class="ws-file" data-file="' + f.replace(/"/g,'&quot;') + '"' + (idx === 0 ? ' checked' : '') + '> ' + f + '</label>'
         ).join('');
-        document.getElementById('workspaceFiles').innerHTML = list || '<em>No changes.</em>';
+        document.getElementById('workspaceFiles').innerHTML = list || '<span class="muted small">No changes.</span>';
         document.getElementById('workspaceDiff').textContent = ws.diff || ws.status || ws.error || 'No diff.';
       }
       async function stageSelected(){
