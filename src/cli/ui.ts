@@ -1,8 +1,11 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { WebSocketServer, WebSocket } from "ws";
+import pty from "node-pty";
 import { WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
 import { saveProjectProfile } from "../config/projectProfile.js";
@@ -12,6 +15,17 @@ type UiOptions = {
   openBrowser: boolean;
   host: string;
   token?: string;
+  paneCommands?: Record<"1" | "2" | "3" | "4" | "5", string>;
+};
+
+type PaneId = "1" | "2" | "3" | "4" | "5";
+
+const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
+  "1": "ranger",
+  "2": "cursor-agent",
+  "3": "htop",
+  "4": "netwatch",
+  "5": process.env.SHELL || "zsh",
 };
 
 type ProfileUpdateRequest = {
@@ -138,6 +152,116 @@ function maybeOpenBrowser(url: string): void {
   if (process.platform === "darwin") {
     spawn("open", [url], { stdio: "ignore", detached: true }).unref();
   }
+}
+
+function buildMainTerminalHtml(token?: string): string {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Winnow Main Terminal Grid</title>
+    <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm/css/xterm.css" />
+    <style>
+      :root{--bg:#0a0b0f;--panel:#11131a;--line:#2b2f3b;--text:#d8deea;--muted:#8c94a7;}
+      *{box-sizing:border-box}
+      html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+      .root{display:grid;grid-template-columns:50% 50%;width:100%;height:100vh}
+      .left{display:grid;grid-template-rows:50% 50%;border-right:1px solid var(--line);min-width:0;min-height:0}
+      .leftBottom{display:grid;grid-template-columns:43% 57%;min-width:0;min-height:0}
+      .leftBottomLeft{display:grid;grid-template-rows:58% 42%;min-width:0;min-height:0;border-right:1px solid var(--line)}
+      .pane{min-width:0;min-height:0;border-bottom:1px solid var(--line)}
+      .leftBottom .pane{border-bottom:0}
+      .leftBottomLeft #pane3Wrap{border-bottom:1px solid var(--line)}
+      #pane1Wrap{border-bottom:1px solid var(--line)}
+      #pane2Wrap{border-left:1px solid var(--line)}
+      .paneInner{width:100%;height:100%;display:grid;grid-template-rows:28px 1fr;background:var(--panel)}
+      .paneHead{border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;padding:6px 8px;display:flex;align-items:center;justify-content:space-between}
+      .reconnect{border:1px solid var(--line);background:#151926;color:var(--text);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer}
+      .term{width:100%;height:100%;overflow:hidden}
+      .cursorHost{width:100%;height:100%;border:0;background:#0b1018}
+      .back{position:fixed;top:8px;left:8px;z-index:10;border:1px solid var(--line);background:#151926;color:var(--text);padding:4px 8px;border-radius:5px;font-size:12px;text-decoration:none}
+    </style>
+  </head>
+  <body>
+    <a class="back" href="${token ? `/?token=${encodeURIComponent(token)}` : "/"}">Back</a>
+    <div class="root">
+      <div class="left">
+        <div id="pane1Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>1 File Browser</span><button class="reconnect" data-pane="1">Reconnect</button></div><div id="pane1" class="term"></div></div></div>
+        <div class="leftBottom">
+          <div class="leftBottomLeft">
+            <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>3 htop</span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
+            <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>4 netwatch</span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
+          </div>
+          <div id="pane5Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span>5 Terminal</span><button class="reconnect" data-pane="5">Reconnect</button></div><div id="pane5" class="term"></div></div></div>
+        </div>
+      </div>
+      <div id="pane2Wrap" class="pane">
+        <div class="paneInner">
+          <div class="paneHead"><span>2 Cursor</span></div>
+          <iframe
+            class="cursorHost"
+            title="Cursor Panel"
+            src="${token ? `/?token=${encodeURIComponent(token)}&view=agent&embed=1` : "/?view=agent&embed=1"}"
+          ></iframe>
+        </div>
+      </div>
+    </div>
+    <script src="https://unpkg.com/@xterm/xterm/lib/xterm.js"></script>
+    <script src="https://unpkg.com/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script>
+      const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
+      const panes = ["1","3","4","5"];
+      const paneState = new Map();
+      function withToken(path){
+        if(!AUTH_TOKEN){ return path; }
+        const glue = path.includes("?") ? "&" : "?";
+        return path + glue + "token=" + encodeURIComponent(AUTH_TOKEN);
+      }
+      function wsPath(paneId){
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        return withToken(protocol + "//" + location.host + "/ws/main/" + paneId);
+      }
+      function openPane(paneId){
+        const mount = document.getElementById("pane" + paneId);
+        mount.innerHTML = "";
+        const term = new Terminal({cursorBlink:true,fontSize:12,theme:{background:"#11131a"}});
+        const fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open(mount);
+        fit.fit();
+        const ws = new WebSocket(wsPath(paneId));
+        paneState.set(paneId,{term,fit,ws});
+        ws.addEventListener("open",()=>{ ws.send(JSON.stringify({type:"resize",cols:term.cols,rows:term.rows})); });
+        ws.addEventListener("message",(event)=>{ if(typeof event.data==="string"){ term.write(event.data); }});
+        ws.addEventListener("close",()=>{ term.write("\\r\\n\\x1b[33m[connection closed]\\x1b[0m\\r\\n"); });
+        ws.addEventListener("error",()=>{ term.write("\\r\\n\\x1b[31m[connection error]\\x1b[0m\\r\\n"); });
+        term.onData((data)=>{ if(ws.readyState===WebSocket.OPEN){ ws.send(JSON.stringify({type:"input",data})); }});
+      }
+      function resizeAll(){
+        panes.forEach((paneId)=>{
+          const current = paneState.get(paneId);
+          if(!current){ return; }
+          current.fit.fit();
+          if(current.ws.readyState===WebSocket.OPEN){
+            current.ws.send(JSON.stringify({type:"resize",cols:current.term.cols,rows:current.term.rows}));
+          }
+        });
+      }
+      window.addEventListener("resize", resizeAll);
+      panes.forEach((paneId)=>openPane(paneId));
+      document.querySelectorAll(".reconnect").forEach((btn)=>{
+        btn.addEventListener("click",()=>{
+          const paneId = btn.getAttribute("data-pane");
+          const current = paneState.get(paneId);
+          if(current && current.ws){ current.ws.close(); }
+          openPane(paneId);
+        });
+      });
+      setTimeout(resizeAll, 120);
+    </script>
+  </body>
+</html>`;
 }
 
 function runGitCommand(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
@@ -406,6 +530,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   let config = { ...baseConfig };
   const sessions = new Map<string, AgentSession>();
   const streamClients = new Map<string, Set<SessionStreamClient>>();
+  const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
+  const supportsPty = nodeMajor >= 20 && nodeMajor < 23;
 
   const requireToken = Boolean(options.token);
   const isAuthorized = (url: URL): boolean => {
@@ -414,6 +540,138 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     return url.searchParams.get("token") === options.token;
   };
+
+  const paneCommands: Record<PaneId, string> = {
+    ...DEFAULT_PANE_COMMANDS,
+    ...(options.paneCommands ?? {}),
+  };
+  const mainPaneSessions = new Map<PaneId, { ws: WebSocket; ptyProcess: pty.IPty }>();
+  const mainPaneWs = new WebSocketServer({ noServer: true });
+
+  const closeMainPane = (paneId: PaneId): void => {
+    const existing = mainPaneSessions.get(paneId);
+    if (!existing) {
+      return;
+    }
+    try {
+      existing.ptyProcess.kill();
+    } catch {
+      // ignore
+    }
+    mainPaneSessions.delete(paneId);
+  };
+
+  const spawnMainPane = (paneId: PaneId): pty.IPty => {
+    const shellCandidates = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].filter(
+      (value): value is string => Boolean(value && value.trim()),
+    );
+    const shell = shellCandidates.find((candidate) => {
+      try {
+        accessSync(candidate, fsConstants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!shell) {
+      throw new Error("no executable shell found for PTY");
+    }
+    const rawCommand = (paneCommands[paneId] || "").trim();
+    const launchScript = rawCommand ? `${rawCommand}; exec ${shell}` : `exec ${shell}`;
+    try {
+      return pty.spawn(shell, ["-lc", launchScript], {
+        name: "xterm-256color",
+        cols: 120,
+        rows: 36,
+        cwd: process.cwd(),
+        env: process.env as Record<string, string>,
+      });
+    } catch {
+      for (const candidate of shellCandidates) {
+        try {
+          return pty.spawn(candidate, [], {
+            name: "xterm-256color",
+            cols: 120,
+            rows: 36,
+            cwd: process.cwd(),
+            env: process.env as Record<string, string>,
+          });
+        } catch {
+          // keep trying candidates
+        }
+      }
+      throw new Error(`unable to spawn shell for pane ${paneId}`);
+    }
+  };
+
+  mainPaneWs.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+    if (!supportsPty) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          `\r\n[main-grid disabled: Node ${process.versions.node} is unsupported for PTY]\r\n` +
+            `[use Node 22 LTS and rerun: npm run setup]\r\n`,
+        );
+      }
+      ws.close(1011, "unsupported node version for pty");
+      return;
+    }
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
+    const paneId = url.pathname.split("/").pop() as PaneId;
+    if (!paneId || !["1", "2", "3", "4", "5"].includes(paneId)) {
+      ws.close(1008, "invalid pane id");
+      return;
+    }
+
+    closeMainPane(paneId);
+    let ptyProcess: pty.IPty;
+    try {
+      ptyProcess = spawnMainPane(paneId);
+    } catch (error) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(`\r\n[failed to start pane ${paneId}: ${(error as Error).message}]\r\n`);
+      }
+      ws.close(1011, "pty spawn failed");
+      return;
+    }
+    mainPaneSessions.set(paneId, { ws, ptyProcess });
+
+    ptyProcess.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+    ptyProcess.onExit(({ exitCode }) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(`\r\n[process exited: ${exitCode}]\r\n`);
+      }
+      closeMainPane(paneId);
+    });
+
+    ws.on("message", (payload: Buffer) => {
+      try {
+        const message = JSON.parse(payload.toString("utf8")) as {
+          type: "input" | "resize";
+          data?: string;
+          cols?: number;
+          rows?: number;
+        };
+        const live = mainPaneSessions.get(paneId);
+        if (!live) {
+          return;
+        }
+        if (message.type === "input" && typeof message.data === "string") {
+          live.ptyProcess.write(message.data);
+        } else if (message.type === "resize" && Number.isFinite(message.cols) && Number.isFinite(message.rows)) {
+          live.ptyProcess.resize(Math.max(20, Number(message.cols)), Math.max(6, Number(message.rows)));
+        }
+      } catch {
+        // ignore malformed client message
+      }
+    });
+    ws.on("close", () => {
+      closeMainPane(paneId);
+    });
+  });
 
   const pushStreamEvent = (
     sessionId: string,
@@ -789,6 +1047,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/main" && req.method === "GET") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(buildMainTerminalHtml(options.token));
+      return;
+    }
+
     if (url.pathname === "/" && req.method === "GET") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -832,6 +1097,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         <button class="tab active" data-view="os">Winnow UI</button>
         <button class="tab" data-view="agent">Cursor Agent</button>
         <button class="tab" data-view="settings">Settings</button>
+        <button class="tab" onclick="openMainGrid()">Main Grid</button>
       </div>
       <div class="body">
         <div class="leftCol">
@@ -924,10 +1190,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     </div>
     <script>
       const AUTH_TOKEN = ${JSON.stringify(options.token ?? "")};
+      const PAGE_PARAMS = new URLSearchParams(window.location.search);
+      const EMBED_MODE = PAGE_PARAMS.get('embed') === '1';
+      const INITIAL_VIEW = PAGE_PARAMS.get('view') || 'os';
       function withToken(path){
         if(!AUTH_TOKEN){ return path; }
         const glue = path.includes('?') ? '&' : '?';
         return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
+      }
+      function openMainGrid(){
+        window.location.href = withToken('/main');
       }
       async function refresh(){
         const state = await fetch(withToken('/api/state')).then(r=>r.json());
@@ -1024,6 +1296,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           body.classList.add('single');
           rightCol.style.display = 'none';
         }
+      }
+      if(EMBED_MODE){
+        const topbar = document.querySelector('.topbar');
+        if(topbar){ topbar.style.display = 'none'; }
       }
       async function pollAgent(){
         if(!activeSessionId){ return; }
@@ -1150,9 +1426,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       refreshDir();
       refreshSessions();
       document.querySelectorAll('.tab').forEach((tab) => {
-        tab.onclick = () => setView(tab.getAttribute('data-view') || 'os');
+        const targetView = tab.getAttribute('data-view');
+        if(!targetView){ return; }
+        tab.onclick = () => setView(targetView);
       });
-      setView('os');
+      setView(INITIAL_VIEW);
       setInterval(refresh, 3000);
     </script>
   </body>
@@ -1162,6 +1440,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     res.statusCode = 404;
     res.end("Not found");
+  });
+
+  server.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
+    if (!url.pathname.startsWith("/ws/main/")) {
+      socket.destroy();
+      return;
+    }
+    if (!isAuthorized(url)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    mainPaneWs.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+      mainPaneWs.emit("connection", ws, req);
+    });
   });
 
   await new Promise<void>((resolve) => {

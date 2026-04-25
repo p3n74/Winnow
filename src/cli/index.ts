@@ -29,6 +29,11 @@ type CliOptions = {
   open?: boolean;
   host?: string;
   token?: string;
+  pane1Cmd?: string;
+  pane2Cmd?: string;
+  pane3Cmd?: string;
+  pane4Cmd?: string;
+  pane5Cmd?: string;
 };
 
 export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
@@ -194,6 +199,11 @@ export function buildProgram(): Command {
     .option("--port <port>", "UI server port", Number, 3210)
     .option("--host <host>", "UI bind host (use 0.0.0.0 for LAN access)", "127.0.0.1")
     .option("--token <token>", "6-char UI access token (required as ?token=...)")
+    .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
+    .option("--pane2-cmd <cmd>", "pane 2 command", "cursor-agent")
+    .option("--pane3-cmd <cmd>", "pane 3 command", "htop")
+    .option("--pane4-cmd <cmd>", "pane 4 command", "netwatch")
+    .option("--pane5-cmd <cmd>", "pane 5 command", process.env.SHELL || "zsh")
     .option("--no-open", "do not auto-open browser")
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
@@ -206,6 +216,13 @@ export function buildProgram(): Command {
         openBrowser: opts.open ?? true,
         host: opts.host ?? "127.0.0.1",
         token,
+        paneCommands: {
+          "1": opts.pane1Cmd ?? "ranger",
+          "2": opts.pane2Cmd ?? "cursor-agent",
+          "3": opts.pane3Cmd ?? "htop",
+          "4": opts.pane4Cmd ?? "netwatch",
+          "5": opts.pane5Cmd ?? process.env.SHELL ?? "zsh",
+        },
       });
     });
 

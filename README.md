@@ -10,13 +10,23 @@ Winnow is a terminal-first wrapper around `cursor-agent` that keeps Cursor accou
 
 ## Quickstart
 
-### 1) Install dependencies
+### 1) First-time setup (recommended)
+
+```bash
+npm run setup
+```
+
+This setup script automatically switches to Node 22 LTS when `nvm` is available, then installs dependencies.
+
+### 2) Install dependencies (manual path)
 
 ```bash
 npm install
 ```
 
-### 2) Configure environment
+If you manage Node manually, use Node `>=20 <23` (Node 22 LTS recommended).
+
+### 3) Configure environment
 
 ```bash
 cp .env.example .env
@@ -39,7 +49,7 @@ Edit `.env` values if needed:
 - `WINNOW_LOGS_ENABLED` (`true`/`false`)
 - `WINNOW_LOGS_DIR` (default `.winnow/logs`)
 
-### 3) Run in development
+### 4) Run in development
 
 ```bash
 npm run dev -- --help
@@ -109,22 +119,36 @@ Lightweight UI companion:
 npm run ui
 ```
 
+`npm run ui` auto-switches to Node 22 via `nvm` when needed.
+If PTY support is not available, it auto-rebuilds `node-pty` before launch.
+
 Optional flags:
 
 - `-- --port 3210` set UI port
+- `-- --host 0.0.0.0` bind for LAN access
+- `-- --token ABC123` require URL token (`?token=ABC123`)
 - `-- --no-open` keep browser closed
+- `-- --pane1-cmd "ranger"` override pane 1 command
+- `-- --pane2-cmd "cursor-agent"` override pane 2 command
+- `-- --pane3-cmd "htop"` override pane 3 command
+- `-- --pane4-cmd "netwatch"` override pane 4 command
+- `-- --pane5-cmd "$SHELL"` override pane 5 command
 
 UI capabilities:
 
-- Live status dashboard (backend/model/mode/retries/log state)
-- Quick controls for backend/model/glossary/mode
-- Recent session logs viewer
-- Saves changes into `.winnow/profile.json`
-- Agent console that runs `cursor-agent` directly (translation disabled for runs)
-- Model preference toggle for Cursor-native selection (`auto` or `composer`)
-- Real-time agent output streaming in UI via Server-Sent Events (with polling fallback)
-- Workspace changes panel with file list, full `git diff`, and stage-selected action
-- Ranger-like directory navigator with folder traversal and file preview
+- Fixed five-pane terminal layout matching the split-grid design
+- Real PTY-backed interactive terminals in every pane (input, resize, fullscreen TUIs)
+- Default pane commands: `ranger`, `cursor-agent`, `htop`, `netwatch`, and shell
+- Per-pane reconnect button to respawn terminal process
+- Token protection is enforced on both HTTP and WebSocket connections
+- Main grid PTY terminals require supported Node runtime (`>=20 <23`)
+
+Terminal app prerequisites:
+
+- `ranger` installed and available on `PATH`
+- `htop` installed and available on `PATH`
+- `netwatch` available on `PATH`
+- `cursor-agent` installed and authenticated
 
 ## Notes
 
