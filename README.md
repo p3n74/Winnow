@@ -120,6 +120,8 @@ UI capabilities:
 - Quick controls for backend/model/glossary/mode
 - Recent session logs viewer
 - Saves changes into `.winnow/profile.json`
+- Agent console that runs `cursor-agent` directly (translation disabled for runs)
+- Model preference toggle for Cursor-native selection (`auto` or `composer`)
 
 ## Notes
 

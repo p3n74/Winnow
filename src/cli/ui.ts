@@ -18,6 +18,25 @@ type ProfileUpdateRequest = {
   mode?: "zh" | "raw" | "dual";
 };
 
+type AgentStartRequest = {
+  prompt: string;
+  args?: string;
+  modelPreference?: "auto" | "composer";
+};
+
+type AgentSession = {
+  id: string;
+  status: "running" | "done" | "error";
+  startedAt: string;
+  endedAt?: string;
+  output: string;
+  errorOutput: string;
+  exitCode?: number;
+  error?: string;
+  command: string;
+  args: string[];
+};
+
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
   try {
     const filePath = join(process.cwd(), logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -71,6 +90,70 @@ function maybeOpenBrowser(url: string): void {
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
   let config = { ...baseConfig };
+  const sessions = new Map<string, AgentSession>();
+
+  const forceCursorNativeConfig = (input: WinnowConfig): WinnowConfig => ({
+    ...input,
+    inputMode: "off",
+    outputMode: "off",
+    showOriginal: false,
+    dualOutput: false,
+  });
+
+  const parseArgs = (raw: string): string[] => raw.split(/\s+/).map((x) => x.trim()).filter(Boolean);
+  const ensureModelArg = (args: string[], preference: "auto" | "composer"): string[] => {
+    if (args.includes("--model")) {
+      return args;
+    }
+    const value = preference === "composer" ? "composer" : "auto";
+    return [...args, "--model", value];
+  };
+
+  const startAgentSession = (payload: AgentStartRequest): AgentSession => {
+    const nativeConfig = forceCursorNativeConfig(config);
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const baseArgs = parseArgs(payload.args ?? "");
+    const args = ensureModelArg(baseArgs, payload.modelPreference ?? "auto");
+    const session: AgentSession = {
+      id,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      output: "",
+      errorOutput: "",
+      command: nativeConfig.cursorCommand,
+      args,
+    };
+    sessions.set(id, session);
+
+    const child = spawn(nativeConfig.cursorCommand, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
+
+    child.on("error", (error) => {
+      session.status = "error";
+      session.error = error.message;
+      session.endedAt = new Date().toISOString();
+    });
+
+    child.stdout?.on("data", (buf: Buffer) => {
+      session.output += buf.toString("utf8");
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      session.errorOutput += buf.toString("utf8");
+    });
+
+    child.stdin?.write(`${payload.prompt}\n`);
+    child.stdin?.end();
+
+    child.on("close", (code: number | null) => {
+      session.exitCode = code ?? 1;
+      session.status = session.exitCode === 0 ? "done" : "error";
+      session.endedAt = new Date().toISOString();
+    });
+
+    return session;
+  };
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
@@ -112,6 +195,32 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/agent/start" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as AgentStartRequest;
+        if (!payload.prompt?.trim()) {
+          sendJson(res, 400, { ok: false, error: "prompt is required" });
+          return;
+        }
+        const session = startAgentSession(payload);
+        sendJson(res, 200, { ok: true, sessionId: session.id });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/agent/") && req.method === "GET") {
+      const id = url.pathname.replace("/api/agent/", "").trim();
+      const session = sessions.get(id);
+      if (!session) {
+        sendJson(res, 404, { ok: false, error: "session not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, session });
       return;
     }
 
@@ -162,6 +271,29 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       <pre id="result"></pre>
     </div>
     <div class="card">
+      <h3>Agent Console (Cursor Native)</h3>
+      <p>Runs <code>cursor-agent</code> directly with translation disabled. Uses Cursor-side model preference (auto or composer).</p>
+      <div class="row">
+        <label>Model Pref</label>
+        <select id="agentModelPref">
+          <option value="auto">auto</option>
+          <option value="composer">composer</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Cursor Args</label>
+        <input id="agentArgs" style="width:560px" placeholder="optional args passed to cursor-agent" />
+      </div>
+      <div class="row">
+        <textarea id="agentPrompt" style="width:100%;min-height:120px;padding:8px" placeholder="Describe the coding task for Cursor agent..."></textarea>
+      </div>
+      <div class="row">
+        <button onclick="startAgentRun()">Run Agent</button>
+        <span id="agentSessionInfo"></span>
+      </div>
+      <pre id="agentOutput">No run yet.</pre>
+    </div>
+    <div class="card">
       <h3>Recent Logs</h3>
       <pre id="logs">Loading...</pre>
     </div>
@@ -183,6 +315,44 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       async function saveModel(){ await post({model:document.getElementById('model').value.trim()}); }
       async function saveGlossary(){ await post({glossary:document.getElementById('glossary').value}); }
       async function setMode(mode){ await post({mode}); }
+      let activeSessionId = null;
+      let pollTimer = null;
+      async function pollAgent(){
+        if(!activeSessionId){ return; }
+        const res = await fetch('/api/agent/' + activeSessionId).then(r=>r.json());
+        if(!res.ok){ return; }
+        const s = res.session;
+        const output = (s.output || '') + (s.errorOutput ? ('\\n[stderr]\\n' + s.errorOutput) : '');
+        document.getElementById('agentOutput').textContent = output || 'Running...';
+        document.getElementById('agentSessionInfo').textContent = 'session=' + s.id + ' status=' + s.status + (s.exitCode !== undefined ? (' exit=' + s.exitCode) : '');
+        if(s.status !== 'running' && pollTimer){
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+      async function startAgentRun(){
+        const prompt = document.getElementById('agentPrompt').value.trim();
+        if(!prompt){
+          document.getElementById('agentOutput').textContent = 'Prompt is required.';
+          return;
+        }
+        const payload = {
+          prompt,
+          args: document.getElementById('agentArgs').value,
+          modelPreference: document.getElementById('agentModelPref').value
+        };
+        const res = await fetch('/api/agent/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
+        if(!res.ok){
+          document.getElementById('agentOutput').textContent = 'Failed to start: ' + JSON.stringify(res);
+          return;
+        }
+        activeSessionId = res.sessionId;
+        document.getElementById('agentOutput').textContent = 'Running...';
+        document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
+        if(pollTimer){ clearInterval(pollTimer); }
+        pollTimer = setInterval(pollAgent, 1000);
+        pollAgent();
+      }
       refresh();
       setInterval(refresh, 3000);
     </script>
