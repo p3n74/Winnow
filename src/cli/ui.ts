@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { accessSync, constants as fsConstants, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, createReadStream, readFileSync } from "node:fs";
 import { arch, cpus, freemem, homedir, loadavg, networkInterfaces, platform, totalmem, uptime } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -15,6 +15,11 @@ import {
 } from "../config/projectProfile.js";
 import { loadDotenvFromDisk, readDotenvFile, WINNOW_DOTENV_SPECS, writeDotenvFileFull } from "../config/dotenvFile.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
+import {
+  readProjectDocsIndex,
+  rebuildAndWriteProjectDocsIndex,
+  resolveDocFilePath,
+} from "./projectDocsIndex.js";
 import { listProjects, registerProject } from "../config/projects.js";
 import {
   finalizeRun,
@@ -350,6 +355,69 @@ function buildMainTerminalHtml(token?: string): string {
       }
       .pane2View:not(.isHidden) { z-index: 1; }
       .pane2View .cursorHost { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+      .pane2DocsRoot { padding: 0 10px 10px; gap: 8px; }
+      .docsToolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        padding-top: 6px;
+      }
+      .docsSelect {
+        flex: 1;
+        min-width: 160px;
+        max-width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: var(--radius-sm);
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      .docsHint { margin: 0; font-size: 11px; flex-shrink: 0; }
+      .docsBody {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        overflow: hidden;
+      }
+      .docsMdRendered {
+        position: absolute;
+        inset: 0;
+        overflow: auto;
+        padding: 14px 18px;
+        font-size: 13px;
+        line-height: 1.55;
+        color: var(--text);
+      }
+      .docsMdRendered h1, .docsMdRendered h2, .docsMdRendered h3 { color: var(--text-neon); margin: 1.1em 0 0.45em; }
+      .docsMdRendered h1 { font-size: 1.35rem; }
+      .docsMdRendered pre, .docsMdRendered code {
+        font-family: var(--font-mono);
+        background: var(--panel2);
+        border: 1px solid var(--line-faint);
+        border-radius: 4px;
+      }
+      .docsMdRendered pre { padding: 10px; overflow: auto; font-size: 12px; }
+      .docsMdRendered code { padding: 1px 4px; font-size: 12px; }
+      .docsMdRendered pre code { border: 0; padding: 0; background: transparent; }
+      .docsMdRendered a { color: var(--accent-hover); }
+      .docsPdfViewer {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #111;
+      }
+      .docsMdRendered.isHidden,
+      .docsPdfViewer.isHidden {
+        display: none !important;
+      }
       @media (max-width: 1200px) {
         .root { grid-template-columns: 1fr; grid-template-rows: 56% 44%; }
       }
@@ -364,7 +432,7 @@ function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger</span>
-          <span class="chip">2 agent · shell</span>
+          <span class="chip">2 agent · shell · docs</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -386,9 +454,10 @@ function buildMainTerminalHtml(token?: string): string {
           <div class="paneHead">
             <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI and system shell">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, and system shell">
                 <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
               </div>
               <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
             </div>
@@ -404,11 +473,26 @@ function buildMainTerminalHtml(token?: string): string {
             <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
               <div id="pane2term" class="term"></div>
             </div>
+            <div id="pane2Docs" class="pane2View isHidden pane2DocsRoot" aria-hidden="true">
+              <div class="docsToolbar">
+                <button type="button" class="reconnect" id="btnDocsReindex">Refresh index</button>
+                <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
+                  <option value="">(select file)</option>
+                </select>
+              </div>
+              <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
+              <div class="docsBody">
+                <article id="docsMdRendered" class="docsMdRendered isHidden"></article>
+                <iframe id="docsPdfViewer" class="docsPdfViewer isHidden" title="PDF preview"></iframe>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
     <script src="https://unpkg.com/@xterm/xterm/lib/xterm.js"></script>
     <script src="https://unpkg.com/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script>
@@ -486,22 +570,33 @@ function buildMainTerminalHtml(token?: string): string {
       function setPane2Tab(mode){
         const wsEl = document.getElementById("pane2Workspace");
         const tsEl = document.getElementById("pane2TerminalWrap");
+        const docEl = document.getElementById("pane2Docs");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
+        const td = document.getElementById("pane2TabDocs");
         const recon = document.getElementById("reconnectPane2");
+        const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
-        if(wsEl && tsEl){
-          wsEl.classList.toggle("isHidden", isTerm);
+        const isDoc = mode === "docs";
+        if(wsEl && tsEl && docEl){
+          wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
+          docEl.classList.toggle("isHidden", !isDoc);
+          wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
+          docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
         }
-        if(chip){ chip.textContent = isTerm ? "login shell" : "winnow-agent-ui"; }
-        if(tw && tt){
-          tw.classList.toggle("paneTabActive", !isTerm);
+        if(chip){
+          chip.textContent = isTerm ? "login shell" : isDoc ? "md · pdf" : "winnow-agent-ui";
+        }
+        if(tw && tt && td){
+          tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
-          tw.setAttribute("aria-selected", (!isTerm).toString());
+          td.classList.toggle("paneTabActive", isDoc);
+          tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
+          td.setAttribute("aria-selected", isDoc.toString());
         }
         if(recon){ recon.hidden = !isTerm; }
         if(isTerm){
@@ -512,9 +607,101 @@ function buildMainTerminalHtml(token?: string): string {
             if(cur && cur.term){ cur.term.focus(); }
           });
         }
+        if(isDoc){
+          void refreshDocsIndex(false);
+        }
+      }
+      async function refreshDocsIndex(force){
+        const sel = document.getElementById("docsFileSelect");
+        const hint = document.getElementById("docsHint");
+        if(!sel){ return; }
+        const prev = sel.value || "";
+        try{
+          const url = withToken("/api/workspace/docs-index" + (force ? "?refresh=1" : ""));
+          const data = await fetch(url).then((r)=>r.json());
+          if(!data.ok){
+            if(hint){ hint.textContent = data.error || "Failed to load index"; }
+            return;
+          }
+          const files = (data.index && data.index.files) ? data.index.files : [];
+          const opts = ['<option value="">(select file)</option>'].concat(
+            files.map((f)=>{
+              const safeLabel = "[" + f.kind + "] " + f.relPath.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+              return '<option value="' + encodeURIComponent(f.relPath) + '">' + safeLabel + "</option>";
+            })
+          );
+          sel.innerHTML = opts.join("");
+          if(prev && files.some((f)=>f.relPath === prev)){
+            sel.value = encodeURIComponent(prev);
+          }
+          if(hint){
+            hint.textContent = "Indexed " + files.length + " file(s) at " + (data.index.scannedAt || "").replace("T"," ").slice(0,19) + " · .winnow/docs-index.json";
+          }
+        } catch(err){
+          if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
+        }
+      }
+      function clearDocViewer(){
+        const md = document.getElementById("docsMdRendered");
+        const pdf = document.getElementById("docsPdfViewer");
+        if(md){
+          md.innerHTML = "";
+          md.classList.add("isHidden");
+        }
+        if(pdf){
+          pdf.src = "about:blank";
+          pdf.classList.add("isHidden");
+        }
+      }
+      async function loadSelectedDoc(relPath){
+        const md = document.getElementById("docsMdRendered");
+        const pdf = document.getElementById("docsPdfViewer");
+        const hint = document.getElementById("docsHint");
+        if(!relPath || !md || !pdf){
+          clearDocViewer();
+          return;
+        }
+        const lower = relPath.toLowerCase();
+        if(lower.endsWith(".pdf")){
+          md.classList.add("isHidden");
+          md.innerHTML = "";
+          pdf.classList.remove("isHidden");
+          pdf.src = withToken("/api/workspace/doc?path=" + encodeURIComponent(relPath));
+          return;
+        }
+        pdf.src = "about:blank";
+        pdf.classList.add("isHidden");
+        md.classList.remove("isHidden");
+        try{
+          const res = await fetch(withToken("/api/workspace/doc?path=" + encodeURIComponent(relPath))).then((r)=>r.json());
+          if(!res.ok || res.kind !== "md"){
+            md.innerHTML = "<p>" + (res.error || "Failed to load markdown") + "</p>";
+            return;
+          }
+          const raw = typeof marked !== "undefined" && marked.parse
+            ? marked.parse(res.markdown || "", { mangle: false, headerIds: false })
+            : "<pre>" + String(res.markdown || "").replace(/</g, "&lt;") + "</pre>";
+          const clean = typeof DOMPurify !== "undefined" && DOMPurify.sanitize ? DOMPurify.sanitize(raw) : raw;
+          md.innerHTML = clean;
+        } catch(err){
+          md.innerHTML = "<p>" + ((err && err.message) ? err.message : String(err)) + "</p>";
+        }
+        if(hint){ hint.textContent = relPath; }
       }
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
+      document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
+      document.getElementById("btnDocsReindex")?.addEventListener("click",()=>{ void refreshDocsIndex(true); });
+      function decodeDocPath(raw){
+        if(!raw){ return ""; }
+        try{ return decodeURIComponent(raw); } catch(_e){ return raw; }
+      }
+      document.getElementById("docsFileSelect")?.addEventListener("change",(e)=>{
+        const t = e.target;
+        const v = t && t.value ? decodeDocPath(t.value) : "";
+        if(!v){ clearDocViewer(); return; }
+        void loadSelectedDoc(v);
+      });
       (function setupDockedBack(){
         const params = new URLSearchParams(location.search);
         const docked = params.get("dock") === "1" && window.parent !== window;
@@ -1550,6 +1737,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (payload.reset) {
           const next = await applyWorkspaceDir(winnowLaunchRoot, true);
           await registerProject(next);
+          void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
           sendJson(res, 200, {
             ok: true,
             cwd: next,
@@ -1566,6 +1754,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const candidate = resolveUiPath(raw);
         const next = await applyWorkspaceDir(candidate, true);
         await registerProject(next);
+        void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
         sendJson(res, 200, {
           ok: true,
           cwd: next,
@@ -1610,6 +1799,49 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           ok: result.ok,
           stderr: result.stderr,
         });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/docs-index" && req.method === "GET") {
+      try {
+        const refresh = url.searchParams.get("refresh") === "1";
+        let index = await readProjectDocsIndex(uiWorkspace.dir);
+        if (refresh || !index) {
+          index = await rebuildAndWriteProjectDocsIndex(uiWorkspace.dir);
+        }
+        sendJson(res, 200, { ok: true, index });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/doc" && req.method === "GET") {
+      try {
+        const rel = url.searchParams.get("path") ?? "";
+        const abs = resolveDocFilePath(uiWorkspace.dir, rel);
+        const info = await stat(abs);
+        if (!info.isFile()) {
+          sendJson(res, 400, { ok: false, error: "not a file" });
+          return;
+        }
+        const lower = abs.toLowerCase();
+        if (lower.endsWith(".md")) {
+          const markdown = await readFile(abs, "utf8");
+          sendJson(res, 200, { ok: true, kind: "md" as const, relPath: rel, markdown });
+          return;
+        }
+        if (lower.endsWith(".pdf")) {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/pdf");
+          res.setHeader("Content-Length", String(info.size));
+          createReadStream(abs).pipe(res);
+          return;
+        }
+        sendJson(res, 400, { ok: false, error: "unsupported file type" });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
