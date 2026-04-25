@@ -1,7 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { accessSync, constants as fsConstants, readFileSync } from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
+import { arch, cpus, freemem, homedir, loadavg, networkInterfaces, platform, totalmem, uptime } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
@@ -10,6 +10,7 @@ import { WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
 import { saveProjectProfile } from "../config/projectProfile.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
+import { listProjects, registerProject } from "../config/projects.js";
 import {
   ensureCursorWorkspaceLayout,
   ensureCursorWorkspaceLayoutSync,
@@ -168,30 +169,123 @@ function buildMainTerminalHtml(token?: string): string {
     <title>Winnow Main Terminal Grid</title>
     <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm/css/xterm.css" />
     <style>
-      :root{--bg:#090d14;--panel:#121927;--panel2:#0f1521;--line:#25324a;--lineSoft:#1a2436;--text:#d9e7ff;--muted:#8fa3c4;--accent:#6ec7ff;--radius:10px}
-      *{box-sizing:border-box}
-      html,body{margin:0;width:100%;height:100%;background:radial-gradient(1200px 700px at 30% -10%, #1a2740 0%, var(--bg) 52%);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-      .workspace{display:grid;grid-template-rows:44px 1fr;height:100vh;width:100%}
-      .toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(10,14,22,.78);backdrop-filter:blur(6px)}
-      .toolbarLeft,.toolbarRight{display:flex;gap:8px;align-items:center}
-      .brand{font-size:12px;color:var(--muted)}
-      .chip{font-size:11px;color:#b9d0ef;border:1px solid var(--line);padding:3px 8px;border-radius:999px;background:#121b2a}
-      .back{border:1px solid var(--line);background:#151d2d;color:var(--text);padding:5px 10px;border-radius:7px;font-size:12px;text-decoration:none}
-      .root{display:grid;grid-template-columns:48% 52%;gap:10px;padding:10px;min-width:0;min-height:0}
-      .left{display:grid;grid-template-rows:50% 50%;gap:10px;min-width:0;min-height:0}
-      .leftBottom{display:grid;grid-template-columns:42% 58%;gap:10px;min-width:0;min-height:0}
-      .leftBottomLeft{display:grid;grid-template-rows:58% 42%;gap:10px;min-width:0;min-height:0}
-      .pane{min-width:0;min-height:0;background:linear-gradient(180deg,rgba(20,29,45,.95) 0%,rgba(13,19,31,.95) 100%);border:1px solid var(--lineSoft);border-radius:var(--radius);overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.24)}
-      .paneInner{width:100%;height:100%;display:grid;grid-template-rows:34px 1fr}
-      .paneHead{border-bottom:1px solid var(--lineSoft);color:var(--muted);font-size:12px;padding:7px 10px;display:flex;align-items:center;justify-content:space-between;background:rgba(7,12,20,.55)}
-      .paneTitle{display:flex;align-items:center;gap:8px;color:#c8daf7}
-      .paneCmd{font-size:10px;color:#86a9d5;border:1px solid var(--line);padding:1px 6px;border-radius:999px;background:#111a2a}
-      .reconnect{border:1px solid var(--line);background:#172133;color:var(--text);border-radius:7px;padding:3px 9px;font-size:11px;cursor:pointer}
-      .reconnect:hover,.back:hover{border-color:var(--accent);color:#fff}
-      .term{width:100%;height:100%;overflow:hidden;background:var(--panel2)}
-      .cursorHost{width:100%;height:100%;border:0;background:#0b1018}
-      @media (max-width: 1200px){
-        .root{grid-template-columns:1fr;grid-template-rows:56% 44%}
+      :root {
+        --bg: #09090b;
+        --panel: #18181b;
+        --panel2: #27272a;
+        --line: #3f3f46;
+        --text: #e4e4e7;
+        --text-strong: #fafafa;
+        --muted: #a1a1aa;
+        --accent: #3b82f6;
+        --accent-hover: #60a5fa;
+        --danger: #ef4444;
+        --success: #10b981;
+        --radius: 8px;
+        --radius-sm: 6px;
+        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .workspace { display: grid; grid-template-rows: 48px 1fr; height: 100vh; width: 100%; }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        z-index: 10;
+      }
+      .toolbarLeft, .toolbarRight { display: flex; gap: 12px; align-items: center; }
+      .brand { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+      .chip {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        padding: 2px 8px;
+        border-radius: 99px;
+        background: var(--bg);
+        letter-spacing: 0.05em;
+      }
+      .back {
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        padding: 6px 12px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        font-weight: 500;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        transition: all 0.2s;
+      }
+      .back:hover { background: rgba(255,255,255,0.05); color: var(--text-strong); }
+      .root { display: grid; grid-template-columns: 45fr 55fr; gap: 16px; padding: 16px; min-width: 0; min-height: 0; }
+      .left { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
+      .leftBottom { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; min-width: 0; min-height: 0; }
+      .leftBottomLeft { display: grid; grid-template-rows: 60fr 40fr; gap: 16px; min-width: 0; min-height: 0; }
+      .pane {
+        min-width: 0;
+        min-height: 0;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+      .paneInner { width: 100%; height: 100%; display: grid; grid-template-rows: 38px 1fr; }
+      .paneHead {
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+        padding: 0 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: var(--panel);
+      }
+      .paneTitle { display: flex; align-items: center; gap: 8px; color: var(--text-strong); font-weight: 500; }
+      .paneCmd {
+        font-size: 10px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        padding: 2px 6px;
+        border-radius: 99px;
+        background: var(--bg);
+        font-family: var(--font-mono);
+      }
+      .reconnect {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--text);
+        border-radius: var(--radius-sm);
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .reconnect:hover { border-color: var(--line); background: var(--panel2); color: var(--text-strong); }
+      .term { width: 100%; height: 100%; overflow: hidden; background: var(--bg); padding: 4px; }
+      .cursorHost { width: 100%; height: 100%; border: 0; background: var(--bg); }
+      @media (max-width: 1200px) {
+        .root { grid-template-columns: 1fr; grid-template-rows: 56% 44%; }
       }
     </style>
   </head>
@@ -254,7 +348,7 @@ function buildMainTerminalHtml(token?: string): string {
         const term = new Terminal({
           cursorBlink:true,
           fontSize:12,
-          theme:{background:"#0f1521",foreground:"#d9e7ff",cursor:"#86d6ff"}
+          theme:{background:"#09090b",foreground:"#e4e4e7",cursor:"#3b82f6", selectionBackground: "rgba(59, 130, 246, 0.3)"}
         });
         const fit = new FitAddon.FitAddon();
         term.loadAddon(fit);
@@ -354,6 +448,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   let config = { ...baseConfig };
   const winnowLaunchRoot = resolve(process.cwd());
   const uiWorkspace = { dir: winnowLaunchRoot };
+
+  // Register current directory as a project
+  await registerProject(winnowLaunchRoot);
 
   function expandUserPathSegment(raw: string): string {
     const t = raw.trim();
@@ -1031,11 +1128,33 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/system" && req.method === "GET") {
+      sendJson(res, 200, {
+        platform: platform(),
+        arch: arch(),
+        cpus: cpus().length,
+        cpuModel: cpus()[0]?.model,
+        totalMem: totalmem(),
+        freeMem: freemem(),
+        uptime: uptime(),
+        loadAvg: loadavg(),
+        nodeVersion: process.version,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/projects" && req.method === "GET") {
+      const projects = await listProjects();
+      sendJson(res, 200, { projects });
+      return;
+    }
+
     if (url.pathname === "/api/workspace/cwd" && req.method === "POST") {
       try {
         const payload = (await readJsonBody(req)) as { path?: string; reset?: boolean };
         if (payload.reset) {
           const next = await applyWorkspaceDir(winnowLaunchRoot, true);
+          await registerProject(next);
           sendJson(res, 200, {
             ok: true,
             cwd: next,
@@ -1051,6 +1170,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         }
         const candidate = resolveUiPath(raw);
         const next = await applyWorkspaceDir(candidate, true);
+        await registerProject(next);
         sendJson(res, 200, {
           ok: true,
           cwd: next,
@@ -1296,69 +1416,320 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     <meta charset="utf-8" />
     <title>Winnow Console UI</title>
     <style>
-      :root{--bg:#071521;--panel:#0a1d2c;--panel2:#0d2436;--line:#12344b;--text:#cce6ff;--muted:#7fa3bd;--accent:#2ec4ff;}
-      *{box-sizing:border-box}
-      html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-      .app{display:flex;flex-direction:column;height:100vh}
-      .topbar{height:40px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line);background:#06131e}
-      .tab{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--muted);cursor:pointer}
-      .tab.active{color:var(--text);border-color:var(--accent)}
-      .body{flex:1;display:grid;grid-template-columns:38% 62%;gap:8px;padding:8px;min-height:0}
-      .body.single{grid-template-columns:100%}
-      .leftCol,.rightCol{display:grid;gap:8px;min-height:0}
-      .leftCol{grid-template-rows:26% 16% 18% 20% 20%}
-      .rightCol{grid-template-rows:100%}
-      .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
-      .title{font-size:12px;color:#9dc4df;margin-bottom:6px}
-      .muted{color:var(--muted)}
-      .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-      input,select,button,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;font-family:inherit;font-size:12px}
-      button{cursor:pointer}
-      button:hover{border-color:var(--accent)}
-      pre{margin:0;background:#06131e;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;overflow:auto;flex:1;min-height:0;font-size:12px}
-      textarea{width:100%;min-height:110px;resize:vertical}
-      #workspaceFiles,#dirEntries{overflow:auto;max-height:140px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e}
-      .entry{display:block;border:0;background:transparent;color:var(--text);text-align:left;padding:3px 4px;width:100%}
-      .entry:hover{background:#103047}
-      .small{font-size:11px}
-      .hint{font-size:11px;color:var(--muted)}
-      .quickbar{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
-      .quickbar button{padding:4px 8px;font-size:11px}
-      .runRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-      .kbd{border:1px solid var(--line);border-bottom-width:2px;padding:1px 6px;border-radius:6px;background:#0a1a28;color:#9dc4df;font-size:10px}
-      .statusBadge{display:inline-block;padding:2px 8px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:#9dc4df;background:#0a1a28}
-      .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:6px 0}
-      .metric{border:1px solid var(--line);border-radius:6px;padding:6px;background:#081827}
-      .metricLabel{font-size:10px;color:var(--muted)}
-      .metricValue{font-size:12px;color:var(--text)}
-      #chatHistory{overflow:auto;border:1px solid var(--line);border-radius:6px;background:#06131e;padding:8px;flex:1;min-height:140px}
-      .chatMsg{margin-bottom:8px;border:1px solid #0f2d45;border-radius:6px;padding:6px;background:#091a29}
-      .chatRole{font-size:10px;color:#9dc4df;margin-bottom:4px;text-transform:uppercase}
-      .chatText{white-space:pre-wrap;font-size:12px}
+      :root {
+        --bg: #09090b;
+        --panel: #18181b;
+        --panel2: #27272a;
+        --line: #3f3f46;
+        --text: #e4e4e7;
+        --text-strong: #fafafa;
+        --muted: #a1a1aa;
+        --accent: #3b82f6;
+        --accent-hover: #60a5fa;
+        --danger: #ef4444;
+        --success: #10b981;
+        --radius: 8px;
+        --radius-sm: 6px;
+        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        font-size: 13px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .app { display: flex; flex-direction: column; height: 100vh; }
+      .topbar {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        z-index: 10;
+      }
+      .tab {
+        padding: 6px 12px;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--muted);
+        cursor: pointer;
+        transition: all 0.2s;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+      }
+      .tab:hover { color: var(--text-strong); background: rgba(255, 255, 255, 0.05); }
+      .tab.active { color: var(--text-strong); background: var(--panel2); border-color: var(--line); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+      .body { flex: 1; display: grid; grid-template-columns: 38% 62%; gap: 16px; padding: 16px; min-height: 0; }
+      .body.single { grid-template-columns: 100%; }
+      .leftCol, .rightCol { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; padding-right: 4px; }
+      .leftCol > .panel { flex-shrink: 0; }
+      .leftCol > .panel.flex-panel { flex: 1; flex-shrink: 1; }
+      .rightCol > .panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 0;
+        box-shadow: var(--shadow);
+      }
+      .title { font-size: 14px; font-weight: 600; color: var(--text-strong); letter-spacing: 0.01em; margin: 0; }
+      .muted { color: var(--muted); }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      input, select, button, textarea {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        color: var(--text-strong);
+        border-radius: var(--radius-sm);
+        padding: 6px 10px;
+        font-family: inherit;
+        font-size: 13px;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+      button { cursor: pointer; font-weight: 500; background: var(--panel2); }
+      button:hover { background: var(--line); border-color: #52525b; color: var(--text-strong); }
+      pre {
+        margin: 0;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 10px;
+        white-space: pre-wrap;
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+        font-size: 12px;
+        font-family: var(--font-mono);
+        color: #d4d4d8;
+      }
+      #agentThinking {
+        flex-shrink: 0;
+        max-height: 160px;
+        min-height: 40px;
+        overflow-y: auto;
+        font-size: 12px;
+        padding: 10px;
+        background: var(--panel2);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        font-family: var(--font-mono);
+        white-space: pre-wrap;
+        color: var(--muted);
+        margin: 0;
+      }
+      textarea { width: 100%; min-height: 100px; resize: vertical; font-family: var(--font-mono); margin: 0; }
+      #workspaceFiles, #dirEntries {
+        overflow: auto;
+        max-height: 140px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 4px;
+        background: var(--bg);
+        margin: 0;
+      }
+      .entry { display: block; border: 0; background: transparent; color: var(--text); text-align: left; padding: 4px 8px; width: 100%; border-radius: 4px; margin: 0; }
+      .entry:hover { background: var(--panel2); color: var(--text-strong); }
+      .small { font-size: 12px; }
+      .hint { font-size: 12px; color: var(--muted); margin: 0; }
+      .quickbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
+      .quickbar button { padding: 4px 10px; font-size: 12px; border-radius: 99px; }
+      .runRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; }
+      .kbd {
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--panel2);
+        color: var(--muted);
+        font-size: 11px;
+        font-family: var(--font-mono);
+      }
+      .statusBadge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        background: var(--panel2);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+      .metric { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg); }
+      .metricLabel { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; margin-bottom: 4px; }
+      .metricValue { font-size: 14px; color: var(--text-strong); font-weight: 600; font-family: var(--font-mono); }
+      .metrics.dashboardMetrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .dashboardSubline {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .projectToolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .projectToolbar input {
+        flex: 1;
+        min-width: 220px;
+      }
+      .projectToolbar button {
+        flex-shrink: 0;
+      }
+      .projectMetaBadge {
+        border: 1px solid var(--line);
+        background: var(--panel2);
+        border-radius: 99px;
+        padding: 2px 8px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .projectCard {
+        width: 100%;
+        border: 1px solid transparent;
+        border-bottom-color: var(--line);
+        background: transparent;
+        color: var(--text);
+        text-align: left;
+        padding: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        overflow: hidden;
+      }
+      .projectMain {
+        flex: 1;
+        min-width: 0;
+      }
+      .projectCard:hover {
+        background: var(--panel2);
+        border-color: var(--line);
+      }
+      .projectCard:last-child {
+        border-bottom: 0;
+      }
+      .projectName {
+        font-weight: 600;
+        color: var(--text-strong);
+      }
+      .projectPath {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        word-break: break-all;
+        font-family: var(--font-mono);
+      }
+      .projectTime {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        text-align: right;
+      }
+      #chatHistory {
+        overflow-y: auto;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        padding: 12px;
+        flex: 1;
+        min-height: 140px;
+        margin: 0;
+      }
+      .chatMsg {
+        margin-bottom: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        background: var(--panel);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      }
+      .chatMsg:last-child { margin-bottom: 0; }
+      .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; }
+      .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: #d4d4d8; }
     </style>
   </head>
   <body>
     <div class="app">
       <div class="topbar">
-        <button class="tab active" data-view="os">OS default</button>
-        <button class="tab active" data-view="os">Winnow UI</button>
+        <button class="tab active" data-view="os">Dashboard</button>
         <button class="tab" data-view="agent">Cursor Agent</button>
         <button class="tab" data-view="settings">Settings</button>
         <button id="mainGridBtn" class="tab">Main Grid</button>
-        <a id="agentWindowLink" class="tab" href="${options.token ? "/agent?token=" + encodeURIComponent(options.token) : "/agent"}" style="text-decoration:none;color:inherit;display:inline-flex;align-items:center">Agent window</a>
       </div>
       <div class="body">
         <div class="leftCol">
-          <div class="panel">
+          <!-- Dashboard specific panels -->
+          <div class="panel dashboard-only">
+            <div class="title">System Status</div>
+            <div class="metrics dashboardMetrics">
+              <div class="metric"><div class="metricLabel">Platform</div><div class="metricValue" id="sysPlatform">...</div></div>
+              <div class="metric"><div class="metricLabel">CPU</div><div class="metricValue" id="sysCpus">...</div></div>
+              <div class="metric"><div class="metricLabel">Mem Free</div><div class="metricValue" id="sysMemFree">...</div></div>
+              <div class="metric"><div class="metricLabel">Uptime</div><div class="metricValue" id="sysUptime">...</div></div>
+              <div class="metric"><div class="metricLabel">Node</div><div class="metricValue" id="sysNode">...</div></div>
+              <div class="metric"><div class="metricLabel">Load Avg</div><div class="metricValue" id="sysLoadAvg">...</div></div>
+            </div>
+            <div class="dashboardSubline">
+              <span id="sysCpuModel"></span>
+              <span id="sysRefreshedAt">Updated just now</span>
+            </div>
+          </div>
+
+          <div class="panel flex-panel dashboard-only">
+            <div class="title">Recent Projects</div>
+            <div class="projectToolbar">
+              <input id="projectFilter" placeholder="Filter by name or path..." />
+              <button onclick="refreshProjects()">Refresh</button>
+              <span class="projectMetaBadge" id="projectCountBadge">0 projects</span>
+            </div>
+            <div id="projectList" style="overflow:auto;flex:1;border:1px solid var(--line);border-radius:var(--radius-sm);padding:4px;background:var(--bg)">
+              <div class="muted small" style="padding:8px">Loading projects...</div>
+            </div>
+            <div class="hint">Directories containing a <code>.winnow</code> folder are registered as projects.</div>
+          </div>
+
+          <!-- Agent specific panels -->
+          <div class="panel agent-only" style="display:none">
             <div class="title">Working directory (agent, PTYs, git, files)</div>
             <div class="row small">
               <input id="workspacePathInput" style="flex:1;min-width:140px" placeholder="Absolute path, ~/…, or relative to cwd" />
-              <button onclick="setWorkspaceCwd()">Set</button>
+              <button onclick="setWorkspaceCwd()">Switch Workspace</button>
               <button onclick="resetWorkspaceCwd()">Reset to launch</button>
             </div>
             <div class="small muted" id="workspaceCwdHint"></div>
           </div>
-          <div class="panel">
+          <div class="panel flex-panel agent-only" style="display:none">
             <div class="title">Directory Navigator (ranger-like)</div>
             <div class="row small">
               <button onclick="goParent()">Up</button>
@@ -1366,7 +1737,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               <span class="muted small" id="dirCwd"></span>
             </div>
             <div id="dirEntries"></div>
-            <div class="small muted" style="margin:6px 0">Preview: <span id="dirPreviewPath"></span></div>
+            <div class="small muted">Preview: <span id="dirPreviewPath"></span></div>
             <pre id="dirPreview">Select a file to preview.</pre>
           </div>
           <div class="panel">
@@ -1397,7 +1768,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             <div class="title">Status</div>
             <pre id="status">Loading...</pre>
           </div>
-          <div class="panel">
+          <div class="panel flex-panel" style="min-height: 200px;">
             <div class="title">Recent Logs</div>
             <pre id="logs">Loading...</pre>
           </div>
@@ -1407,8 +1778,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               <button onclick="refreshSessions()">Refresh</button>
             </div>
             <div class="small muted" id="sessionDirInfo"></div>
-            <div id="sessionList" style="overflow:auto;max-height:120px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e"></div>
-            <div class="row small" style="margin-top:6px">
+            <div id="sessionList" style="overflow:auto;max-height:120px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:4px;background:var(--bg)"></div>
+            <div class="row small">
               <button onclick="continueSelectedSession()">Continue Selected</button>
               <button onclick="useSelectedPrompt()">Use Last Prompt</button>
             </div>
@@ -1454,9 +1825,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
               <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
             </div>
-            <div class="small muted" style="margin:6px 0">Thinking trace</div>
+            <div class="small muted">Thinking trace</div>
             <pre id="agentThinking">No thinking trace yet.</pre>
-            <div class="small muted" style="margin:6px 0">Chat history</div>
+            <div class="small muted">Chat history</div>
             <div id="chatHistory"></div>
             <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
           </div>
@@ -1476,6 +1847,83 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       function openMainGrid(){
         window.location.assign(withToken('/main'));
       }
+      async function refreshSystemInfo() {
+        try {
+          const sys = await fetch(withToken('/api/system')).then(r => r.json());
+          document.getElementById('sysPlatform').textContent = sys.platform + ' (' + sys.arch + ')';
+          document.getElementById('sysCpus').textContent = String(sys.cpus);
+          document.getElementById('sysMemFree').textContent = Math.round(sys.freeMem / 1024 / 1024 / 1024) + ' / ' + Math.round(sys.totalMem / 1024 / 1024 / 1024) + ' GB';
+          
+          const uptimeSec = Math.round(sys.uptime);
+          const hrs = Math.floor(uptimeSec / 3600);
+          const mins = Math.floor((uptimeSec % 3600) / 60);
+          document.getElementById('sysUptime').textContent = hrs + 'h ' + mins + 'm';
+          document.getElementById('sysCpuModel').textContent = sys.cpuModel;
+          document.getElementById('sysNode').textContent = sys.nodeVersion || '-';
+          document.getElementById('sysLoadAvg').textContent = Array.isArray(sys.loadAvg) ? sys.loadAvg.map(v => Number(v).toFixed(2)).join(' / ') : '-';
+          document.getElementById('sysRefreshedAt').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        } catch (e) {
+          console.error('Failed to fetch system info', e);
+        }
+      }
+
+      function formatRelativeTime(isoText) {
+        const ts = Date.parse(isoText || '');
+        if (!Number.isFinite(ts)) {
+          return 'unknown';
+        }
+        const deltaSec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+        if (deltaSec < 60) return deltaSec + 's ago';
+        const mins = Math.floor(deltaSec / 60);
+        if (mins < 60) return mins + 'm ago';
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return hrs + 'h ago';
+        const days = Math.floor(hrs / 24);
+        if (days < 30) return days + 'd ago';
+        const months = Math.floor(days / 30);
+        return months + 'mo ago';
+      }
+
+      function renderProjects(projects) {
+        const list = document.getElementById('projectList');
+        const filter = (document.getElementById('projectFilter')?.value || '').trim().toLowerCase();
+        const rows = (projects || []).filter((p) => {
+          if (!filter) return true;
+          return String(p.name || '').toLowerCase().includes(filter) || String(p.path || '').toLowerCase().includes(filter);
+        });
+        document.getElementById('projectCountBadge').textContent = rows.length + (rows.length === 1 ? ' project' : ' projects');
+        if (rows.length === 0) {
+          list.innerHTML = '<div class="muted small" style="padding:12px">No projects match the current filter.</div>';
+          return;
+        }
+        list.innerHTML = rows.map((p) =>
+          '<button class="projectCard" type="button">' +
+            '<div class="projectMain">' +
+              '<div class="projectName">' + (p.name || '(unnamed)') + '</div>' +
+              '<div class="projectPath">' + (p.path || '') + '</div>' +
+            '</div>' +
+            '<div class="projectTime" title="' + String(p.lastOpened || '').replace(/"/g, '&quot;') + '">' + formatRelativeTime(p.lastOpened) + '</div>' +
+          '</button>'
+        ).join('');
+      }
+
+      let allProjects = [];
+      async function refreshProjects() {
+        try {
+          const data = await fetch(withToken('/api/projects')).then(r => r.json());
+          if (!data.projects || data.projects.length === 0) {
+            allProjects = [];
+            document.getElementById('projectCountBadge').textContent = '0 projects';
+            document.getElementById('projectList').innerHTML = '<div class="muted small" style="padding:12px">No registered projects found. Run winnow in a directory with a .winnow folder to register it.</div>';
+            return;
+          }
+          allProjects = data.projects;
+          renderProjects(allProjects);
+        } catch (e) {
+          console.error('Failed to fetch projects', e);
+        }
+      }
+
       async function refresh(){
         const state = await fetch(withToken('/api/state')).then(r=>r.json());
         document.getElementById('status').textContent = JSON.stringify(state,null,2);
@@ -1512,6 +1960,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           await refreshDir();
           await refreshWorkspace();
           await refreshSessions();
+          await refreshProjects();
         }
       }
       async function resetWorkspaceCwd(){
@@ -1526,6 +1975,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           await refreshDir();
           await refreshWorkspace();
           await refreshSessions();
+          await refreshProjects();
         }
       }
       let currentDir = '';
@@ -1766,15 +2216,33 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const body = document.querySelector('.body');
         const leftCol = document.querySelector('.leftCol');
         const rightCol = document.querySelector('.rightCol');
+        const allPanels = document.querySelectorAll('.leftCol .panel, .rightCol .panel');
+        
+        // Reset visibility
         body.classList.remove('single');
         leftCol.style.display = '';
         rightCol.style.display = '';
-        if(view === 'agent'){
+        allPanels.forEach((el) => el.style.display = '');
+        
+        const dashboardOnly = document.querySelectorAll('.dashboard-only');
+        const agentOnly = document.querySelectorAll('.agent-only');
+
+        if (view === 'os') {
+          // Dashboard mode should only render dashboard panels.
+          allPanels.forEach((el) => el.style.display = 'none');
+          dashboardOnly.forEach(el => el.style.display = '');
+          rightCol.style.display = 'none';
           body.classList.add('single');
-          leftCol.style.display = 'none';
+          refreshSystemInfo();
+          refreshProjects();
+        } else if (view === 'agent') {
+          dashboardOnly.forEach(el => el.style.display = 'none');
+          agentOnly.forEach(el => el.style.display = '');
         } else if(view === 'settings'){
           body.classList.add('single');
           rightCol.style.display = 'none';
+          dashboardOnly.forEach(el => el.style.display = 'none');
+          agentOnly.forEach(el => el.style.display = 'none');
         }
       }
       if(EMBED_MODE){
@@ -2039,6 +2507,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           startAgentRun();
         }
       });
+      const projectFilter = document.getElementById('projectFilter');
+      if(projectFilter){
+        projectFilter.addEventListener('input', () => renderProjects(allProjects));
+      }
       setView(INITIAL_VIEW);
       setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);
