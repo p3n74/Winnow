@@ -124,6 +124,7 @@ UI capabilities:
 - Model preference toggle for Cursor-native selection (`auto` or `composer`)
 - Real-time agent output streaming in UI via Server-Sent Events (with polling fallback)
 - Workspace changes panel with file list, full `git diff`, and stage-selected action
+- Ranger-like directory navigator with folder traversal and file preview
 
 ## Notes
 

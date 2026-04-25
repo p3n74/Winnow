@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
@@ -43,6 +43,12 @@ type SessionStreamClient = {
 
 type StageFilesRequest = {
   files: string[];
+};
+
+type FileListEntry = {
+  name: string;
+  path: string;
+  type: "dir" | "file";
 };
 
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
@@ -140,6 +146,55 @@ async function getWorkspaceChanges() {
     status: status.stdout,
     error: [status.stderr, diff.stderr].filter(Boolean).join("\n"),
   };
+}
+
+function sanitizePath(inputPath?: string): string {
+  const root = process.cwd();
+  const target = inputPath ? resolve(root, inputPath) : root;
+  const normalized = resolve(target);
+  if (!normalized.startsWith(root)) {
+    return root;
+  }
+  return normalized;
+}
+
+async function listDirectory(dirPath?: string): Promise<{
+  cwd: string;
+  parent: string | null;
+  entries: FileListEntry[];
+}> {
+  const absolute = sanitizePath(dirPath);
+  const root = process.cwd();
+  const dirents = await readdir(absolute, { withFileTypes: true });
+  const entries: FileListEntry[] = dirents
+    .filter((entry) => !entry.name.startsWith(".git"))
+    .map((entry) => ({
+      name: entry.name,
+      path: join(absolute, entry.name),
+      type: (entry.isDirectory() ? "dir" : "file") as "dir" | "file",
+    }))
+    .sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === "dir" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+  const parent = absolute === root ? null : resolve(absolute, "..");
+  return { cwd: absolute, parent, entries };
+}
+
+async function previewPath(pathValue?: string): Promise<{ path: string; content: string }> {
+  const absolute = sanitizePath(pathValue);
+  const info = await stat(absolute);
+  if (info.isDirectory()) {
+    return { path: absolute, content: "[directory]" };
+  }
+  if (info.size > 200000) {
+    return { path: absolute, content: "[file too large to preview]" };
+  }
+  const content = await readFile(absolute, "utf8");
+  return { path: absolute, content };
 }
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
@@ -288,6 +343,32 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/fs/list" && req.method === "GET") {
+      try {
+        const target = url.searchParams.get("path") ?? undefined;
+        const result = await listDirectory(target);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/fs/preview" && req.method === "GET") {
+      try {
+        const target = url.searchParams.get("path") ?? undefined;
+        if (!target) {
+          sendJson(res, 400, { ok: false, error: "path query is required" });
+          return;
+        }
+        const result = await previewPath(target);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/profile" && req.method === "POST") {
       try {
         const payload = (await readJsonBody(req)) as ProfileUpdateRequest;
@@ -406,7 +487,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .tab.active{color:var(--text);border-color:var(--accent)}
       .body{flex:1;display:grid;grid-template-columns:38% 62%;gap:8px;padding:8px;min-height:0}
       .leftCol,.rightCol{display:grid;gap:8px;min-height:0}
-      .leftCol{grid-template-rows:24% 20% 26% 30%}
+      .leftCol{grid-template-rows:32% 18% 22% 28%}
       .rightCol{grid-template-rows:58% 42%}
       .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
       .title{font-size:12px;color:#9dc4df;margin-bottom:6px}
@@ -417,7 +498,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       button:hover{border-color:var(--accent)}
       pre{margin:0;background:#06131e;border:1px solid var(--line);border-radius:6px;padding:8px;white-space:pre-wrap;overflow:auto;flex:1;min-height:0;font-size:12px}
       textarea{width:100%;min-height:110px;resize:vertical}
-      #workspaceFiles{overflow:auto;max-height:120px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e}
+      #workspaceFiles,#dirEntries{overflow:auto;max-height:140px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e}
+      .entry{display:block;border:0;background:transparent;color:var(--text);text-align:left;padding:3px 4px;width:100%}
+      .entry:hover{background:#103047}
       .small{font-size:11px}
     </style>
   </head>
@@ -432,12 +515,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       <div class="body">
         <div class="leftCol">
           <div class="panel">
-            <div class="title">Workspace Changes</div>
+            <div class="title">Directory Navigator (ranger-like)</div>
             <div class="row small">
-              <button onclick="refreshWorkspace()">Refresh</button>
-              <button onclick="stageSelected()">Stage Selected</button>
+              <button onclick="goParent()">Up</button>
+              <button onclick="refreshDir()">Refresh</button>
+              <span class="muted small" id="dirCwd"></span>
             </div>
-            <div id="workspaceFiles"></div>
+            <div id="dirEntries"></div>
+            <div class="small muted" style="margin:6px 0">Preview: <span id="dirPreviewPath"></span></div>
+            <pre id="dirPreview">Select a file to preview.</pre>
           </div>
           <div class="panel">
             <div class="title">Profile Controls</div>
@@ -505,6 +591,32 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.getElementById('model').value = state.model;
         const logs = await fetch('/api/logs?limit=60').then(r=>r.json());
         document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
+      }
+      let currentDir = '';
+      async function refreshDir(path){
+        const url = path ? ('/api/fs/list?path=' + encodeURIComponent(path)) : '/api/fs/list';
+        const data = await fetch(url).then(r=>r.json());
+        currentDir = data.cwd;
+        document.getElementById('dirCwd').textContent = data.cwd;
+        const parentBtn = data.parent ? '<button class="entry" onclick="refreshDir(\\'' + data.parent.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\\')">[..]</button>' : '';
+        const rows = (data.entries || []).map((e) => {
+          const icon = e.type === 'dir' ? '[D]' : '[F]';
+          const safePath = e.path.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+          if(e.type === 'dir'){
+            return '<button class="entry" onclick="refreshDir(\\'' + safePath + '\\')">' + icon + ' ' + e.name + '</button>';
+          }
+          return '<button class="entry" onclick="previewFile(\\'' + safePath + '\\')">' + icon + ' ' + e.name + '</button>';
+        }).join('');
+        document.getElementById('dirEntries').innerHTML = parentBtn + rows;
+      }
+      async function goParent(){
+        if(!currentDir){ return; }
+        await refreshDir(currentDir + '/..');
+      }
+      async function previewFile(path){
+        const data = await fetch('/api/fs/preview?path=' + encodeURIComponent(path)).then(r=>r.json());
+        document.getElementById('dirPreviewPath').textContent = path;
+        document.getElementById('dirPreview').textContent = data.content || '';
       }
       async function refreshWorkspace(){
         const ws = await fetch('/api/workspace').then(r=>r.json());
@@ -615,6 +727,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
       refresh();
       refreshWorkspace();
+      refreshDir();
       setInterval(refresh, 3000);
     </script>
   </body>
