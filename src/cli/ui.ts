@@ -1,6 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { accessSync, constants as fsConstants } from "node:fs";
+import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { accessSync, constants as fsConstants, readFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -10,11 +10,15 @@ import { WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
 import { saveProjectProfile } from "../config/projectProfile.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
-import { 
-  defaultAgentTranscriptDir, 
-  getTranscriptDir, 
-  listCursorSessions, 
-  SessionSummary 
+import {
+  ensureCursorWorkspaceLayout,
+  ensureCursorWorkspaceLayoutSync,
+} from "../cursor/bootstrapCursorWorkspace.js";
+import {
+  agentTranscriptDirForWorkspaceRoot,
+  getTranscriptDir,
+  listCursorSessions,
+  SessionSummary,
 } from "../cursor/sessionUtils.js";
 
 type UiOptions = {
@@ -86,6 +90,7 @@ type FileListEntry = {
 };
 
 type SessionMessage = {
+  id?: string;
   role: string;
   content: string;
   timestamp?: string;
@@ -113,17 +118,6 @@ type LocalSessionRecord = {
   errorOutput: string;
   events?: AgentEvent[];
 };
-
-async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
-  try {
-    const filePath = join(process.cwd(), logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
-    const content = await readFile(filePath, "utf8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    return lines.slice(Math.max(0, lines.length - limit));
-  } catch {
-    return [];
-  }
-}
 
 function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {
   res.statusCode = statusCode;
@@ -300,174 +294,6 @@ function buildMainTerminalHtml(token?: string): string {
 </html>`;
 }
 
-function runGitCommand(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      cwd: process.cwd(),
-      env: process.env,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (buf: Buffer) => {
-      stdout += buf.toString("utf8");
-    });
-    child.stderr?.on("data", (buf: Buffer) => {
-      stderr += buf.toString("utf8");
-    });
-    child.on("error", (error) => {
-      resolve({ ok: false, stdout: "", stderr: error.message });
-    });
-    child.on("close", (code: number | null) => {
-      resolve({ ok: code === 0, stdout, stderr });
-    });
-  });
-}
-
-async function getWorkspaceChanges() {
-  const status = await runGitCommand(["status", "--short"]);
-  const diff = await runGitCommand(["diff"]);
-  const files = status.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const candidate = line.slice(3).trim();
-      const renameSplit = candidate.split(" -> ");
-      return renameSplit[renameSplit.length - 1];
-    });
-
-  return {
-    ok: status.ok && diff.ok,
-    files,
-    diff: diff.stdout,
-    status: status.stdout,
-    error: [status.stderr, diff.stderr].filter(Boolean).join("\n"),
-  };
-}
-
-function sanitizePath(inputPath?: string): string {
-  const root = process.cwd();
-  const target = inputPath ? resolve(root, inputPath) : root;
-  const normalized = resolve(target);
-  if (!normalized.startsWith(root)) {
-    return root;
-  }
-  return normalized;
-}
-
-async function listDirectory(dirPath?: string): Promise<{
-  cwd: string;
-  parent: string | null;
-  entries: FileListEntry[];
-}> {
-  const absolute = sanitizePath(dirPath);
-  const root = process.cwd();
-  const dirents = await readdir(absolute, { withFileTypes: true });
-  const entries: FileListEntry[] = dirents
-    .filter((entry) => !entry.name.startsWith(".git"))
-    .map((entry) => ({
-      name: entry.name,
-      path: join(absolute, entry.name),
-      type: (entry.isDirectory() ? "dir" : "file") as "dir" | "file",
-    }))
-    .sort((a, b) => {
-      if (a.type !== b.type) {
-        return a.type === "dir" ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name);
-    });
-
-  const parent = absolute === root ? null : resolve(absolute, "..");
-  return { cwd: absolute, parent, entries };
-}
-
-async function previewPath(pathValue?: string): Promise<{ path: string; content: string }> {
-  const absolute = sanitizePath(pathValue);
-  const info = await stat(absolute);
-  if (info.isDirectory()) {
-    return { path: absolute, content: "[directory]" };
-  }
-  if (info.size > 200000) {
-    return { path: absolute, content: "[file too large to preview]" };
-  }
-  const content = await readFile(absolute, "utf8");
-  return { path: absolute, content };
-}
-
-function localSessionDir(): string {
-  return join(process.cwd(), ".winnow", "sessions");
-}
-
-function localSessionIndexPath(): string {
-  return join(localSessionDir(), "index.json");
-}
-
-function localSessionRecordPath(id: string): string {
-  return join(localSessionDir(), `${id}.json`);
-}
-
-async function readLocalSessionIndex(): Promise<LocalSessionIndexEntry[]> {
-  try {
-    const content = await readFile(localSessionIndexPath(), "utf8");
-    const parsed = JSON.parse(content) as LocalSessionIndexEntry[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeLocalSessionIndex(entries: LocalSessionIndexEntry[]): Promise<void> {
-  await mkdir(localSessionDir(), { recursive: true });
-  await writeFile(localSessionIndexPath(), `${JSON.stringify(entries, null, 2)}\n`, "utf8");
-}
-
-async function upsertLocalSessionIndex(entry: LocalSessionIndexEntry): Promise<void> {
-  const current = await readLocalSessionIndex();
-  const next = [entry, ...current.filter((item) => item.id !== entry.id)]
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-    .slice(0, 500);
-  await writeLocalSessionIndex(next);
-}
-
-async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
-  await mkdir(localSessionDir(), { recursive: true });
-  await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
-}
-
-async function listLocalSessions(limit = 20): Promise<SessionSummary[]> {
-  const index = await readLocalSessionIndex();
-  return index.slice(0, Math.max(1, limit)).map((entry) => ({
-    id: entry.id,
-    file: localSessionRecordPath(entry.id),
-    updatedAt: entry.updatedAt,
-    preview: entry.preview,
-  }));
-}
-
-async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
-  const content = await readFile(localSessionRecordPath(id), "utf8");
-  const record = JSON.parse(content) as LocalSessionRecord;
-  if (Array.isArray(record.events) && record.events.length > 0) {
-    const messages = record.events.map((event) => ({
-      role: event.kind,
-      content: event.content,
-      timestamp: event.ts,
-    }));
-    return { id, messages };
-  }
-  const messages: SessionMessage[] = [
-    { role: "user", content: record.prompt, timestamp: record.startedAt },
-  ];
-  if (record.output?.trim()) {
-    messages.push({ role: "assistant", content: record.output, timestamp: record.endedAt });
-  }
-  if (record.errorOutput?.trim()) {
-    messages.push({ role: "stderr", content: record.errorOutput, timestamp: record.endedAt });
-  }
-  return { id, messages };
-}
-
 function readStringDeep(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -526,6 +352,235 @@ async function readCursorSession(
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
   let config = { ...baseConfig };
+  const winnowLaunchRoot = resolve(process.cwd());
+  const uiWorkspace = { dir: winnowLaunchRoot };
+
+  function expandUserPathSegment(raw: string): string {
+    const t = raw.trim();
+    if (t === "~") {
+      return homedir();
+    }
+    if (t.startsWith("~/") || t.startsWith("~\\")) {
+      return join(homedir(), t.slice(2));
+    }
+    return t;
+  }
+
+  function resolveUiPath(inputPath?: string): string {
+    if (!inputPath?.trim()) {
+      return uiWorkspace.dir;
+    }
+    const expanded = expandUserPathSegment(inputPath.trim());
+    if (expanded.startsWith("/") || /^[A-Za-z]:[\\/]/.test(expanded)) {
+      return resolve(expanded);
+    }
+    return resolve(uiWorkspace.dir, expanded);
+  }
+
+  async function applyWorkspaceDir(nextAbsolute: string, persist: boolean): Promise<string> {
+    const resolved = resolve(nextAbsolute);
+    const real = await realpath(resolved).catch(() => resolved);
+    const info = await stat(real);
+    if (!info.isDirectory()) {
+      throw new Error(`Not a directory: ${real}`);
+    }
+    uiWorkspace.dir = real;
+    await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+    if (persist) {
+      config = { ...config, uiWorkspaceDir: real };
+      await saveProjectProfile(config);
+    }
+    return real;
+  }
+
+  if (config.uiWorkspaceDir?.trim()) {
+    try {
+      await applyWorkspaceDir(expandUserPathSegment(config.uiWorkspaceDir), false);
+    } catch {
+      uiWorkspace.dir = winnowLaunchRoot;
+    }
+  }
+  await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+
+  const cursorTranscriptDirForUi = (): string =>
+    process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim()
+      ? getTranscriptDir()
+      : agentTranscriptDirForWorkspaceRoot(uiWorkspace.dir);
+
+  async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
+    try {
+      const filePath = join(uiWorkspace.dir, logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
+      const content = await readFile(filePath, "utf8");
+      const lines = content.trim().split("\n").filter(Boolean);
+      return lines.slice(Math.max(0, lines.length - limit));
+    } catch {
+      return [];
+    }
+  }
+
+  function runGitCommand(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+    return new Promise((resolvePromise) => {
+      const child = spawn("git", args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: uiWorkspace.dir,
+        env: process.env,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (buf: Buffer) => {
+        stdout += buf.toString("utf8");
+      });
+      child.stderr?.on("data", (buf: Buffer) => {
+        stderr += buf.toString("utf8");
+      });
+      child.on("error", (error) => {
+        resolvePromise({ ok: false, stdout: "", stderr: error.message });
+      });
+      child.on("close", (code: number | null) => {
+        resolvePromise({ ok: code === 0, stdout, stderr });
+      });
+    });
+  }
+
+  async function getWorkspaceChanges() {
+    const status = await runGitCommand(["status", "--short"]);
+    const diff = await runGitCommand(["diff"]);
+    const files = status.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const candidate = line.slice(3).trim();
+        const renameSplit = candidate.split(" -> ");
+        return renameSplit[renameSplit.length - 1];
+      });
+
+    return {
+      ok: status.ok && diff.ok,
+      files,
+      diff: diff.stdout,
+      status: status.stdout,
+      error: [status.stderr, diff.stderr].filter(Boolean).join("\n"),
+    };
+  }
+
+  async function listDirectory(dirPath?: string): Promise<{
+    cwd: string;
+    parent: string | null;
+    entries: FileListEntry[];
+  }> {
+    const absolute = resolveUiPath(dirPath);
+    const info = await stat(absolute);
+    if (!info.isDirectory()) {
+      throw new Error(`Not a directory: ${absolute}`);
+    }
+    const dirents = await readdir(absolute, { withFileTypes: true });
+    const entries: FileListEntry[] = dirents
+      .filter((entry) => !entry.name.startsWith(".git"))
+      .map((entry) => ({
+        name: entry.name,
+        path: join(absolute, entry.name),
+        type: (entry.isDirectory() ? "dir" : "file") as "dir" | "file",
+      }))
+      .sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === "dir" ? -1 : 1;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+    const parentPath = resolve(absolute, "..");
+    const parent = parentPath === absolute ? null : parentPath;
+    return { cwd: absolute, parent, entries };
+  }
+
+  async function previewPath(pathValue?: string): Promise<{ path: string; content: string }> {
+    const absolute = resolveUiPath(pathValue);
+    const info = await stat(absolute);
+    if (info.isDirectory()) {
+      return { path: absolute, content: "[directory]" };
+    }
+    if (info.size > 200000) {
+      return { path: absolute, content: "[file too large to preview]" };
+    }
+    const content = await readFile(absolute, "utf8");
+    return { path: absolute, content };
+  }
+
+  function localSessionDir(): string {
+    return join(uiWorkspace.dir, ".winnow", "sessions");
+  }
+
+  function localSessionIndexPath(): string {
+    return join(localSessionDir(), "index.json");
+  }
+
+  function localSessionRecordPath(id: string): string {
+    return join(localSessionDir(), `${id}.json`);
+  }
+
+  async function readLocalSessionIndex(): Promise<LocalSessionIndexEntry[]> {
+    try {
+      const content = await readFile(localSessionIndexPath(), "utf8");
+      const parsed = JSON.parse(content) as LocalSessionIndexEntry[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function writeLocalSessionIndex(entries: LocalSessionIndexEntry[]): Promise<void> {
+    await mkdir(localSessionDir(), { recursive: true });
+    await writeFile(localSessionIndexPath(), `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+  }
+
+  async function upsertLocalSessionIndex(entry: LocalSessionIndexEntry): Promise<void> {
+    const current = await readLocalSessionIndex();
+    const next = [entry, ...current.filter((item) => item.id !== entry.id)]
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, 500);
+    await writeLocalSessionIndex(next);
+  }
+
+  async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
+    await mkdir(localSessionDir(), { recursive: true });
+    await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  }
+
+  async function listLocalSessions(limit = 20): Promise<SessionSummary[]> {
+    const index = await readLocalSessionIndex();
+    return index.slice(0, Math.max(1, limit)).map((entry) => ({
+      id: entry.id,
+      file: localSessionRecordPath(entry.id),
+      updatedAt: entry.updatedAt,
+      preview: entry.preview,
+    }));
+  }
+
+  async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
+    const content = await readFile(localSessionRecordPath(id), "utf8");
+    const record = JSON.parse(content) as LocalSessionRecord;
+    if (Array.isArray(record.events) && record.events.length > 0) {
+      const messages = record.events.map((event) => ({
+        id: event.id,
+        role: event.kind,
+        content: event.content,
+        timestamp: event.ts,
+      }));
+      return { id, messages };
+    }
+    const messages: SessionMessage[] = [
+      { id: "init-prompt", role: "user", content: record.prompt, timestamp: record.startedAt },
+    ];
+    if (record.output?.trim()) {
+      messages.push({ id: "init-output", role: "assistant", content: record.output, timestamp: record.endedAt });
+    }
+    if (record.errorOutput?.trim()) {
+      messages.push({ id: "init-error", role: "stderr", content: record.errorOutput, timestamp: record.endedAt });
+    }
+    return { id, messages };
+  }
+
   const sessions = new Map<string, AgentSession>();
   const streamClients = new Map<string, Set<SessionStreamClient>>();
   const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
@@ -581,7 +636,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         name: "xterm-256color",
         cols: 120,
         rows: 36,
-        cwd: process.cwd(),
+        cwd: uiWorkspace.dir,
         env: process.env as Record<string, string>,
       });
     } catch {
@@ -591,7 +646,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             name: "xterm-256color",
             cols: 120,
             rows: 36,
-            cwd: process.cwd(),
+            cwd: uiWorkspace.dir,
             env: process.env as Record<string, string>,
           });
         } catch {
@@ -761,27 +816,50 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       id
     );
     const existing = sessions.get(id);
-    const session: AgentSession = existing
-      ? {
-          ...existing,
-          status: "running",
-          endedAt: undefined,
-          error: undefined,
-          command: nativeConfig.cursorCommand,
-          args,
-          startedAt: existing.startedAt || new Date().toISOString(),
-          events: existing.events ?? [],
-        }
-      : {
-          id,
-          status: "running",
-          startedAt: new Date().toISOString(),
-          output: "",
-          errorOutput: "",
-          command: nativeConfig.cursorCommand,
-          args,
-          events: [],
-        };
+    let session: AgentSession;
+
+    if (existing) {
+      session = {
+        ...existing,
+        status: "running",
+        endedAt: undefined,
+        error: undefined,
+        command: nativeConfig.cursorCommand,
+        args,
+        startedAt: existing.startedAt || new Date().toISOString(),
+        events: existing.events ?? [],
+      };
+    } else {
+      // Try loading from disk
+      let diskEvents: AgentEvent[] = [];
+      let diskOutput = "";
+      let diskErrorOutput = "";
+      let diskStartedAt = new Date().toISOString();
+
+      try {
+        const recordPath = localSessionRecordPath(id);
+        const content = readFileSync(recordPath, "utf8");
+        const record = JSON.parse(content) as LocalSessionRecord;
+        diskEvents = record.events || [];
+        diskOutput = record.output || "";
+        diskErrorOutput = record.errorOutput || "";
+        diskStartedAt = record.startedAt || diskStartedAt;
+      } catch {
+        // New session or failed to read
+      }
+
+      session = {
+        id,
+        status: "running",
+        startedAt: diskStartedAt,
+        output: diskOutput,
+        errorOutput: diskErrorOutput,
+        command: nativeConfig.cursorCommand,
+        args,
+        events: diskEvents,
+      };
+    }
+
     sessions.set(id, session);
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
@@ -790,7 +868,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const persistRecord = () =>
       writeLocalSessionRecord({
         id,
-        projectRoot: process.cwd(),
+        projectRoot: uiWorkspace.dir,
         startedAt,
         endedAt: session.endedAt,
         status: session.status,
@@ -818,6 +896,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     pushEvent("user", prompt);
 
+    ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
     void persistRecord();
     void upsertLocalSessionIndex({
       id,
@@ -830,6 +909,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     const child = spawn(nativeConfig.cursorCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
+      cwd: uiWorkspace.dir,
       env: process.env,
     });
 
@@ -883,7 +963,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               session.output += "\n";
             }
           } else if (data.type === "result") {
-            pushEvent("status", `result: ${data.subtype}`);
+            if (data.subtype === "success") {
+              const usage = data.usage ? ` (Tokens: ${data.usage.inputTokens} IN / ${data.usage.outputTokens} OUT)` : "";
+              pushEvent("status", `✓ Run completed${usage}`);
+            } else {
+              pushEvent("status", `Result: ${data.subtype}`);
+            }
           }
         } catch (e) {
           // If it fails to parse (e.g. not using stream-json for some reason), fallback to raw text
@@ -907,7 +992,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.exitCode = code ?? 1;
       session.status = session.exitCode === 0 ? "done" : "error";
       session.endedAt = new Date().toISOString();
-      pushEvent("status", `exit=${session.exitCode} status=${session.status}`);
+      const msg = session.exitCode === 0 ? "✨ Session closed successfully." : `❌ Session ended with error (exit code: ${session.exitCode})`;
+      pushEvent("status", msg);
       void persistRecord();
       void upsertLocalSessionIndex({
         id,
@@ -933,6 +1019,47 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
     if (!isAuthorized(url)) {
       sendJson(res, 401, { ok: false, error: "unauthorized: invalid or missing token" });
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/cwd" && req.method === "GET") {
+      sendJson(res, 200, {
+        cwd: uiWorkspace.dir,
+        launchRoot: winnowLaunchRoot,
+        transcriptDir: cursorTranscriptDirForUi(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/cwd" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { path?: string; reset?: boolean };
+        if (payload.reset) {
+          const next = await applyWorkspaceDir(winnowLaunchRoot, true);
+          sendJson(res, 200, {
+            ok: true,
+            cwd: next,
+            transcriptDir: cursorTranscriptDirForUi(),
+            launchRoot: winnowLaunchRoot,
+          });
+          return;
+        }
+        const raw = payload.path?.trim();
+        if (!raw) {
+          sendJson(res, 400, { ok: false, error: "path is required unless reset is true" });
+          return;
+        }
+        const candidate = resolveUiPath(raw);
+        const next = await applyWorkspaceDir(candidate, true);
+        sendJson(res, 200, {
+          ok: true,
+          cwd: next,
+          transcriptDir: cursorTranscriptDirForUi(),
+          launchRoot: winnowLaunchRoot,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
       return;
     }
 
@@ -1030,16 +1157,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/sessions" && req.method === "GET") {
       try {
         const limit = Number(url.searchParams.get("limit") ?? "20");
-        const dir = url.searchParams.get("dir") ?? undefined;
+        const explicitDir = url.searchParams.get("dir") ?? undefined;
+        const cursorDir = explicitDir || cursorTranscriptDirForUi();
         const max = Number.isFinite(limit) ? limit : 20;
         const local = await listLocalSessions(max);
-        const cursor = await listCursorSessions(max, dir).catch(() => []);
+        const cursor = await listCursorSessions(max, cursorDir).catch(() => []);
         const merged = [...local, ...cursor]
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
           .slice(0, max);
         sendJson(res, 200, {
           sessions: merged,
-          dir: getTranscriptDir(dir),
+          dir: explicitDir ? getTranscriptDir(explicitDir) : cursorDir,
           localDir: localSessionDir(),
         });
       } catch (error) {
@@ -1051,12 +1179,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname.startsWith("/api/sessions/") && req.method === "GET") {
       try {
         const id = url.pathname.replace("/api/sessions/", "").trim();
-        const dir = url.searchParams.get("dir") ?? undefined;
+        const explicitDir = url.searchParams.get("dir") ?? undefined;
+        const cursorDir = explicitDir || cursorTranscriptDirForUi();
         let session: { id: string; messages: SessionMessage[] };
         try {
           session = await readLocalSession(id);
         } catch {
-          session = await readCursorSession(id, dir);
+          session = await readCursorSession(id, cursorDir);
         }
         sendJson(res, 200, session);
       } catch (error) {
@@ -1221,6 +1350,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       <div class="body">
         <div class="leftCol">
           <div class="panel">
+            <div class="title">Working directory (agent, PTYs, git, files)</div>
+            <div class="row small">
+              <input id="workspacePathInput" style="flex:1;min-width:140px" placeholder="Absolute path, ~/…, or relative to cwd" />
+              <button onclick="setWorkspaceCwd()">Set</button>
+              <button onclick="resetWorkspaceCwd()">Reset to launch</button>
+            </div>
+            <div class="small muted" id="workspaceCwdHint"></div>
+          </div>
+          <div class="panel">
             <div class="title">Directory Navigator (ranger-like)</div>
             <div class="row small">
               <button onclick="goParent()">Up</button>
@@ -1345,6 +1483,50 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.getElementById('model').value = state.model;
         const logs = await fetch(withToken('/api/logs?limit=60')).then(r=>r.json());
         document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
+        await refreshWorkspaceCwd();
+      }
+      async function refreshWorkspaceCwd(){
+        const data = await fetch(withToken('/api/workspace/cwd')).then(r=>r.json());
+        const inp = document.getElementById('workspacePathInput');
+        if(inp){ inp.value = data.cwd || ''; }
+        const hint = document.getElementById('workspaceCwdHint');
+        if(hint){
+          hint.textContent = 'transcripts: ' + (data.transcriptDir || '') + ' | launched: ' + (data.launchRoot || '');
+        }
+      }
+      async function setWorkspaceCwd(){
+        const inp = document.getElementById('workspacePathInput');
+        const path = (inp && inp.value || '').trim();
+        if(!path){
+          document.getElementById('result').textContent = 'Enter a path.';
+          return;
+        }
+        const res = await fetch(withToken('/api/workspace/cwd'),{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({path})
+        }).then(r=>r.json());
+        document.getElementById('result').textContent = JSON.stringify(res,null,2);
+        if(res.ok){
+          await refreshWorkspaceCwd();
+          await refreshDir();
+          await refreshWorkspace();
+          await refreshSessions();
+        }
+      }
+      async function resetWorkspaceCwd(){
+        const res = await fetch(withToken('/api/workspace/cwd'),{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({reset:true})
+        }).then(r=>r.json());
+        document.getElementById('result').textContent = JSON.stringify(res,null,2);
+        if(res.ok){
+          await refreshWorkspaceCwd();
+          await refreshDir();
+          await refreshWorkspace();
+          await refreshSessions();
+        }
       }
       let currentDir = '';
       async function refreshDir(path){
@@ -1508,6 +1690,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
         for(const msg of (messages || [])){
+          if (msg.id) {
+            seenTimelineIds.add(msg.id);
+          }
           const role = String(msg.role || 'entry').toLowerCase();
           
           if (role === 'tool' || role === 'status' || role === 'system') {
@@ -1528,6 +1713,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if(thinkingEvents.length === 0){
           thinkingBlock.textContent = 'No thinking trace found in this session history.';
         }
+        const root = document.getElementById("chatHistory");
+        if (root) root.scrollTop = root.scrollHeight;
       }
       function updateResumeSelect(rows){
         cachedSessionRows = Array.isArray(rows) ? rows : [];
@@ -1594,6 +1781,38 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const topbar = document.querySelector('.topbar');
         if(topbar){ topbar.style.display = 'none'; }
       }
+      function playSound(type) {
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContext) return;
+          const ctx = new AudioContext();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          
+          if (type === 'success') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+            osc.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+          } else {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.4);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
       async function pollAgent(){
         if(!activeSessionId){ return; }
         const res = await fetch(withToken('/api/agent/' + activeSessionId)).then(r=>r.json());
@@ -1604,7 +1823,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         agentMetrics.outputChars = (s.output || '').length + (s.errorOutput || '').length;
         refreshMetrics();
         const streamDead = !streamSource || streamSource.readyState !== 1;
-        if(streamDead && Array.isArray(s.events)){
+        if(streamDead && s.status !== 'running' && Array.isArray(s.events)){
           for(const ev of s.events){
             appendFromTimelineEvent(ev);
           }
@@ -1612,6 +1831,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if(s.status !== 'running' && pollTimer){
           clearInterval(pollTimer);
           pollTimer = null;
+          playSound(s.status === 'done' ? 'success' : 'error');
         }
       }
       function closeStream(){
@@ -1676,13 +1896,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           return;
         }
         activeSessionId = res.sessionId;
+        clearPrompt();
         if(continueMode){
           selectedResumeSessionId = activeSessionId;
+        } else {
+          clearChat();
         }
-        clearChat();
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
-        document.getElementById('agentThinking').textContent = '';
+        const block = document.getElementById('agentThinking');
+        if (block) block.textContent = "";
         pushTrace('session started');
         document.getElementById('agentStatusBadge').textContent = 'running';
         document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
@@ -1697,7 +1920,25 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         pollTimer = setInterval(pollAgent, 1000);
         attachStream(activeSessionId);
         pollAgent();
-        setTimeout(refreshSessions, 500);
+        // Refresh sidebar list but don't force a reload of the current session panel
+        setTimeout(async () => {
+          const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
+          updateResumeSelect(data.sessions || []);
+          const rows = (data.sessions || []).map((s, idx) => {
+            const isSelected = s.id === activeSessionId;
+            const style = isSelected ? ' style="border:1px solid var(--accent)"' : '';
+            const ts = (s.updatedAt || '').replace('T', ' ').slice(0, 19);
+            return '<button type="button" class="entry sync-session" data-session-id="' + s.id + '"' + style + '>[' + ts + '] ' + String(s.id).slice(0, 8) + '  ' + (s.preview || '') + '</button>';
+          }).join('');
+          const listEl = document.getElementById('sessionList');
+          if (listEl) {
+            listEl.innerHTML = rows || '<span class="muted small">No transcript sessions found yet.</span>';
+          }
+          document.querySelectorAll('.sync-session').forEach(el => {
+            const sid = el.getAttribute('data-session-id');
+            el.onclick = () => loadSession(sid);
+          });
+        }, 500);
       }
       function appendPrompt(text){
         const area = document.getElementById('agentPrompt');
@@ -1766,6 +2007,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
       refresh();
       refreshDir();
+      refreshWorkspace();
       refreshSessions();
       document.querySelectorAll('.tab').forEach((tab) => {
         const targetView = tab.getAttribute('data-view');

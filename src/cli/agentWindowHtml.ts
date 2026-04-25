@@ -291,6 +291,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" class="secondary" onclick="refreshSessions()">Reload</button>
                 <button type="button" class="secondary" onclick="startFreshSession()">New chat</button>
               </div>
+              <div class="row small" style="margin-top: 8px; align-items: stretch">
+                <label style="align-self: center">Cwd</label>
+                <input id="agentCwdInput" style="flex: 1; min-width: 160px" placeholder="Path or ~/… (same as terminal cd)" />
+                <button type="button" onclick="applyAgentCwd()">Set cwd</button>
+                <button type="button" class="secondary" onclick="resetAgentCwd()">Reset</button>
+              </div>
+              <div class="small muted" id="agentCwdHint"></div>
               <div class="quickbar">
                 <button type="button" onclick="appendPrompt('Implement the requested change with tests, then summarize what changed.')">Implement + tests</button>
                 <button type="button" onclick="appendPrompt('Review this code for bugs and edge cases, then propose a minimal patch.')">Review</button>
@@ -316,7 +323,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             <div class="composer">
               <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
               <div class="composer-actions">
-                <span class="small muted">Runs in project cwd via Winnow</span>
+                <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
                 <button type="button" onclick="startAgentRun()">Run agent</button>
               </div>
             </div>
@@ -340,6 +347,60 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function openMainGrid() {
         window.location.assign(withToken("/main"));
+      }
+      async function refreshAgentCwdBanner() {
+        const label = document.getElementById("agentCwdLabel");
+        const input = document.getElementById("agentCwdInput");
+        const hint = document.getElementById("agentCwdHint");
+        try {
+          const d = await fetch(withToken("/api/workspace/cwd")).then((r) => r.json());
+          if (label) {
+            label.textContent = d.cwd || "…";
+          }
+          if (input) {
+            input.value = d.cwd || "";
+          }
+          if (hint) {
+            hint.textContent =
+              "transcripts: " + (d.transcriptDir || "") + " · launched: " + (d.launchRoot || "");
+          }
+        } catch (_e) {}
+      }
+      async function applyAgentCwd() {
+        const input = document.getElementById("agentCwdInput");
+        const path = (input && input.value) || "";
+        const trimmed = path.trim();
+        if (!trimmed) {
+          return;
+        }
+        const res = await fetch(withToken("/api/workspace/cwd"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: trimmed }),
+        }).then((r) => r.json());
+        const resultEl = document.getElementById("result");
+        if (resultEl) {
+          resultEl.textContent = JSON.stringify(res);
+        }
+        if (res.ok) {
+          await refreshAgentCwdBanner();
+          await refreshSessions();
+        }
+      }
+      async function resetAgentCwd() {
+        const res = await fetch(withToken("/api/workspace/cwd"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reset: true }),
+        }).then((r) => r.json());
+        const resultEl = document.getElementById("result");
+        if (resultEl) {
+          resultEl.textContent = JSON.stringify(res);
+        }
+        if (res.ok) {
+          await refreshAgentCwdBanner();
+          await refreshSessions();
+        }
       }
       let activeSessionId = null;
       let pollTimer = null;
@@ -374,6 +435,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         const elapsed = agentMetrics.startedAtMs ? Date.now() - agentMetrics.startedAtMs : 0;
         document.getElementById("metricElapsed").textContent = formatElapsed(elapsed);
       }
+      function scrollToBottom() {
+        const root = document.getElementById("chatHistory");
+        if (root && root.parentElement) {
+          root.parentElement.scrollTop = root.parentElement.scrollHeight;
+        }
+      }
       function appendChat(role, text) {
         const root = document.getElementById("chatHistory");
         if (!root) {
@@ -387,7 +454,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             const textEl = lastMsg.querySelector(".chatText");
             if (textEl) {
               textEl.textContent += text;
-              root.scrollTop = root.scrollHeight;
+              scrollToBottom();
               return;
             }
           }
@@ -404,7 +471,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         msg.appendChild(roleEl);
         msg.appendChild(textEl);
         root.appendChild(msg);
-        root.scrollTop = root.scrollHeight;
+        scrollToBottom();
       }
       function clearChat() {
         const root = document.getElementById("chatHistory");
@@ -449,10 +516,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
         for (const msg of messages || []) {
+          if (msg.id) {
+            seenTimelineIds.add(msg.id);
+          }
           const role = String(msg.role || "entry").toLowerCase();
-          
-          if (role === "tool") {
-            pushTrace(msg.content || "");
+
+          if (role === "tool") {            pushTrace(msg.content || "");
             continue;
           }
           
@@ -470,6 +539,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (thinkingEvents.length === 0) {
           thinkingBlock.textContent = "No thinking trace found in this session history.";
         }
+        scrollToBottom();
       }
       function updateResumeSelect(rows) {
         cachedSessionRows = Array.isArray(rows) ? rows : [];
@@ -524,6 +594,38 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         lastTraceAtMs = Date.now();
       }
 
+      function playSound(type) {
+        try {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContext) return;
+          const ctx = new AudioContext();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          
+          if (type === 'success') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+            osc.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.3);
+          } else {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(150, ctx.currentTime);
+            gain.gain.setValueAtTime(0, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + 0.4);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
       async function pollAgent() {
         if (!activeSessionId) {
           return;
@@ -547,6 +649,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (s.status !== "running" && pollTimer) {
           clearInterval(pollTimer);
           pollTimer = null;
+          playSound(s.status === 'done' ? 'success' : 'error');
         }
       }
       function closeStream() {
@@ -627,6 +730,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           return;
         }
         activeSessionId = res.sessionId;
+        clearPrompt();
         if (continueMode) {
           selectedResumeSessionId = activeSessionId;
         }
@@ -660,6 +764,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       async function refreshSessions() {
         const data = await fetch(withToken("/api/sessions?limit=25")).then((r) => r.json());
+        await refreshAgentCwdBanner();
         const dirEl = document.getElementById("sessionDirInfo");
         if (dirEl) {
           dirEl.textContent = "dir: " + (data.dir || "(unknown)");

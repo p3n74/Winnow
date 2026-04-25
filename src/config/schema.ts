@@ -32,6 +32,8 @@ export const configSchema = z.object({
   logsEnabled: envBool.default(true),
   logsDir: z.string().default(".winnow/logs"),
   sessionId: z.string().optional(),
+  /** Absolute path: companion UI / agent working directory (persisted in project profile). */
+  uiWorkspaceDir: z.string().optional(),
 });
 
 export type WinnowConfig = z.infer<typeof configSchema>;

@@ -1,23 +1,32 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 
 const execAsync = promisify(exec);
 
-export function defaultAgentTranscriptDir(): string {
-  const workspaceId = process.cwd().replace(/^\/+/, "").replace(/\//g, "-");
+/** Cursor stores transcripts under ~/.cursor/projects/<workspace-id>/agent-transcripts */
+export function agentTranscriptDirForWorkspaceRoot(absoluteWorkspacePath: string): string {
+  const abs = resolve(absoluteWorkspacePath);
+  const workspaceId = abs.replace(/^[/\\]+/, "").replace(/[/\\]/g, "-");
   return join(homedir(), ".cursor", "projects", workspaceId, "agent-transcripts");
+}
+
+export function defaultAgentTranscriptDir(): string {
+  return agentTranscriptDirForWorkspaceRoot(process.cwd());
 }
 
 export function getTranscriptDir(overrideDir?: string): string {
   return overrideDir || process.env.WINNOW_AGENT_TRANSCRIPTS_DIR || defaultAgentTranscriptDir();
 }
 
-export async function createCursorSession(cursorCommand = "cursor-agent"): Promise<string> {
+export async function createCursorSession(
+  cursorCommand = "cursor-agent",
+  cwd?: string,
+): Promise<string> {
   try {
-    const { stdout } = await execAsync(`${cursorCommand} create-chat`);
+    const { stdout } = await execAsync(`${cursorCommand} create-chat`, cwd ? { cwd } : {});
     return stdout.trim();
   } catch (error) {
     throw new Error(`Failed to create cursor session: ${(error as Error).message}`);

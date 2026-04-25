@@ -18,6 +18,7 @@ type ProfileConfig = Partial<
     | "dualOutput"
     | "translatorTimeoutMs"
     | "translatorRetries"
+    | "uiWorkspaceDir"
   >
 >;
 
@@ -46,6 +47,7 @@ export async function saveProjectProfile(config: WinnowConfig): Promise<void> {
     dualOutput: config.dualOutput,
     translatorTimeoutMs: config.translatorTimeoutMs,
     translatorRetries: config.translatorRetries,
+    uiWorkspaceDir: config.uiWorkspaceDir,
   };
   await writeFile(filePath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
 }
