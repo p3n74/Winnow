@@ -1,16 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 import { OllamaTranslator } from "../src/translator/ollamaTranslator.js";
+import { DeepSeekTranslator } from "../src/translator/deepseekTranslator.js";
+import { protectTechnicalBlocks, restoreTechnicalBlocks } from "../src/translator/common.js";
 import { WinnowConfig } from "../src/config/schema.js";
 
 const config: WinnowConfig = {
+  translatorBackend: "ollama",
+  translatorTimeoutMs: 20000,
+  translatorRetries: 1,
   ollamaBaseUrl: "http://127.0.0.1:11434",
   ollamaTranslationModel: "deepseek-v3",
+  deepseekBaseUrl: "https://api.deepseek.com",
+  deepseekApiKey: "test-key",
+  deepseekModel: "deepseek-v4-flash",
+  translationGlossary: "PR:拉取请求",
   inputMode: "zh_to_en",
   outputMode: "en_to_zh",
   profile: "engineering_exact",
   showOriginal: false,
   dualOutput: false,
   cursorCommand: "cursor-agent",
+  logsEnabled: true,
+  logsDir: ".winnow/logs",
 };
 
 describe("OllamaTranslator", () => {
@@ -36,6 +47,31 @@ describe("OllamaTranslator", () => {
     vi.stubGlobal("fetch", fetchMock);
     const translator = new OllamaTranslator(config);
 
-    await expect(translator.translateInput("你好")).rejects.toThrow("status 500");
+    await expect(translator.translateInput("你好")).rejects.toThrow("HTTP 500");
+  });
+
+  it("protects and restores technical spans", () => {
+    const source = "Use `npm run build` in ./src/app.ts with --watch and ```json\n{\"ok\":true}\n```";
+    const protectedContent = protectTechnicalBlocks(source);
+
+    expect(protectedContent.text).toContain("__WINNOW_KEEP_");
+    const restored = restoreTechnicalBlocks(protectedContent.text, protectedContent.placeholders);
+    expect(restored).toBe(source);
+  });
+});
+
+describe("DeepSeekTranslator", () => {
+  it("translates through deepseek chat completions api", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "translated" } }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const translator = new DeepSeekTranslator({ ...config, translatorBackend: "deepseek_api" });
+    const out = await translator.translateOutput("hello");
+
+    expect(out).toBe("translated");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

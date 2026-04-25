@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { applyProfileDefaults } from "../config/defaults.js";
 import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
 import { runWinnowSession } from "../pipeline/session.js";
+import { runInteractiveSession } from "./sessionMode.js";
+import { runDoctor } from "./doctor.js";
 
 type CliOptions = {
   zh?: boolean;
@@ -13,7 +15,12 @@ type CliOptions = {
   outputMode?: "off" | "en_to_zh";
   profile?: "learning_zh" | "engineering_exact";
   model?: string;
+  translatorBackend?: "ollama" | "deepseek_api";
+  deepseekModel?: string;
+  deepseekBaseUrl?: string;
   ollamaBaseUrl?: string;
+  translatorTimeoutMs?: number;
+  translatorRetries?: number;
   cursorCommand?: string;
 };
 
@@ -26,14 +33,33 @@ export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConf
 
   if (options.model) {
     merged.ollamaTranslationModel = options.model;
+    merged.deepseekModel = options.model;
+  }
+
+  if (options.translatorBackend) {
+    merged.translatorBackend = options.translatorBackend;
   }
 
   if (options.ollamaBaseUrl) {
     merged.ollamaBaseUrl = options.ollamaBaseUrl;
   }
 
+  if (options.deepseekModel) {
+    merged.deepseekModel = options.deepseekModel;
+  }
+
+  if (options.deepseekBaseUrl) {
+    merged.deepseekBaseUrl = options.deepseekBaseUrl;
+  }
+
   if (options.cursorCommand) {
     merged.cursorCommand = options.cursorCommand;
+  }
+  if (options.translatorTimeoutMs !== undefined) {
+    merged.translatorTimeoutMs = options.translatorTimeoutMs;
+  }
+  if (options.translatorRetries !== undefined) {
+    merged.translatorRetries = options.translatorRetries;
   }
 
   if (options.zh) {
@@ -79,13 +105,60 @@ export function buildProgram(): Command {
     .option("--input-mode <mode>", "off|zh_to_en")
     .option("--output-mode <mode>", "off|en_to_zh")
     .option("--profile <profile>", "learning_zh|engineering_exact")
+    .option("--translator-backend <backend>", "ollama|deepseek_api")
     .option("--model <model>", "ollama model for translation")
+    .option("--deepseek-model <model>", "deepseek API model")
+    .option("--deepseek-base-url <url>", "deepseek API base URL")
     .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
+    .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
     .argument("[args...]", "arguments passed through to cursor-agent")
     .action(async (args: string[], opts: CliOptions) => {
       const config = mergeConfig(loadConfigFromEnv(), opts);
       const exitCode = await runWinnowSession({ config, args });
+      process.exit(exitCode);
+    });
+
+  program
+    .command("session")
+    .description("Interactive prompt session with runtime mode toggles")
+    .allowUnknownOption(true)
+    .option("--zh", "translate assistant output to Chinese")
+    .option("--no-translate", "disable all translation middleware")
+    .option("--show-original", "show original Cursor output before translated output")
+    .option("--dual-output", "show original and translated outputs")
+    .option("--input-mode <mode>", "off|zh_to_en")
+    .option("--output-mode <mode>", "off|en_to_zh")
+    .option("--profile <profile>", "learning_zh|engineering_exact")
+    .option("--translator-backend <backend>", "ollama|deepseek_api")
+    .option("--model <model>", "translation model")
+    .option("--deepseek-model <model>", "deepseek API model")
+    .option("--deepseek-base-url <url>", "deepseek API base URL")
+    .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
+    .option("--translator-retries <count>", "translation retry count", Number)
+    .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
+    .argument("[args...]", "arguments passed through to cursor-agent")
+    .action(async (args: string[], opts: CliOptions) => {
+      const config = mergeConfig(loadConfigFromEnv(), opts);
+      await runInteractiveSession(config, args);
+      process.exit(0);
+    });
+
+  program
+    .command("doctor")
+    .description("Run health checks for cursor + translator backend")
+    .option("--translator-backend <backend>", "ollama|deepseek_api")
+    .option("--deepseek-base-url <url>", "deepseek API base URL")
+    .option("--deepseek-model <model>", "deepseek API model")
+    .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
+    .option("--translator-retries <count>", "translation retry count", Number)
+    .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
+    .action(async (opts: CliOptions) => {
+      const config = mergeConfig(loadConfigFromEnv(), opts);
+      const exitCode = await runDoctor(config);
       process.exit(exitCode);
     });
 

@@ -26,9 +26,18 @@ Edit `.env` values if needed:
 
 - `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`)
 - `OLLAMA_TRANSLATION_MODEL` (for example `deepseek-v3`)
+- `WINNOW_TRANSLATOR_BACKEND` (`ollama` or `deepseek_api`)
+- `WINNOW_TRANSLATOR_TIMEOUT_MS` (translation timeout per request)
+- `WINNOW_TRANSLATOR_RETRIES` (translation retries on transient failure)
+- `DEEPSEEK_BASE_URL` (default `https://api.deepseek.com`)
+- `DEEPSEEK_API_KEY` (required when backend is `deepseek_api`)
+- `DEEPSEEK_MODEL` (for example `deepseek-v4-flash`)
+- `WINNOW_TRANSLATION_GLOSSARY` (comma-separated term mapping, e.g. `PR:拉取请求`)
 - `WINNOW_INPUT_MODE` (`off` or `zh_to_en`)
 - `WINNOW_OUTPUT_MODE` (`off` or `en_to_zh`)
 - `WINNOW_PROFILE` (`learning_zh` or `engineering_exact`)
+- `WINNOW_LOGS_ENABLED` (`true`/`false`)
+- `WINNOW_LOGS_DIR` (default `.winnow/logs`)
 
 ### 3) Run in development
 
@@ -53,10 +62,37 @@ Common flags:
 - `--show-original`
 - `--dual-output`
 - `--profile learning_zh|engineering_exact`
+- `--translator-backend ollama|deepseek_api`
 - `--model <ollama-model>`
+- `--deepseek-model <deepseek-model>`
+- `--deepseek-base-url <deepseek-base-url>`
+- `--translator-timeout-ms <ms>`
+- `--translator-retries <count>`
+
+Interactive mode with runtime toggles:
+
+```bash
+npm run dev -- session --zh <cursor-agent-args>
+```
+
+Session commands:
+
+- `:zh` Chinese output mode
+- `:raw` passthrough mode (no translation)
+- `:dual` bilingual output (original + Chinese)
+- `:quit` exit session
+
+Health checks:
+
+```bash
+npm run doctor
+```
 
 ## Notes
 
 - If Ollama is unavailable, Winnow falls back to original output with a warning.
+- Backend fallback chain is automatic: `deepseek_api -> ollama -> raw output`.
 - Passthrough mode preserves stream behavior and exit codes.
-- Translation mode currently captures stdout then translates (non-streamed).
+- Translation mode uses sentence-chunk streaming for lower-latency output translation.
+- Translation fidelity policy protects code blocks, inline code, flags, and path-like content from being translated.
+- Structured session logs are written to `.winnow/logs` (JSONL) when enabled.

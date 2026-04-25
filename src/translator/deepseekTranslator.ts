@@ -7,14 +7,14 @@ import {
 } from "./common.js";
 import { fetchJsonWithRetry } from "./http.js";
 
-type OllamaChatRequest = {
+type DeepSeekRequest = {
   model: string;
-  stream: boolean;
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  temperature: number;
+  messages: Array<{ role: "system" | "user"; content: string }>;
 };
 
-type OllamaChatResponse = {
-  message?: { content?: string };
+type DeepSeekResponse = {
+  choices?: Array<{ message?: { content?: string } }>;
 };
 
 function buildInputPrompt(text: string): string {
@@ -37,11 +37,7 @@ function buildOutputPrompt(text: string, dualOutput: boolean, glossaryHints: str
     "Do not alter any __WINNOW_KEEP_*__ placeholder tokens.",
   ];
 
-  if (dualOutput) {
-    rules.push("Return two sections: [原文] then [中文翻译].");
-  } else {
-    rules.push("Return only Chinese translation.");
-  }
+  rules.push(dualOutput ? "Return two sections: [原文] then [中文翻译]." : "Return only Chinese translation.");
 
   if (glossaryHints.length > 0) {
     rules.push(`Glossary preferences: ${glossaryHints.join("; ")}`);
@@ -50,14 +46,13 @@ function buildOutputPrompt(text: string, dualOutput: boolean, glossaryHints: str
   return [...rules, "", text].join("\n");
 }
 
-export class OllamaTranslator implements Translator {
+export class DeepSeekTranslator implements Translator {
   constructor(private readonly config: WinnowConfig) {}
 
   async translateInput(text: string): Promise<string> {
     if (this.config.inputMode === "off") {
       return text;
     }
-
     const protectedInput = protectTechnicalBlocks(text);
     const translated = await this.translate(buildInputPrompt(protectedInput.text));
     return restoreTechnicalBlocks(translated, protectedInput.placeholders);
@@ -67,7 +62,6 @@ export class OllamaTranslator implements Translator {
     if (this.config.outputMode === "off") {
       return text;
     }
-
     const protectedOutput = protectTechnicalBlocks(text);
     const translated = await this.translate(
       buildOutputPrompt(
@@ -80,22 +74,24 @@ export class OllamaTranslator implements Translator {
   }
 
   private async translate(prompt: string): Promise<string> {
-    const payload: OllamaChatRequest = {
-      model: this.config.ollamaTranslationModel,
-      stream: false,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    if (!this.config.deepseekApiKey) {
+      throw new Error("DeepSeek API key missing");
+    }
+
+    const payload: DeepSeekRequest = {
+      model: this.config.deepseekModel,
+      temperature: 0,
+      messages: [{ role: "user", content: prompt }],
     };
 
-    const body = await fetchJsonWithRetry<OllamaChatResponse>(
-      `${this.config.ollamaBaseUrl}/api/chat`,
+    const body = await fetchJsonWithRetry<DeepSeekResponse>(
+      `${this.config.deepseekBaseUrl}/chat/completions`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.deepseekApiKey}`,
+        },
         body: JSON.stringify(payload),
       },
       {
@@ -103,10 +99,9 @@ export class OllamaTranslator implements Translator {
         retries: this.config.translatorRetries,
       },
     );
-    const translated = body.message?.content?.trim();
-
+    const translated = body.choices?.[0]?.message?.content?.trim();
     if (!translated) {
-      throw new Error("Ollama translation returned empty content");
+      throw new Error("DeepSeek translation returned empty content");
     }
 
     return translated;
