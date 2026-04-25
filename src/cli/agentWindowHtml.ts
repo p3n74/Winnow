@@ -236,6 +236,52 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       .agent-run-cancel-btn {
         margin-left: 6px;
       }
+      .agent-run-loading {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        margin-top: 10px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel2);
+      }
+      .agent-run-loading.is-visible {
+        display: flex;
+      }
+      .agent-run-loading-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        justify-content: center;
+        text-align: center;
+      }
+      .agent-run-spinner-lg {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: winnow-spin 0.75s linear infinite;
+      }
+      .agent-run-flavor {
+        font-size: 12px;
+        font-style: italic;
+        line-height: 1.45;
+        max-width: 520px;
+        margin: 0;
+        color: var(--muted);
+      }
+      #agentPrompt:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      #btnAgentRunCancel {
+        min-width: 120px;
+      }
       #agentThinking {
         flex-shrink: 0;
         max-height: 100px;
@@ -399,21 +445,19 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             <div class="chat-scroll"><div id="chatHistory"></div></div>
             <div class="composer">
               <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
+              <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
+                <div class="agent-run-loading-top">
+                  <span class="agent-run-spinner-lg" aria-hidden="true"></span>
+                  <p id="agentRunFlavorText" class="agent-run-flavor">Working…</p>
+                </div>
+                <button type="button" id="btnAgentRunCancel" class="secondary" onclick="cancelAgentRun()">Cancel</button>
+              </div>
               <div class="composer-actions">
                 <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
                 <span class="agent-run-wrap">
-                  <button type="button" data-agent-run="1" onclick="startAgentRun()">Run agent</button>
+                  <button type="button" data-agent-run="1" onclick="startAgentRun()">Run</button>
                   <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
                 </span>
-                <button
-                  type="button"
-                  id="btnAgentStartCancel"
-                  class="secondary agent-run-cancel-btn"
-                  onclick="cancelAgentStart()"
-                  style="display: none"
-                >
-                  Cancel
-                </button>
               </div>
             </div>
           </main>
@@ -493,6 +537,18 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       let activeSessionId = null;
       let agentStartAbort = null;
+      let agentStartInFlight = false;
+      let agentSessionRunning = false;
+      let agentFlavorTimer = null;
+      let agentFlavorIndex = 0;
+      const AGENT_RUN_FLAVOR = [
+        "Gathering context from your workspace…",
+        "Reasoning through the next steps…",
+        "Tracing dependencies and side effects…",
+        "Composing a careful patch…",
+        "Double-checking edge cases…",
+        "Almost there — still working…",
+      ];
       let pollTimer = null;
       let streamSource = null;
       let selectedSyncedSession = null;
@@ -742,6 +798,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           pollTimer = null;
           playSound(s.status === 'done' ? 'success' : 'error');
         }
+        if (s.status !== "running") {
+          agentSessionRunning = false;
+          applyAgentRunUi();
+        } else {
+          agentSessionRunning = true;
+          applyAgentRunUi();
+        }
       }
       function closeStream() {
         if (streamSource) {
@@ -769,6 +832,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             (data.status || "running") +
             (data.exitCode !== undefined ? " exit=" + data.exitCode : "");
           document.getElementById("agentStatusBadge").textContent = data.status || "running";
+          const st = data.status || "running";
+          agentSessionRunning = st === "running";
+          applyAgentRunUi();
           refreshMetrics();
         });
         streamSource.addEventListener("done", () => {
@@ -787,21 +853,85 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           }
         };
       }
-      function setAgentStartUiBusy(busy) {
-        document.querySelectorAll("[data-agent-run]").forEach((b) => {
-          b.disabled = busy;
-        });
-        document.querySelectorAll(".agent-run-wrap").forEach((w) => {
-          w.classList.toggle("is-busy", busy);
-        });
-        const cancelBtn = document.getElementById("btnAgentStartCancel");
-        if (cancelBtn) {
-          cancelBtn.style.display = busy ? "inline-block" : "none";
+      function clearAgentFlavorTimer() {
+        if (agentFlavorTimer) {
+          clearInterval(agentFlavorTimer);
+          agentFlavorTimer = null;
         }
       }
-      function cancelAgentStart() {
-        if (agentStartAbort) {
+      function tickAgentFlavor() {
+        const el = document.getElementById("agentRunFlavorText");
+        if (!el) {
+          return;
+        }
+        agentFlavorIndex = (agentFlavorIndex + 1) % AGENT_RUN_FLAVOR.length;
+        el.textContent = AGENT_RUN_FLAVOR[agentFlavorIndex];
+      }
+      function applyAgentRunUi() {
+        const locked = agentStartInFlight || agentSessionRunning;
+        document.querySelectorAll("[data-agent-run]").forEach((b) => {
+          b.disabled = locked;
+          b.textContent = locked ? "Running" : "Run";
+        });
+        document.querySelectorAll(".agent-run-wrap").forEach((w) => {
+          w.classList.toggle("is-busy", locked);
+        });
+        const ta = document.getElementById("agentPrompt");
+        if (ta) {
+          ta.disabled = locked;
+        }
+        const banner = document.getElementById("agentRunLoadingBanner");
+        const cancelBtn = document.getElementById("btnAgentRunCancel");
+        if (banner) {
+          banner.classList.toggle("is-visible", locked);
+          banner.setAttribute("aria-hidden", locked ? "false" : "true");
+        }
+        if (locked) {
+          const flavorEl = document.getElementById("agentRunFlavorText");
+          if (flavorEl) {
+            flavorEl.textContent = AGENT_RUN_FLAVOR[agentFlavorIndex % AGENT_RUN_FLAVOR.length];
+          }
+          if (!agentFlavorTimer) {
+            agentFlavorTimer = setInterval(tickAgentFlavor, 2800);
+          }
+        } else {
+          clearAgentFlavorTimer();
+          agentFlavorIndex = 0;
+        }
+        if (cancelBtn) {
+          cancelBtn.disabled = false;
+        }
+      }
+      async function cancelAgentRun() {
+        if (agentStartInFlight && agentStartAbort) {
           agentStartAbort.abort();
+          return;
+        }
+        if (!agentSessionRunning || !activeSessionId) {
+          return;
+        }
+        const cancelBtn = document.getElementById("btnAgentRunCancel");
+        if (cancelBtn) {
+          cancelBtn.disabled = true;
+        }
+        try {
+          const httpRes = await fetch(withToken("/api/agent/" + activeSessionId + "/stop"), {
+            method: "POST",
+          });
+          const data = await httpRes.json();
+          if (data && data.ok && data.stopped) {
+            appendChat("system", "Stop requested — winding down the agent process.");
+          } else if (data && data.ok) {
+            appendChat("system", "Stop was ignored (session may already be idle).");
+          } else {
+            appendChat("system", "Stop failed: " + JSON.stringify(data));
+          }
+        } catch (err) {
+          appendChat("system", "Stop failed: " + (err && err.message ? err.message : String(err)));
+        } finally {
+          if (cancelBtn) {
+            cancelBtn.disabled = false;
+          }
         }
       }
       async function startAgentRun() {
@@ -833,8 +963,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           sessionId: resumeSessionId || undefined,
         };
         agentStartAbort = new AbortController();
-        setAgentStartUiBusy(true);
-        let res;
+        agentStartInFlight = true;
+        applyAgentRunUi();
+        let res = null;
         try {
           const httpRes = await fetch(withToken("/api/agent/start"), {
             method: "POST",
@@ -843,6 +974,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             signal: agentStartAbort.signal,
           });
           res = await httpRes.json();
+          if (res && res.ok === true) {
+            agentSessionRunning = true;
+          }
         } catch (err) {
           const name = err && err.name ? err.name : "";
           if (name === "AbortError") {
@@ -852,10 +986,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           appendChat("system", "Failed to start: " + (err && err.message ? err.message : String(err)));
           return;
         } finally {
-          setAgentStartUiBusy(false);
+          agentStartInFlight = false;
           agentStartAbort = null;
+          applyAgentRunUi();
         }
-        if (!res.ok) {
+        if (!res || !res.ok) {
+          agentSessionRunning = false;
+          applyAgentRunUi();
           appendChat("system", "Failed to start: " + JSON.stringify(res));
           return;
         }
@@ -1002,6 +1139,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       document.getElementById("agentPrompt").addEventListener("keydown", (evt) => {
         const withCmd = evt.metaKey || evt.ctrlKey;
         if (withCmd && evt.key === "Enter") {
+          if (evt.target && evt.target.disabled) {
+            return;
+          }
           evt.preventDefault();
           startAgentRun();
         }

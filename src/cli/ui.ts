@@ -3,7 +3,7 @@ import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from 
 import { accessSync, constants as fsConstants, createReadStream, readFileSync } from "node:fs";
 import { arch, cpus, freemem, homedir, loadavg, networkInterfaces, platform, totalmem, uptime } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import pty from "node-pty";
 import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
@@ -1125,6 +1125,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   const sessions = new Map<string, AgentSession>();
   const streamClients = new Map<string, Set<SessionStreamClient>>();
+  /** Live cursor-agent child processes keyed by session id (for cancel / stop). */
+  const agentRunChildProcesses = new Map<string, ChildProcess>();
   const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
   const supportsPty = nodeMajor >= 20 && nodeMajor < 23;
 
@@ -1495,8 +1497,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       cwd: uiWorkspace.dir,
       env: process.env,
     });
+    agentRunChildProcesses.set(id, child);
 
     child.on("error", (error) => {
+      agentRunChildProcesses.delete(id);
       session.status = "error";
       session.error = error.message;
       session.endedAt = new Date().toISOString();
@@ -1578,6 +1582,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     child.stdin?.end();
 
     child.on("close", (code: number | null) => {
+      agentRunChildProcesses.delete(id);
       void (async () => {
         session.exitCode = code ?? 1;
         session.status = session.exitCode === 0 ? "done" : "error";
@@ -2071,6 +2076,34 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       } finally {
         res.removeListener("close", onClientGone);
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/agent/") && url.pathname.endsWith("/stop") && req.method === "POST") {
+      const id = url.pathname.slice("/api/agent/".length, -"/stop".length);
+      const session = sessions.get(id);
+      if (!session) {
+        sendJson(res, 404, { ok: false, error: "session not found" });
+        return;
+      }
+      if (session.status !== "running") {
+        sendJson(res, 200, { ok: true, stopped: false, message: "session not running" });
+        return;
+      }
+      const child = agentRunChildProcesses.get(id);
+      if (!child || child.killed) {
+        sendJson(res, 200, { ok: true, stopped: false, message: "no active process handle" });
+        return;
+      }
+      try {
+        child.kill("SIGTERM");
+        sendJson(res, 200, { ok: true, stopped: true });
+      } catch (error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -2608,6 +2641,52 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .agent-run-cancel-btn {
         margin-left: 6px;
       }
+      .agent-run-loading {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        margin-top: 10px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--panel2);
+      }
+      .agent-run-loading.is-visible {
+        display: flex;
+      }
+      .agent-run-loading-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        justify-content: center;
+        text-align: center;
+      }
+      .agent-run-spinner-lg {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: winnow-spin 0.75s linear infinite;
+      }
+      .agent-run-flavor {
+        font-size: 12px;
+        font-style: italic;
+        line-height: 1.45;
+        max-width: 520px;
+        margin: 0;
+        color: var(--muted);
+      }
+      #agentPrompt:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      #btnAgentRunCancel {
+        min-width: 120px;
+      }
       .usageToolbar { margin-top: 4px; }
       .usageToolbar select { max-width: 100%; width: 100%; min-width: 0; }
       .body.dashboard-mode .usageToolbar {
@@ -2984,10 +3063,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               <label>Cursor Args</label>
               <input id="agentArgs" style="width:55%" placeholder="optional args passed to cursor-agent" />
               <span class="agent-run-wrap" id="agentRunWrap">
-                <button type="button" id="btnAgentRun" data-agent-run="1" onclick="startAgentRun()">Run Agent</button>
+                <button type="button" id="btnAgentRun" data-agent-run="1" onclick="startAgentRun()">Run</button>
                 <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
               </span>
-              <button type="button" id="btnAgentStartCancel" class="secondary agent-run-cancel-btn" onclick="cancelAgentStart()" style="display:none">Cancel</button>
               <span class="kbd">Ctrl/Cmd+Enter</span>
             </div>
             <div class="row small">
@@ -3017,6 +3095,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             <div class="small muted">Chat history</div>
             <div id="chatHistory"></div>
             <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
+            <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
+              <div class="agent-run-loading-top">
+                <span class="agent-run-spinner-lg" aria-hidden="true"></span>
+                <p id="agentRunFlavorText" class="agent-run-flavor">Working…</p>
+              </div>
+              <button type="button" id="btnAgentRunCancel" class="secondary" onclick="cancelAgentRun()">Cancel</button>
+            </div>
           </div>
         </div>
       </div>
@@ -3680,6 +3765,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       async function setMode(mode){ await post({mode}); }
       let activeSessionId = null;
       let agentStartAbort = null;
+      let agentStartInFlight = false;
+      let agentSessionRunning = false;
+      let agentFlavorTimer = null;
+      let agentFlavorIndex = 0;
+      const AGENT_RUN_FLAVOR = [
+        "Gathering context from your workspace…",
+        "Reasoning through the next steps…",
+        "Tracing dependencies and side effects…",
+        "Composing a careful patch…",
+        "Double-checking edge cases…",
+        "Almost there — still working…",
+      ];
       let pollTimer = null;
       let streamSource = null;
       let selectedSyncedSession = null;
@@ -4015,6 +4112,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           pollTimer = null;
           playSound(s.status === 'done' ? 'success' : 'error');
         }
+        if(s.status !== 'running'){
+          agentSessionRunning = false;
+          applyAgentRunUi();
+        } else {
+          agentSessionRunning = true;
+          applyAgentRunUi();
+        }
       }
       function closeStream(){
         if(streamSource){
@@ -4037,6 +4141,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           const data = JSON.parse(evt.data || '{}');
           document.getElementById('agentSessionInfo').textContent = 'session=' + sessionId + ' status=' + (data.status || 'running') + (data.exitCode !== undefined ? (' exit=' + data.exitCode) : '');
           document.getElementById('agentStatusBadge').textContent = data.status || 'running';
+          const st = data.status || 'running';
+          agentSessionRunning = st === 'running';
+          applyAgentRunUi();
           refreshMetrics();
         });
         streamSource.addEventListener('done', () => {
@@ -4050,17 +4157,79 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           if(!pollTimer){ pollTimer = setInterval(pollAgent, 1000); }
         };
       }
-      function setAgentStartUiBusy(busy){
-        document.querySelectorAll('[data-agent-run]').forEach((b) => { b.disabled = busy; });
-        document.querySelectorAll('.agent-run-wrap').forEach((w) => { w.classList.toggle('is-busy', busy); });
-        const cancelBtn = document.getElementById('btnAgentStartCancel');
-        if(cancelBtn){
-          cancelBtn.style.display = busy ? 'inline-block' : 'none';
+      function clearAgentFlavorTimer(){
+        if(agentFlavorTimer){
+          clearInterval(agentFlavorTimer);
+          agentFlavorTimer = null;
         }
       }
-      function cancelAgentStart(){
-        if(agentStartAbort){
+      function tickAgentFlavor(){
+        const el = document.getElementById('agentRunFlavorText');
+        if(!el){ return; }
+        agentFlavorIndex = (agentFlavorIndex + 1) % AGENT_RUN_FLAVOR.length;
+        el.textContent = AGENT_RUN_FLAVOR[agentFlavorIndex];
+      }
+      function applyAgentRunUi(){
+        const locked = agentStartInFlight || agentSessionRunning;
+        document.querySelectorAll('[data-agent-run]').forEach((b) => {
+          b.disabled = locked;
+          b.textContent = locked ? 'Running' : 'Run';
+        });
+        document.querySelectorAll('.agent-run-wrap').forEach((w) => { w.classList.toggle('is-busy', locked); });
+        const ta = document.getElementById('agentPrompt');
+        if(ta){
+          ta.disabled = locked;
+        }
+        const banner = document.getElementById('agentRunLoadingBanner');
+        const cancelBtn = document.getElementById('btnAgentRunCancel');
+        if(banner){
+          banner.classList.toggle('is-visible', locked);
+          banner.setAttribute('aria-hidden', locked ? 'false' : 'true');
+        }
+        if(locked){
+          const flavorEl = document.getElementById('agentRunFlavorText');
+          if(flavorEl){
+            flavorEl.textContent = AGENT_RUN_FLAVOR[agentFlavorIndex % AGENT_RUN_FLAVOR.length];
+          }
+          if(!agentFlavorTimer){
+            agentFlavorTimer = setInterval(tickAgentFlavor, 2800);
+          }
+        } else {
+          clearAgentFlavorTimer();
+          agentFlavorIndex = 0;
+        }
+        if(cancelBtn){
+          cancelBtn.disabled = false;
+        }
+      }
+      async function cancelAgentRun(){
+        if(agentStartInFlight && agentStartAbort){
           agentStartAbort.abort();
+          return;
+        }
+        if(!agentSessionRunning || !activeSessionId){
+          return;
+        }
+        const cancelBtn = document.getElementById('btnAgentRunCancel');
+        if(cancelBtn){
+          cancelBtn.disabled = true;
+        }
+        try{
+          const httpRes = await fetch(withToken('/api/agent/' + activeSessionId + '/stop'), { method: 'POST' });
+          const data = await httpRes.json();
+          if(data && data.ok && data.stopped){
+            appendChat('system', 'Stop requested — winding down the agent process.');
+          } else if(data && data.ok){
+            appendChat('system', 'Stop was ignored (session may already be idle).');
+          } else {
+            appendChat('system', 'Stop failed: ' + JSON.stringify(data));
+          }
+        } catch(err){
+          appendChat('system', 'Stop failed: ' + ((err && err.message) ? err.message : String(err)));
+        } finally {
+          if(cancelBtn){
+            cancelBtn.disabled = false;
+          }
         }
       }
       async function startAgentRun(){
@@ -4090,8 +4259,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           sessionId: resumeSessionId || undefined,
         };
         agentStartAbort = new AbortController();
-        setAgentStartUiBusy(true);
-        let res;
+        agentStartInFlight = true;
+        applyAgentRunUi();
+        let res = null;
         try {
           const httpRes = await fetch(withToken('/api/agent/start'),{
             method:'POST',
@@ -4100,6 +4270,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             signal: agentStartAbort.signal,
           });
           res = await httpRes.json();
+          if(res && res.ok === true){
+            agentSessionRunning = true;
+          }
         } catch(err){
           const name = err && err.name ? err.name : '';
           if(name === 'AbortError'){
@@ -4109,10 +4282,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           appendChat('system', 'Failed to start: ' + ((err && err.message) ? err.message : String(err)));
           return;
         } finally {
-          setAgentStartUiBusy(false);
+          agentStartInFlight = false;
           agentStartAbort = null;
+          applyAgentRunUi();
         }
-        if(!res.ok){
+        if(!res || !res.ok){
+          agentSessionRunning = false;
+          applyAgentRunUi();
           appendChat('system', 'Failed to start: ' + JSON.stringify(res));
           return;
         }
@@ -4258,6 +4434,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       document.getElementById('agentPrompt').addEventListener('keydown', (evt) => {
         const withCmd = evt.metaKey || evt.ctrlKey;
         if(withCmd && evt.key === 'Enter'){
+          if(evt.target && evt.target.disabled){
+            return;
+          }
           evt.preventDefault();
           startAgentRun();
         }
