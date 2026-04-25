@@ -27,6 +27,8 @@ type CliOptions = {
   cursorCommand?: string;
   port?: number;
   open?: boolean;
+  host?: string;
+  token?: string;
 };
 
 export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
@@ -190,12 +192,20 @@ export function buildProgram(): Command {
     .command("ui")
     .description("Start lightweight local web companion UI")
     .option("--port <port>", "UI server port", Number, 3210)
+    .option("--host <host>", "UI bind host (use 0.0.0.0 for LAN access)", "127.0.0.1")
+    .option("--token <token>", "6-char UI access token (required as ?token=...)")
     .option("--no-open", "do not auto-open browser")
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
+      let token = opts.token?.trim();
+      if (!token && opts.host === "0.0.0.0") {
+        token = Math.random().toString(36).slice(2, 8).toUpperCase();
+      }
       await runUiServer(config, {
         port: opts.port ?? 3210,
         openBrowser: opts.open ?? true,
+        host: opts.host ?? "127.0.0.1",
+        token,
       });
     });
 

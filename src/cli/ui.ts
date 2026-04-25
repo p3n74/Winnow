@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { WinnowConfig } from "../config/schema.js";
@@ -9,6 +10,8 @@ import { saveProjectProfile } from "../config/projectProfile.js";
 type UiOptions = {
   port: number;
   openBrowser: boolean;
+  host: string;
+  token?: string;
 };
 
 type ProfileUpdateRequest = {
@@ -49,6 +52,41 @@ type FileListEntry = {
   name: string;
   path: string;
   type: "dir" | "file";
+};
+
+type SessionSummary = {
+  id: string;
+  file: string;
+  updatedAt: string;
+  preview: string;
+};
+
+type SessionMessage = {
+  role: string;
+  content: string;
+  timestamp?: string;
+};
+
+type LocalSessionIndexEntry = {
+  id: string;
+  updatedAt: string;
+  startedAt: string;
+  status: "running" | "done" | "error";
+  preview: string;
+  source: "winnow-local";
+};
+
+type LocalSessionRecord = {
+  id: string;
+  projectRoot: string;
+  startedAt: string;
+  endedAt?: string;
+  status: "running" | "done" | "error";
+  args: string[];
+  modelPreference: "auto" | "composer";
+  prompt: string;
+  output: string;
+  errorOutput: string;
 };
 
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
@@ -197,10 +235,185 @@ async function previewPath(pathValue?: string): Promise<{ path: string; content:
   return { path: absolute, content };
 }
 
+function defaultAgentTranscriptDir(): string {
+  const workspaceId = process.cwd().replace(/^\/+/, "").replace(/\//g, "-");
+  return join(homedir(), ".cursor", "projects", workspaceId, "agent-transcripts");
+}
+
+function localSessionDir(): string {
+  return join(process.cwd(), ".winnow", "sessions");
+}
+
+function localSessionIndexPath(): string {
+  return join(localSessionDir(), "index.json");
+}
+
+function localSessionRecordPath(id: string): string {
+  return join(localSessionDir(), `${id}.json`);
+}
+
+async function readLocalSessionIndex(): Promise<LocalSessionIndexEntry[]> {
+  try {
+    const content = await readFile(localSessionIndexPath(), "utf8");
+    const parsed = JSON.parse(content) as LocalSessionIndexEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeLocalSessionIndex(entries: LocalSessionIndexEntry[]): Promise<void> {
+  await mkdir(localSessionDir(), { recursive: true });
+  await writeFile(localSessionIndexPath(), `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+}
+
+async function upsertLocalSessionIndex(entry: LocalSessionIndexEntry): Promise<void> {
+  const current = await readLocalSessionIndex();
+  const next = [entry, ...current.filter((item) => item.id !== entry.id)]
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, 500);
+  await writeLocalSessionIndex(next);
+}
+
+async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
+  await mkdir(localSessionDir(), { recursive: true });
+  await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+}
+
+async function listLocalSessions(limit = 20): Promise<SessionSummary[]> {
+  const index = await readLocalSessionIndex();
+  return index.slice(0, Math.max(1, limit)).map((entry) => ({
+    id: entry.id,
+    file: localSessionRecordPath(entry.id),
+    updatedAt: entry.updatedAt,
+    preview: entry.preview,
+  }));
+}
+
+async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
+  const content = await readFile(localSessionRecordPath(id), "utf8");
+  const record = JSON.parse(content) as LocalSessionRecord;
+  const messages: SessionMessage[] = [
+    { role: "user", content: record.prompt, timestamp: record.startedAt },
+  ];
+  if (record.output?.trim()) {
+    messages.push({ role: "assistant", content: record.output, timestamp: record.endedAt });
+  }
+  if (record.errorOutput?.trim()) {
+    messages.push({ role: "stderr", content: record.errorOutput, timestamp: record.endedAt });
+  }
+  return { id, messages };
+}
+
+function readStringDeep(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const out = readStringDeep(item);
+      if (out) {
+        return out;
+      }
+    }
+    return "";
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = ["content", "text", "message", "delta", "prompt", "body"];
+    for (const key of keys) {
+      if (key in obj) {
+        const out = readStringDeep(obj[key]);
+        if (out) {
+          return out;
+        }
+      }
+    }
+  }
+  return "";
+}
+
+function getTranscriptDir(overrideDir?: string): string {
+  return overrideDir || process.env.WINNOW_AGENT_TRANSCRIPTS_DIR || defaultAgentTranscriptDir();
+}
+
+async function listCursorSessions(limit = 20, overrideDir?: string): Promise<SessionSummary[]> {
+  const dir = getTranscriptDir(overrideDir);
+  const files = (await readdir(dir))
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => join(dir, name));
+
+  const summaries: SessionSummary[] = [];
+  for (const file of files) {
+    const fileInfo = await stat(file);
+    const content = await readFile(file, "utf8");
+    const lines = content.trim().split("\n").filter(Boolean);
+    let preview = "";
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      try {
+        const row = JSON.parse(lines[i]) as Record<string, unknown>;
+        preview = readStringDeep(row).slice(0, 160);
+        if (preview) {
+          break;
+        }
+      } catch {
+        // ignore malformed line
+      }
+    }
+    const id = file.split("/").pop()!.replace(/\.jsonl$/, "");
+    summaries.push({
+      id,
+      file,
+      updatedAt: fileInfo.mtime.toISOString(),
+      preview: preview || "(no text preview)",
+    });
+  }
+
+  return summaries
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .slice(0, Math.max(1, limit));
+}
+
+async function readCursorSession(
+  sessionId: string,
+  overrideDir?: string,
+): Promise<{ id: string; messages: SessionMessage[] }> {
+  const dir = getTranscriptDir(overrideDir);
+  const file = join(dir, `${sessionId}.jsonl`);
+  const content = await readFile(file, "utf8");
+  const lines = content.trim().split("\n").filter(Boolean);
+  const messages: SessionMessage[] = [];
+  for (const line of lines) {
+    try {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      const contentText = readStringDeep(row);
+      if (!contentText) {
+        continue;
+      }
+      messages.push({
+        role: String((row.role ?? row.type ?? row.event ?? "entry") as string),
+        content: contentText,
+        timestamp: typeof row.timestamp === "string" ? row.timestamp : undefined,
+      });
+    } catch {
+      // ignore malformed line
+    }
+  }
+  return { id: sessionId, messages };
+}
+
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
   let config = { ...baseConfig };
   const sessions = new Map<string, AgentSession>();
   const streamClients = new Map<string, Set<SessionStreamClient>>();
+
+  const requireToken = Boolean(options.token);
+  const isAuthorized = (url: URL): boolean => {
+    if (!requireToken) {
+      return true;
+    }
+    return url.searchParams.get("token") === options.token;
+  };
 
   const pushStreamEvent = (
     sessionId: string,
@@ -260,6 +473,29 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       args,
     };
     sessions.set(id, session);
+    const startedAt = session.startedAt;
+    const modelPreference = payload.modelPreference ?? "auto";
+    const prompt = payload.prompt;
+
+    void writeLocalSessionRecord({
+      id,
+      projectRoot: process.cwd(),
+      startedAt,
+      status: "running",
+      args,
+      modelPreference,
+      prompt,
+      output: "",
+      errorOutput: "",
+    });
+    void upsertLocalSessionIndex({
+      id,
+      startedAt,
+      updatedAt: startedAt,
+      status: "running",
+      preview: prompt.slice(0, 160),
+      source: "winnow-local",
+    });
 
     const child = spawn(nativeConfig.cursorCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -276,11 +512,33 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const chunk = buf.toString("utf8");
       session.output += chunk;
       pushStreamEvent(id, "stdout", { chunk, sessionId: id });
+      void writeLocalSessionRecord({
+        id,
+        projectRoot: process.cwd(),
+        startedAt,
+        status: session.status,
+        args,
+        modelPreference,
+        prompt,
+        output: session.output,
+        errorOutput: session.errorOutput,
+      });
     });
     child.stderr?.on("data", (buf: Buffer) => {
       const chunk = buf.toString("utf8");
       session.errorOutput += chunk;
       pushStreamEvent(id, "stderr", { chunk, sessionId: id });
+      void writeLocalSessionRecord({
+        id,
+        projectRoot: process.cwd(),
+        startedAt,
+        status: session.status,
+        args,
+        modelPreference,
+        prompt,
+        output: session.output,
+        errorOutput: session.errorOutput,
+      });
     });
 
     child.stdin?.write(`${payload.prompt}\n`);
@@ -290,6 +548,26 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.exitCode = code ?? 1;
       session.status = session.exitCode === 0 ? "done" : "error";
       session.endedAt = new Date().toISOString();
+      void writeLocalSessionRecord({
+        id,
+        projectRoot: process.cwd(),
+        startedAt,
+        endedAt: session.endedAt,
+        status: session.status,
+        args,
+        modelPreference,
+        prompt,
+        output: session.output,
+        errorOutput: session.errorOutput,
+      });
+      void upsertLocalSessionIndex({
+        id,
+        startedAt,
+        updatedAt: session.endedAt,
+        status: session.status,
+        preview: (session.output || prompt).slice(0, 160),
+        source: "winnow-local",
+      });
       pushStreamEvent(id, "status", {
         status: session.status,
         exitCode: session.exitCode,
@@ -304,6 +582,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
+    if (!isAuthorized(url)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized: invalid or missing token" });
+      return;
+    }
 
     if (url.pathname === "/api/state" && req.method === "GET") {
       const state = await getStatusSnapshot(config);
@@ -390,6 +672,44 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         }
         await saveProjectProfile(config);
         sendJson(res, 200, { ok: true });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/sessions" && req.method === "GET") {
+      try {
+        const limit = Number(url.searchParams.get("limit") ?? "20");
+        const dir = url.searchParams.get("dir") ?? undefined;
+        const max = Number.isFinite(limit) ? limit : 20;
+        const local = await listLocalSessions(max);
+        const cursor = await listCursorSessions(max, dir).catch(() => []);
+        const merged = [...local, ...cursor]
+          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+          .slice(0, max);
+        sendJson(res, 200, {
+          sessions: merged,
+          dir: getTranscriptDir(dir),
+          localDir: localSessionDir(),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/sessions/") && req.method === "GET") {
+      try {
+        const id = url.pathname.replace("/api/sessions/", "").trim();
+        const dir = url.searchParams.get("dir") ?? undefined;
+        let session: { id: string; messages: SessionMessage[] };
+        try {
+          session = await readLocalSession(id);
+        } catch {
+          session = await readCursorSession(id, dir);
+        }
+        sendJson(res, 200, session);
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
@@ -483,11 +803,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
       .app{display:flex;flex-direction:column;height:100vh}
       .topbar{height:40px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line);background:#06131e}
-      .tab{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--muted)}
+      .tab{padding:5px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);font-size:12px;color:var(--muted);cursor:pointer}
       .tab.active{color:var(--text);border-color:var(--accent)}
       .body{flex:1;display:grid;grid-template-columns:38% 62%;gap:8px;padding:8px;min-height:0}
+      .body.single{grid-template-columns:100%}
       .leftCol,.rightCol{display:grid;gap:8px;min-height:0}
-      .leftCol{grid-template-rows:32% 18% 22% 28%}
+      .leftCol{grid-template-rows:26% 16% 18% 20% 20%}
       .rightCol{grid-template-rows:58% 42%}
       .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
       .title{font-size:12px;color:#9dc4df;margin-bottom:6px}
@@ -507,10 +828,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   <body>
     <div class="app">
       <div class="topbar">
-        <div class="tab">OS default</div>
-        <div class="tab active">Winnow UI</div>
-        <div class="tab">Cursor Agent</div>
-        <div class="tab">Settings</div>
+        <button class="tab active" data-view="os">OS default</button>
+        <button class="tab active" data-view="os">Winnow UI</button>
+        <button class="tab" data-view="agent">Cursor Agent</button>
+        <button class="tab" data-view="settings">Settings</button>
       </div>
       <div class="body">
         <div class="leftCol">
@@ -557,6 +878,19 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             <div class="title">Recent Logs</div>
             <pre id="logs">Loading...</pre>
           </div>
+          <div class="panel">
+            <div class="title">Cursor Sessions Sync</div>
+            <div class="row small">
+              <button onclick="refreshSessions()">Refresh</button>
+            </div>
+            <div class="small muted" id="sessionDirInfo"></div>
+            <div id="sessionList" style="overflow:auto;max-height:120px;border:1px solid var(--line);border-radius:6px;padding:6px;background:#06131e"></div>
+            <div class="row small" style="margin-top:6px">
+              <button onclick="continueSelectedSession()">Continue Selected</button>
+              <button onclick="useSelectedPrompt()">Use Last Prompt</button>
+            </div>
+            <pre id="sessionPreview">No session selected.</pre>
+          </div>
         </div>
         <div class="rightCol">
           <div class="panel">
@@ -576,6 +910,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           </div>
           <div class="panel">
             <div class="title">Prompt + Diff</div>
+            <div class="row small">
+              <button onclick="refreshWorkspace()">Refresh</button>
+              <button onclick="stageSelected()">Stage Selected</button>
+            </div>
+            <div id="workspaceFiles"></div>
             <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent..."></textarea>
             <div class="small muted" style="margin:6px 0">Current git diff</div>
             <pre id="workspaceDiff">Loading...</pre>
@@ -584,42 +923,54 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       </div>
     </div>
     <script>
+      const AUTH_TOKEN = ${JSON.stringify(options.token ?? "")};
+      function withToken(path){
+        if(!AUTH_TOKEN){ return path; }
+        const glue = path.includes('?') ? '&' : '?';
+        return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
+      }
       async function refresh(){
-        const state = await fetch('/api/state').then(r=>r.json());
+        const state = await fetch(withToken('/api/state')).then(r=>r.json());
         document.getElementById('status').textContent = JSON.stringify(state,null,2);
         document.getElementById('backend').value = state.backend;
         document.getElementById('model').value = state.model;
-        const logs = await fetch('/api/logs?limit=60').then(r=>r.json());
+        const logs = await fetch(withToken('/api/logs?limit=60')).then(r=>r.json());
         document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
       }
       let currentDir = '';
       async function refreshDir(path){
         const url = path ? ('/api/fs/list?path=' + encodeURIComponent(path)) : '/api/fs/list';
-        const data = await fetch(url).then(r=>r.json());
+        const data = await fetch(withToken(url)).then(r=>r.json());
         currentDir = data.cwd;
         document.getElementById('dirCwd').textContent = data.cwd;
-        const parentBtn = data.parent ? '<button class="entry" onclick="refreshDir(\\'' + data.parent.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\\')">[..]</button>' : '';
+        const parentBtn = data.parent ? '<button class="entry dir-entry" data-path="' + encodeURIComponent(data.parent) + '">[..]</button>' : '';
         const rows = (data.entries || []).map((e) => {
           const icon = e.type === 'dir' ? '[D]' : '[F]';
-          const safePath = e.path.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+          const encodedPath = encodeURIComponent(e.path);
           if(e.type === 'dir'){
-            return '<button class="entry" onclick="refreshDir(\\'' + safePath + '\\')">' + icon + ' ' + e.name + '</button>';
+            return '<button class="entry dir-entry" data-path="' + encodedPath + '">' + icon + ' ' + e.name + '</button>';
           }
-          return '<button class="entry" onclick="previewFile(\\'' + safePath + '\\')">' + icon + ' ' + e.name + '</button>';
+          return '<button class="entry file-entry" data-path="' + encodedPath + '">' + icon + ' ' + e.name + '</button>';
         }).join('');
         document.getElementById('dirEntries').innerHTML = parentBtn + rows;
+        document.querySelectorAll('.dir-entry').forEach((el) => {
+          el.onclick = () => refreshDir(decodeURIComponent(el.getAttribute('data-path') || ''));
+        });
+        document.querySelectorAll('.file-entry').forEach((el) => {
+          el.onclick = () => previewFile(decodeURIComponent(el.getAttribute('data-path') || ''));
+        });
       }
       async function goParent(){
         if(!currentDir){ return; }
         await refreshDir(currentDir + '/..');
       }
       async function previewFile(path){
-        const data = await fetch('/api/fs/preview?path=' + encodeURIComponent(path)).then(r=>r.json());
+        const data = await fetch(withToken('/api/fs/preview?path=' + encodeURIComponent(path))).then(r=>r.json());
         document.getElementById('dirPreviewPath').textContent = path;
         document.getElementById('dirPreview').textContent = data.content || '';
       }
       async function refreshWorkspace(){
-        const ws = await fetch('/api/workspace').then(r=>r.json());
+        const ws = await fetch(withToken('/api/workspace')).then(r=>r.json());
         const files = ws.files || [];
         const list = files.map((f, idx) =>
           '<label style="display:block"><input type="checkbox" class="ws-file" data-file="' + f.replace(/"/g,'&quot;') + '"' + (idx === 0 ? ' checked' : '') + '> ' + f + '</label>'
@@ -634,7 +985,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           document.getElementById('result').textContent = 'No files selected to stage.';
           return;
         }
-        const res = await fetch('/api/workspace/stage',{
+        const res = await fetch(withToken('/api/workspace/stage'),{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify({files})
@@ -643,7 +994,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         await refreshWorkspace();
       }
       async function post(data){
-        const res = await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json());
+        const res = await fetch(withToken('/api/profile'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json());
         document.getElementById('result').textContent = JSON.stringify(res,null,2);
         await refresh();
       }
@@ -654,9 +1005,29 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       let activeSessionId = null;
       let pollTimer = null;
       let streamSource = null;
+      let selectedSyncedSession = null;
+      let selectedSyncedMessages = [];
+      function setView(view){
+        document.querySelectorAll('.tab').forEach((tab) => {
+          tab.classList.toggle('active', tab.getAttribute('data-view') === view);
+        });
+        const body = document.querySelector('.body');
+        const leftCol = document.querySelector('.leftCol');
+        const rightCol = document.querySelector('.rightCol');
+        body.classList.remove('single');
+        leftCol.style.display = '';
+        rightCol.style.display = '';
+        if(view === 'agent'){
+          body.classList.add('single');
+          leftCol.style.display = 'none';
+        } else if(view === 'settings'){
+          body.classList.add('single');
+          rightCol.style.display = 'none';
+        }
+      }
       async function pollAgent(){
         if(!activeSessionId){ return; }
-        const res = await fetch('/api/agent/' + activeSessionId).then(r=>r.json());
+        const res = await fetch(withToken('/api/agent/' + activeSessionId)).then(r=>r.json());
         if(!res.ok){ return; }
         const s = res.session;
         const output = (s.output || '') + (s.errorOutput ? ('\\n[stderr]\\n' + s.errorOutput) : '');
@@ -675,7 +1046,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
       function attachStream(sessionId){
         closeStream();
-        streamSource = new EventSource('/api/agent/' + sessionId + '/stream');
+        streamSource = new EventSource(withToken('/api/agent/' + sessionId + '/stream'));
         streamSource.addEventListener('stdout', (evt) => {
           const data = JSON.parse(evt.data || '{}');
           const out = document.getElementById('agentOutput');
@@ -712,7 +1083,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           args: document.getElementById('agentArgs').value,
           modelPreference: document.getElementById('agentModelPref').value
         };
-        const res = await fetch('/api/agent/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
+        const res = await fetch(withToken('/api/agent/start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
         if(!res.ok){
           document.getElementById('agentOutput').textContent = 'Failed to start: ' + JSON.stringify(res);
           return;
@@ -725,9 +1096,63 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         attachStream(activeSessionId);
         pollAgent();
       }
+      async function refreshSessions(){
+        const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
+        document.getElementById('sessionDirInfo').textContent = 'dir: ' + (data.dir || '(unknown)');
+        const rows = (data.sessions || []).map((s, idx) =>
+          '<button class="entry sync-session" data-session-id="' + s.id + '"' + (idx===0 ? ' style="border:1px solid var(--accent)"' : '') + '>' +
+          '[' + (s.updatedAt || '').replace('T',' ').slice(0,19) + '] ' + s.id.slice(0,8) + '  ' + (s.preview || '') +
+          '</button>'
+        ).join('');
+        document.getElementById('sessionList').innerHTML = rows || '<span class="muted small">No transcript sessions found yet.</span>';
+        document.querySelectorAll('.sync-session').forEach((el) => {
+          el.onclick = () => loadSession(el.getAttribute('data-session-id'));
+        });
+        const first = document.querySelector('.sync-session');
+        if(first){ await loadSession(first.getAttribute('data-session-id')); }
+      }
+      async function loadSession(id){
+        if(!id){ return; }
+        selectedSyncedSession = id;
+        const data = await fetch(withToken('/api/sessions/' + id)).then(r=>r.json());
+        selectedSyncedMessages = data.messages || [];
+        const preview = selectedSyncedMessages.slice(-8).map((m) => '[' + m.role + '] ' + m.content).join('\\n\\n');
+        document.getElementById('sessionPreview').textContent = preview || 'No message content.';
+        document.querySelectorAll('.sync-session').forEach((el) => {
+          el.style.border = el.getAttribute('data-session-id') === id ? '1px solid var(--accent)' : '1px solid transparent';
+        });
+      }
+      function continueSelectedSession(){
+        if(!selectedSyncedSession){
+          document.getElementById('result').textContent = 'Select a synced session first.';
+          return;
+        }
+        const argsEl = document.getElementById('agentArgs');
+        const existing = (argsEl.value || '').trim();
+        const resumeArg = '--resume ' + selectedSyncedSession;
+        argsEl.value = existing.includes('--resume') ? existing : (existing ? existing + ' ' : '') + resumeArg;
+        document.getElementById('result').textContent = 'Agent args updated with resume session: ' + selectedSyncedSession;
+      }
+      function useSelectedPrompt(){
+        if(!selectedSyncedMessages || selectedSyncedMessages.length === 0){
+          document.getElementById('result').textContent = 'No messages in selected session.';
+          return;
+        }
+        const lastUserLike = [...selectedSyncedMessages].reverse().find((m) =>
+          String(m.role).toLowerCase().includes('user') || String(m.role).toLowerCase().includes('human')
+        );
+        const pick = lastUserLike || selectedSyncedMessages[selectedSyncedMessages.length - 1];
+        document.getElementById('agentPrompt').value = pick.content || '';
+        document.getElementById('result').textContent = 'Loaded prompt from synced session.';
+      }
       refresh();
       refreshWorkspace();
       refreshDir();
+      refreshSessions();
+      document.querySelectorAll('.tab').forEach((tab) => {
+        tab.onclick = () => setView(tab.getAttribute('data-view') || 'os');
+      });
+      setView('os');
       setInterval(refresh, 3000);
     </script>
   </body>
@@ -740,13 +1165,37 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   });
 
   await new Promise<void>((resolve) => {
-    server.listen(options.port, "127.0.0.1", () => resolve());
+    server.listen(options.port, options.host, () => resolve());
   });
 
-  const url = `http://127.0.0.1:${options.port}`;
-  process.stdout.write(`[winnow-ui] running at ${url}\n`);
+  const queryToken = options.token ? `?token=${encodeURIComponent(options.token)}` : "";
+  const localUrl = `http://127.0.0.1:${options.port}${queryToken}`;
+  const boundUrl = `http://${options.host}:${options.port}${queryToken}`;
+  process.stdout.write(`[winnow-ui] running at ${boundUrl}\n`);
+  if (options.token) {
+    process.stdout.write(`[winnow-ui] access token: ${options.token}\n`);
+  }
+  if (options.host === "0.0.0.0") {
+    const ifaces = networkInterfaces();
+    const ips: string[] = [];
+    for (const values of Object.values(ifaces)) {
+      for (const iface of values ?? []) {
+        if (iface.family === "IPv4" && !iface.internal) {
+          ips.push(iface.address);
+        }
+      }
+    }
+    if (ips.length > 0) {
+      process.stdout.write(`[winnow-ui] LAN URLs:\n`);
+      for (const ip of ips) {
+        process.stdout.write(`  - http://${ip}:${options.port}${queryToken}\n`);
+      }
+    }
+  } else {
+    process.stdout.write(`[winnow-ui] local URL: ${localUrl}\n`);
+  }
   process.stdout.write("[winnow-ui] press Ctrl+C to stop\n");
   if (options.openBrowser) {
-    maybeOpenBrowser(url);
+    maybeOpenBrowser(options.host === "0.0.0.0" ? localUrl : boundUrl);
   }
 }

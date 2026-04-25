@@ -5,3 +5,4 @@ dist/
 coverage/
 .winnow/logs/
 .winnow/profile.json
+.winnow/sessions/
