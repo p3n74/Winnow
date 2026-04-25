@@ -2,9 +2,11 @@
 import { Command } from "commander";
 import { applyProfileDefaults } from "../config/defaults.js";
 import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
+import { applyProjectProfile, loadProjectProfile } from "../config/projectProfile.js";
 import { runWinnowSession } from "../pipeline/session.js";
 import { runInteractiveSession } from "./sessionMode.js";
 import { runDoctor } from "./doctor.js";
+import { runStatus } from "./status.js";
 
 type CliOptions = {
   zh?: boolean;
@@ -93,6 +95,12 @@ export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConf
 
 export function buildProgram(): Command {
   const program = new Command();
+  const getConfig = async (opts: CliOptions): Promise<WinnowConfig> => {
+    const fromEnv = loadConfigFromEnv();
+    const profile = await loadProjectProfile();
+    const mergedBase = applyProjectProfile(fromEnv, profile);
+    return mergeConfig(mergedBase, opts);
+  };
 
   program
     .name("winnow")
@@ -115,7 +123,7 @@ export function buildProgram(): Command {
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
     .argument("[args...]", "arguments passed through to cursor-agent")
     .action(async (args: string[], opts: CliOptions) => {
-      const config = mergeConfig(loadConfigFromEnv(), opts);
+      const config = await getConfig(opts);
       const exitCode = await runWinnowSession({ config, args });
       process.exit(exitCode);
     });
@@ -141,7 +149,7 @@ export function buildProgram(): Command {
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
     .argument("[args...]", "arguments passed through to cursor-agent")
     .action(async (args: string[], opts: CliOptions) => {
-      const config = mergeConfig(loadConfigFromEnv(), opts);
+      const config = await getConfig(opts);
       await runInteractiveSession(config, args);
       process.exit(0);
     });
@@ -157,8 +165,21 @@ export function buildProgram(): Command {
     .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
     .action(async (opts: CliOptions) => {
-      const config = mergeConfig(loadConfigFromEnv(), opts);
+      const config = await getConfig(opts);
       const exitCode = await runDoctor(config);
+      process.exit(exitCode);
+    });
+
+  program
+    .command("status")
+    .description("Show current runtime status and last session result")
+    .option("--translator-backend <backend>", "ollama|deepseek_api")
+    .option("--deepseek-model <model>", "deepseek API model")
+    .option("--model <model>", "translation model")
+    .option("--profile <profile>", "learning_zh|engineering_exact")
+    .action(async (opts: CliOptions) => {
+      const config = await getConfig(opts);
+      const exitCode = await runStatus(config);
       process.exit(exitCode);
     });
 

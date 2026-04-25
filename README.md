@@ -81,11 +81,26 @@ Session commands:
 - `:raw` passthrough mode (no translation)
 - `:dual` bilingual output (original + Chinese)
 - `:quit` exit session
+- `/backend <ollama|deepseek_api>` switch translator backend and save project profile
+- `/model <name>` update translation model and save project profile
+- `/glossary <csv>` update glossary and save project profile
+- `/mode <zh|raw|dual>` switch mode and save project profile
+
+Project profile persistence:
+
+- Session preference changes are saved in `.winnow/profile.json`.
+- Winnow auto-loads this profile in the current repository for future runs.
 
 Health checks:
 
 ```bash
 npm run doctor
+```
+
+Status:
+
+```bash
+npm run status
 ```
 
 ## Notes
