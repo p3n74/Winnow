@@ -1,0 +1,106 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import { applyProfileDefaults } from "../config/defaults.js";
+import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
+import { runWinnowSession } from "../pipeline/session.js";
+
+type CliOptions = {
+  zh?: boolean;
+  noTranslate?: boolean;
+  showOriginal?: boolean;
+  dualOutput?: boolean;
+  inputMode?: "off" | "zh_to_en";
+  outputMode?: "off" | "en_to_zh";
+  profile?: "learning_zh" | "engineering_exact";
+  model?: string;
+  ollamaBaseUrl?: string;
+  cursorCommand?: string;
+};
+
+export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
+  let merged: WinnowConfig = { ...base };
+
+  if (options.profile) {
+    merged.profile = options.profile;
+  }
+
+  if (options.model) {
+    merged.ollamaTranslationModel = options.model;
+  }
+
+  if (options.ollamaBaseUrl) {
+    merged.ollamaBaseUrl = options.ollamaBaseUrl;
+  }
+
+  if (options.cursorCommand) {
+    merged.cursorCommand = options.cursorCommand;
+  }
+
+  if (options.zh) {
+    merged.outputMode = "en_to_zh";
+  }
+
+  if (options.noTranslate) {
+    merged.inputMode = "off";
+    merged.outputMode = "off";
+  }
+
+  if (options.inputMode) {
+    merged.inputMode = options.inputMode;
+  }
+
+  if (options.outputMode) {
+    merged.outputMode = options.outputMode;
+  }
+
+  if (options.showOriginal) {
+    merged.showOriginal = true;
+  }
+
+  if (options.dualOutput) {
+    merged.dualOutput = true;
+    merged.showOriginal = true;
+  }
+
+  return applyProfileDefaults(merged);
+}
+
+export function buildProgram(): Command {
+  const program = new Command();
+
+  program
+    .name("winnow")
+    .description("Cursor CLI wrapper with optional Chinese translation via Ollama")
+    .allowUnknownOption(true)
+    .option("--zh", "translate assistant output to Chinese")
+    .option("--no-translate", "disable all translation middleware")
+    .option("--show-original", "show original Cursor output before translated output")
+    .option("--dual-output", "show original and translated outputs")
+    .option("--input-mode <mode>", "off|zh_to_en")
+    .option("--output-mode <mode>", "off|en_to_zh")
+    .option("--profile <profile>", "learning_zh|engineering_exact")
+    .option("--model <model>", "ollama model for translation")
+    .option("--ollama-base-url <url>", "ollama API base URL")
+    .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
+    .argument("[args...]", "arguments passed through to cursor-agent")
+    .action(async (args: string[], opts: CliOptions) => {
+      const config = mergeConfig(loadConfigFromEnv(), opts);
+      const exitCode = await runWinnowSession({ config, args });
+      process.exit(exitCode);
+    });
+
+  program
+    .command("ui")
+    .description("Start optional local web UI (placeholder for phase 2)")
+    .action(() => {
+      process.stdout.write(
+        "UI mode is planned for phase 2. Use terminal mode now with: winnow --zh <args>\n",
+      );
+    });
+
+  return program;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  buildProgram().parse(process.argv);
+}
