@@ -508,6 +508,17 @@ function buildMainTerminalHtml(token?: string): string {
       }
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
+      (function setupDockedBack(){
+        const params = new URLSearchParams(location.search);
+        const docked = params.get("dock") === "1" && window.parent !== window;
+        const back = document.querySelector("a.back");
+        if(!back || !docked){ return; }
+        back.addEventListener("click", function(e){
+          if(e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey){ return; }
+          e.preventDefault();
+          window.parent.postMessage({ type: "winnow-hide-main-grid" }, window.location.origin);
+        });
+      })();
       window.addEventListener("resize", resizeAll);
       panes.forEach((paneId)=>openPane(paneId));
       document.querySelectorAll(".reconnect").forEach((btn)=>{
@@ -1702,6 +1713,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
       /* Main shell: at least one viewport tall; content grows and window scrolls (no column trap). */
       .app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; }
+      .main-grid-dock {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+      }
+      .main-grid-frame {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: var(--bg);
+      }
       .topbar {
         height: 48px;
         display: flex;
@@ -2433,6 +2460,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         </div>
       </div>
     </div>
+    <div id="mainGridDock" class="main-grid-dock" aria-hidden="true">
+      <iframe id="mainGridFrame" class="main-grid-frame" title="Winnow Main Grid"></iframe>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script>
       const AUTH_TOKEN = ${JSON.stringify(options.token ?? "")};
@@ -2444,9 +2474,54 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const glue = path.includes('?') ? '&' : '?';
         return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
       }
+      function hideMainGridDock(){
+        const dock = document.getElementById('mainGridDock');
+        if(!dock){ return; }
+        dock.style.display = 'none';
+        dock.setAttribute('aria-hidden','true');
+      }
+      function showMainGridDock(){
+        const dock = document.getElementById('mainGridDock');
+        const frame = document.getElementById('mainGridFrame');
+        if(!dock || !frame){
+          window.location.assign(withToken('/main'));
+          return;
+        }
+        const targetSrc = withToken('/main?dock=1');
+        if(!frame.dataset.winnowMainLoaded){
+          frame.src = targetSrc;
+          frame.dataset.winnowMainLoaded = '1';
+        }
+        dock.style.display = 'block';
+        dock.setAttribute('aria-hidden','false');
+        requestAnimationFrame(function(){
+          try {
+            frame.contentWindow.dispatchEvent(new Event('resize'));
+          } catch (_) {}
+        });
+      }
       function openMainGrid(){
+        const dock = document.getElementById('mainGridDock');
+        const frame = document.getElementById('mainGridFrame');
+        if(dock && frame){
+          showMainGridDock();
+          return;
+        }
         window.location.assign(withToken('/main'));
       }
+      window.addEventListener('message', function(event){
+        if(event.origin !== window.location.origin){ return; }
+        if(event.data && event.data.type === 'winnow-hide-main-grid'){
+          hideMainGridDock();
+        }
+      });
+      document.addEventListener('keydown', function(e){
+        if(e.key !== 'Escape'){ return; }
+        const dock = document.getElementById('mainGridDock');
+        if(dock && dock.style.display === 'block'){
+          hideMainGridDock();
+        }
+      });
 
       let usageChartInstance = null;
       let usageRefreshTimer = null;
