@@ -10,7 +10,7 @@ type SessionOptions = {
   stdinOverride?: string;
 };
 
-export function chunkBySentence(input: string, maxChunkLength = 1200): string[] {
+function chunkBySentence(input: string, maxChunkLength = 1200): string[] {
   const sentences = input
     .split(/(?<=[.!?。！？])\s+/)
     .map((part) => part.trim())

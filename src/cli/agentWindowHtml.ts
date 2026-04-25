@@ -203,20 +203,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         line-height: 1.45;
         color: var(--text);
       }
-      .chatEnPreview {
-        white-space: pre-wrap;
-        font-size: 11px;
-        line-height: 1.45;
-        border-top: 1px solid var(--line);
-        padding-top: 8px;
-        margin-top: 8px;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-      .chatPreviewEnBtn {
-        margin-top: 0;
-        font-size: 11px;
-        padding: 4px 10px;
-      }
       @keyframes winnow-spin {
         to {
           transform: rotate(360deg);
@@ -274,22 +260,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       #agentPrompt { width: 100%; min-height: 88px; resize: vertical; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
       .composer-actions {
         display: flex;
-        justify-content: space-between;
         align-items: center;
         gap: 10px;
         margin-top: 8px;
         flex-wrap: wrap;
       }
-      .composer-actions-start {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .composer-actions-end {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-left: auto;
+      .composer-actions > .small.muted:first-child {
+        margin-right: auto;
       }
       #sessionList {
         border: 1px solid var(--line);
@@ -328,75 +305,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       .entry:hover { background: var(--line-faint); color: var(--text-neon); }
       .session-actions { padding: 0 8px 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-      .winnow-modal-backdrop {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 20000;
-        background: rgba(0, 0, 0, 0.72);
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        box-sizing: border-box;
-      }
-      .winnow-modal-backdrop.is-open {
-        display: flex;
-      }
-      .winnow-modal {
-        width: min(640px, 100%);
-        max-height: min(85vh, 760px);
-        display: flex;
-        flex-direction: column;
-        background: var(--vscode-editor-background);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
-        padding: 16px;
-        gap: 10px;
-      }
-      .winnow-modal-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        flex-shrink: 0;
-      }
-      .winnow-modal-head span {
-        font-weight: 700;
-        color: var(--text-neon);
-        font-size: 14px;
-      }
-      .winnow-modal-sub {
-        margin: 0;
-        color: var(--muted);
-        font-size: 12px;
-        font-style: italic;
-      }
-      .winnow-modal-body {
-        flex: 1;
-        min-height: 100px;
-        max-height: min(52vh, 480px);
-        overflow: auto;
-        margin: 0;
-        padding: 12px;
-        background: var(--bg);
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        font-family: ui-monospace, Menlo, monospace;
-        font-size: 12px;
-        color: var(--text);
-        white-space: pre-wrap;
-        line-height: 1.45;
-      }
-      .winnow-modal-err {
-        display: none;
-        margin: 0;
-        color: var(--red-neon);
-        font-size: 12px;
-      }
-      .winnow-modal-err.is-visible {
-        display: block;
-      }
     </style>
   </head>
   <body>
@@ -460,13 +368,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" class="secondary" onclick="refreshSessions()">Reload</button>
                 <button type="button" class="secondary" onclick="startFreshSession()">New chat</button>
               </div>
-              <div class="row small" style="margin-top: 8px">
-                <label for="agentLanguageMode">Language</label>
-                <select id="agentLanguageMode" title="中文：Composer 用中文；发给 Cursor 前译为英文；助手输出译为中文">
-                  <option value="en">English</option>
-                  <option value="zh">中文 (translate)</option>
-                </select>
-              </div>
               <div class="row small" style="margin-top: 8px; align-items: stretch">
                 <label style="align-self: center">Cwd</label>
                 <input id="agentCwdInput" style="flex: 1; min-width: 160px" placeholder="Path or ~/… (same as terminal cd)" />
@@ -499,42 +400,24 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             <div class="composer">
               <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
               <div class="composer-actions">
-                <div class="composer-actions-start">
-                  <button type="button" class="secondary" id="btnPreviewEnglishPrompt" style="display: none">
-                    Preview English (DeepSeek)
-                  </button>
-                </div>
-                <div class="composer-actions-end">
-                  <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
-                  <span class="agent-run-wrap">
-                    <button type="button" data-agent-run="1" onclick="startAgentRun()">Run agent</button>
-                    <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
-                  </span>
-                  <button
-                    type="button"
-                    id="btnAgentStartCancel"
-                    class="secondary agent-run-cancel-btn"
-                    onclick="cancelAgentStart()"
-                    style="display: none"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
+                <span class="agent-run-wrap">
+                  <button type="button" data-agent-run="1" onclick="startAgentRun()">Run agent</button>
+                  <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
+                </span>
+                <button
+                  type="button"
+                  id="btnAgentStartCancel"
+                  class="secondary agent-run-cancel-btn"
+                  onclick="cancelAgentStart()"
+                  style="display: none"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </main>
         </div>
-      </div>
-    </div>
-    <div id="translatePreviewBackdrop" class="winnow-modal-backdrop" aria-hidden="true">
-      <div class="winnow-modal" role="dialog" aria-modal="true" aria-labelledby="translatePreviewTitle">
-        <div class="winnow-modal-head">
-          <span id="translatePreviewTitle">English preview (DeepSeek)</span>
-          <button type="button" id="translatePreviewClose">Close</button>
-        </div>
-        <p id="translatePreviewSub" class="winnow-modal-sub">Technical English Winnow sends to Cursor — same translation path as Run when Language is 中文.</p>
-        <pre id="translatePreviewBody" class="winnow-modal-body"></pre>
-        <p id="translatePreviewError" class="winnow-modal-err"></p>
       </div>
     </div>
     <script>
@@ -620,250 +503,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
-      const assistantEnCache = new Map();
-      const assistantEnInflight = new Map();
-      const assistantZhCache = new Map();
-      const assistantZhInflight = new Map();
-      function isAgentZhMode() {
-        const sel = document.getElementById("agentLanguageMode");
-        return !!(sel && sel.value === "zh");
-      }
-      function truncateEnPreview(s, maxLen) {
-        const t = String(s || "").trim();
-        if (!t) {
-          return "";
-        }
-        if (t.length <= maxLen) {
-          return t;
-        }
-        return t.slice(0, maxLen) + "…";
-      }
-      function assistantCacheKey(evId, zhText) {
-        if (evId) {
-          return String(evId);
-        }
-        return "zt:" + String((zhText || "").length) + ":" + String(zhText || "").slice(0, 64);
-      }
-      async function fetchZhToEnglish(zhText) {
-        const res = await fetch(withToken("/api/translate/zh-to-english"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: zhText }),
-        }).then((r) => r.json());
-        if (!res.ok) {
-          throw new Error(res.error || JSON.stringify(res));
-        }
-        return res.english || "";
-      }
-      async function resolveAssistantEnglish(key, zhText) {
-        if (assistantEnCache.has(key)) {
-          return assistantEnCache.get(key);
-        }
-        let p = assistantEnInflight.get(key);
-        if (!p) {
-          p = (async () => {
-            try {
-              const en = await fetchZhToEnglish(zhText);
-              assistantEnCache.set(key, en);
-              return en;
-            } finally {
-              assistantEnInflight.delete(key);
-            }
-          })();
-          assistantEnInflight.set(key, p);
-        }
-        return p;
-      }
-      async function fetchEnToChinese(enText) {
-        const res = await fetch(withToken("/api/translate/en-to-chinese"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: enText }),
-        }).then((r) => r.json());
-        if (!res.ok) {
-          throw new Error(res.error || JSON.stringify(res));
-        }
-        return res.chinese || "";
-      }
-      async function resolveAssistantChinese(key, enText) {
-        if (assistantZhCache.has(key)) {
-          return assistantZhCache.get(key);
-        }
-        let p = assistantZhInflight.get(key);
-        if (!p) {
-          p = (async () => {
-            try {
-              const zh = await fetchEnToChinese(enText);
-              assistantZhCache.set(key, zh);
-              return zh;
-            } finally {
-              assistantZhInflight.delete(key);
-            }
-          })();
-          assistantZhInflight.set(key, p);
-        }
-        return p;
-      }
-      function setAssistantBubbleEnglishPreview(msgEl, englishFull) {
-        const prevEl = msgEl.querySelector(".chatEnPreview");
-        if (!prevEl) {
-          return;
-        }
-        const t = String(englishFull || "").trim();
-        if (!t) {
-          prevEl.textContent = "";
-          prevEl.style.display = "none";
-          return;
-        }
-        prevEl.style.display = "block";
-        prevEl.textContent = "EN: " + truncateEnPreview(t, 160);
-      }
-      function setAssistantBubbleZhPreview(msgEl, zhFull) {
-        const prevEl = msgEl.querySelector(".chatEnPreview");
-        if (!prevEl) {
-          return;
-        }
-        const t = String(zhFull || "").trim();
-        if (!t) {
-          prevEl.textContent = "";
-          prevEl.style.display = "none";
-          return;
-        }
-        prevEl.style.display = "block";
-        prevEl.textContent = "中文: " + truncateEnPreview(t, 160);
-      }
-      function appendAssistantTranslateBubble(ev) {
-        const root = document.getElementById("chatHistory");
-        if (!root || !ev) {
-          return;
-        }
-        const zhMode = isAgentZhMode();
-        const primary = ev.content || "";
-        const evId = ev.id || "";
-        const sourceEn = ev.sourceEn;
-        const cacheKey = assistantCacheKey(evId, primary);
-
-        const msg = document.createElement("div");
-        msg.className = "chatMsg chatMsg-assistant-translate";
-        msg.dataset.eventId = cacheKey;
-        msg.dataset.assistantText = primary;
-
-        const roleEl = document.createElement("div");
-        roleEl.className = "chatRole";
-        roleEl.textContent = "assistant";
-
-        const textEl = document.createElement("div");
-        textEl.className = "chatText";
-        textEl.textContent = primary;
-
-        const altPrev = document.createElement("div");
-        altPrev.className = "chatEnPreview small muted";
-        altPrev.style.display = "none";
-        altPrev.textContent = "";
-
-        const btnRow = document.createElement("div");
-        btnRow.style.marginTop = "8px";
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "secondary chatPreviewEnBtn";
-        btn.textContent = zhMode ? "Preview English" : "View translation";
-        btn.addEventListener("click", () => {
-          if (zhMode) {
-            void openAssistantEnglishModal(msg, evId, primary, sourceEn);
-          } else {
-            void openAssistantChineseModal(msg, evId, primary);
-          }
-        });
-        btnRow.appendChild(btn);
-
-        msg.appendChild(roleEl);
-        msg.appendChild(textEl);
-        msg.appendChild(altPrev);
-        msg.appendChild(btnRow);
-        root.appendChild(msg);
-        scrollToBottom();
-      }
-      async function openAssistantEnglishModal(msgEl, evId, zhText, sourceEn) {
-        const backdrop = document.getElementById("translatePreviewBackdrop");
-        const titleEl = document.getElementById("translatePreviewTitle");
-        const subEl = document.getElementById("translatePreviewSub");
-        const bodyEl = document.getElementById("translatePreviewBody");
-        const errEl = document.getElementById("translatePreviewError");
-        if (!backdrop || !bodyEl || !errEl) {
-          return;
-        }
-        if (titleEl) {
-          titleEl.textContent = "English (assistant reply)";
-        }
-        if (subEl) {
-          subEl.textContent = "Technical English corresponding to this assistant message (DeepSeek).";
-        }
-        errEl.classList.remove("is-visible");
-        errEl.textContent = "";
-        const key = assistantCacheKey(evId, zhText);
-        let english = (sourceEn && String(sourceEn).trim()) || assistantEnCache.get(key) || "";
-        bodyEl.textContent = english || "Translating…";
-        backdrop.classList.add("is-open");
-        backdrop.setAttribute("aria-hidden", "false");
-        if (english) {
-          assistantEnCache.set(key, english);
-          if (msgEl) {
-            setAssistantBubbleEnglishPreview(msgEl, english);
-          }
-          return;
-        }
-        try {
-          english = await resolveAssistantEnglish(key, zhText);
-          bodyEl.textContent = english;
-          if (msgEl) {
-            setAssistantBubbleEnglishPreview(msgEl, english);
-          }
-        } catch (err) {
-          errEl.textContent = err && err.message ? err.message : String(err);
-          errEl.classList.add("is-visible");
-          bodyEl.textContent = "";
-        }
-      }
-      async function openAssistantChineseModal(msgEl, evId, enText) {
-        const backdrop = document.getElementById("translatePreviewBackdrop");
-        const titleEl = document.getElementById("translatePreviewTitle");
-        const subEl = document.getElementById("translatePreviewSub");
-        const bodyEl = document.getElementById("translatePreviewBody");
-        const errEl = document.getElementById("translatePreviewError");
-        if (!backdrop || !bodyEl || !errEl) {
-          return;
-        }
-        if (titleEl) {
-          titleEl.textContent = "中文翻译 (助手回复)";
-        }
-        if (subEl) {
-          subEl.textContent = "简体中文工程向翻译，与流式输出 en→zh 使用相同的 DeepSeek 路径。";
-        }
-        errEl.classList.remove("is-visible");
-        errEl.textContent = "";
-        const key = assistantCacheKey(evId, enText);
-        let chinese = assistantZhCache.get(key) || "";
-        bodyEl.textContent = chinese || "Translating…";
-        backdrop.classList.add("is-open");
-        backdrop.setAttribute("aria-hidden", "false");
-        if (chinese) {
-          if (msgEl) {
-            setAssistantBubbleZhPreview(msgEl, chinese);
-          }
-          return;
-        }
-        try {
-          chinese = await resolveAssistantChinese(key, enText);
-          bodyEl.textContent = chinese;
-          if (msgEl) {
-            setAssistantBubbleZhPreview(msgEl, chinese);
-          }
-        } catch (err) {
-          errEl.textContent = err && err.message ? err.message : String(err);
-          errEl.classList.add("is-visible");
-          bodyEl.textContent = "";
-        }
-      }
       function estimateTokens(chars) {
         return Math.max(0, Math.ceil(chars / 4));
       }
@@ -930,10 +569,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           root.innerHTML = "";
         }
         seenTimelineIds.clear();
-        assistantEnCache.clear();
-        assistantEnInflight.clear();
-        assistantZhCache.clear();
-        assistantZhInflight.clear();
       }
       function appendFromTimelineEvent(ev) {
         if (!ev || !ev.id) {
@@ -959,14 +594,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           lane = "stderr";
         }
 
-        if (kind === "assistant") {
-          appendAssistantTranslateBubble(ev);
-          agentMetrics.outputChars += (ev.content || "").length;
-          agentMetrics.chunkCount += 1;
-          refreshMetrics();
-          return;
-        }
-
         appendChat(lane, ev.content || "");
         if (kind === "assistant" || kind === "stderr") {
           agentMetrics.outputChars += (ev.content || "").length;
@@ -984,10 +611,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           }
           const role = String(msg.role || "entry").toLowerCase();
 
-          if (role === "tool") {            pushTrace(msg.content || "");
+          if (role === "tool" || role === "status" || role === "system") {
+            pushTrace(msg.content || "");
             continue;
           }
-          
+
           let lane = "assistant";
           if (role === "user" || role.includes("user") || role.includes("human")) {
             lane = "user";
@@ -995,14 +623,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             lane = "stderr";
           } else if (role === "status" || role.includes("system") || role.includes("event")) {
             lane = "system";
-          }
-          if (lane === "assistant") {
-            appendAssistantTranslateBubble({
-              id: msg.id,
-              content: msg.content || "",
-              sourceEn: msg.sourceEn,
-            });
-            continue;
           }
           appendChat(lane, msg.content || "");
         }
@@ -1205,15 +825,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             ? cleanedArgs + " --resume " + resumeSessionId
             : "--resume " + resumeSessionId
           : cleanedArgs;
-        const langEl = document.getElementById("agentLanguageMode");
-        const chineseMode = !!(langEl && langEl.value === "zh");
         const payload = {
           prompt,
           args: effectiveArgs,
           modelPreference: document.getElementById("agentModelPref").value,
           autonomyMode: document.getElementById("autonomyMode").checked,
           sessionId: resumeSessionId || undefined,
-          chineseMode,
         };
         agentStartAbort = new AbortController();
         setAgentStartUiBusy(true);
@@ -1363,68 +980,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         document.getElementById("agentPrompt").value = pick.content || "";
         document.getElementById("result").textContent = "Loaded prompt from synced session.";
       }
-      function updateZhPreviewButtonVisibility() {
-        const btn = document.getElementById("btnPreviewEnglishPrompt");
-        const sel = document.getElementById("agentLanguageMode");
-        if (!btn || !sel) {
-          return;
-        }
-        btn.style.display = sel.value === "zh" ? "inline-flex" : "none";
-      }
-      function closeTranslatePreviewModal() {
-        const backdrop = document.getElementById("translatePreviewBackdrop");
-        if (!backdrop) {
-          return;
-        }
-        backdrop.classList.remove("is-open");
-        backdrop.setAttribute("aria-hidden", "true");
-      }
-      async function previewEnglishPrompt() {
-        const ta = document.getElementById("agentPrompt");
-        const text = ((ta && ta.value) || "").trim();
-        if (!text) {
-          appendChat("system", "Enter prompt text first.");
-          return;
-        }
-        const backdrop = document.getElementById("translatePreviewBackdrop");
-        const titleEl = document.getElementById("translatePreviewTitle");
-        const subEl = document.getElementById("translatePreviewSub");
-        const bodyEl = document.getElementById("translatePreviewBody");
-        const errEl = document.getElementById("translatePreviewError");
-        if (!backdrop || !bodyEl || !errEl) {
-          return;
-        }
-        if (titleEl) {
-          titleEl.textContent = "English preview (DeepSeek)";
-        }
-        if (subEl) {
-          subEl.textContent =
-            "Technical English Winnow sends to Cursor — same translation path as Run when Language is 中文.";
-        }
-        errEl.classList.remove("is-visible");
-        errEl.textContent = "";
-        bodyEl.textContent = "Translating…";
-        backdrop.classList.add("is-open");
-        backdrop.setAttribute("aria-hidden", "false");
-        try {
-          const res = await fetch(withToken("/api/translate/prompt-to-english"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text }),
-          }).then((r) => r.json());
-          if (!res.ok) {
-            errEl.textContent = res.error || JSON.stringify(res);
-            errEl.classList.add("is-visible");
-            bodyEl.textContent = "";
-            return;
-          }
-          bodyEl.textContent = res.english || "";
-        } catch (err) {
-          errEl.textContent = err && err.message ? err.message : String(err);
-          errEl.classList.add("is-visible");
-          bodyEl.textContent = "";
-        }
-      }
       document.getElementById("linkDashboard").addEventListener("click", (e) => {
         e.preventDefault();
         openDashboard();
@@ -1449,54 +1004,6 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (withCmd && evt.key === "Enter") {
           evt.preventDefault();
           startAgentRun();
-        }
-      });
-      (function initAgentLanguageMode() {
-        const sel = document.getElementById("agentLanguageMode");
-        if (!sel) {
-          return;
-        }
-        try {
-          if (sessionStorage.getItem("winnowAgentChineseMode") === "1") {
-            sel.value = "zh";
-          }
-        } catch (_e) {}
-        function updateComposerPlaceholder() {
-          const ta = document.getElementById("agentPrompt");
-          if (!ta) {
-            return;
-          }
-          ta.placeholder =
-            sel.value === "zh"
-              ? "用中文描述任务；运行前会译为英文再交给 Cursor，助手回复会显示为中文。"
-              : "Describe the task for Cursor agent…";
-          updateZhPreviewButtonVisibility();
-        }
-        sel.addEventListener("change", () => {
-          try {
-            sessionStorage.setItem("winnowAgentChineseMode", sel.value === "zh" ? "1" : "0");
-          } catch (_e) {}
-          updateComposerPlaceholder();
-        });
-        updateComposerPlaceholder();
-      })();
-      document.getElementById("btnPreviewEnglishPrompt")?.addEventListener("click", () => {
-        void previewEnglishPrompt();
-      });
-      document.getElementById("translatePreviewClose")?.addEventListener("click", closeTranslatePreviewModal);
-      const translatePreviewBackdropAgent = document.getElementById("translatePreviewBackdrop");
-      translatePreviewBackdropAgent?.addEventListener("click", (e) => {
-        if (e.target === translatePreviewBackdropAgent) {
-          closeTranslatePreviewModal();
-        }
-      });
-      document.addEventListener("keydown", (e) => {
-        if (e.key !== "Escape") {
-          return;
-        }
-        const b = document.getElementById("translatePreviewBackdrop");
-        if (b && b.classList.contains("is-open")) {
-          closeTranslatePreviewModal();
         }
       });
       refreshSessions();

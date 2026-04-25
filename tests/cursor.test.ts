@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Writable } from "node:stream";
 import { runCursorAgent } from "../src/cursor/runCursor.js";
+import { cursorProjectIdFromWorkspaceRoot } from "../src/cursor/sessionUtils.js";
 
 class BufferWritable extends Writable {
   public data = "";
@@ -9,6 +10,16 @@ class BufferWritable extends Writable {
     callback();
   }
 }
+
+describe("cursorProjectIdFromWorkspaceRoot", () => {
+  it("maps POSIX paths to Cursor-style project ids", () => {
+    expect(cursorProjectIdFromWorkspaceRoot("/Users/dev/repos/winnow")).toBe("Users-dev-repos-winnow");
+  });
+
+  it.skipIf(process.platform !== "win32")("maps Windows paths to lowercased-drive ids", () => {
+    expect(cursorProjectIdFromWorkspaceRoot("C:\\Users\\dev\\winnow")).toBe("c-Users-dev-winnow");
+  });
+});
 
 describe("runCursorAgent", () => {
   it("preserves child exit code and streams output", async () => {
