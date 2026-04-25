@@ -41,6 +41,10 @@ type SessionStreamClient = {
   res: ServerResponse;
 };
 
+type StageFilesRequest = {
+  files: string[];
+};
+
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
   try {
     const filePath = join(process.cwd(), logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -90,6 +94,52 @@ function maybeOpenBrowser(url: string): void {
   if (process.platform === "darwin") {
     spawn("open", [url], { stdio: "ignore", detached: true }).unref();
   }
+}
+
+function runGitCommand(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (buf: Buffer) => {
+      stdout += buf.toString("utf8");
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      stderr += buf.toString("utf8");
+    });
+    child.on("error", (error) => {
+      resolve({ ok: false, stdout: "", stderr: error.message });
+    });
+    child.on("close", (code: number | null) => {
+      resolve({ ok: code === 0, stdout, stderr });
+    });
+  });
+}
+
+async function getWorkspaceChanges() {
+  const status = await runGitCommand(["status", "--short"]);
+  const diff = await runGitCommand(["diff"]);
+  const files = status.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const candidate = line.slice(3).trim();
+      const renameSplit = candidate.split(" -> ");
+      return renameSplit[renameSplit.length - 1];
+    });
+
+  return {
+    ok: status.ok && diff.ok,
+    files,
+    diff: diff.stdout,
+    status: status.stdout,
+    error: [status.stderr, diff.stderr].filter(Boolean).join("\n"),
+  };
 }
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
@@ -210,6 +260,31 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const limit = Number(url.searchParams.get("limit") ?? "50");
       const logs = await readRecentLogEntries(config.logsDir, Number.isFinite(limit) ? limit : 50);
       sendJson(res, 200, { logs });
+      return;
+    }
+
+    if (url.pathname === "/api/workspace" && req.method === "GET") {
+      const workspace = await getWorkspaceChanges();
+      sendJson(res, 200, workspace);
+      return;
+    }
+
+    if (url.pathname === "/api/workspace/stage" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as StageFilesRequest;
+        const files = Array.isArray(payload.files) ? payload.files.filter(Boolean) : [];
+        if (files.length === 0) {
+          sendJson(res, 400, { ok: false, error: "files array is required" });
+          return;
+        }
+        const result = await runGitCommand(["add", "--", ...files]);
+        sendJson(res, result.ok ? 200 : 400, {
+          ok: result.ok,
+          stderr: result.stderr,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
       return;
     }
 
@@ -386,6 +461,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       <h3>Recent Logs</h3>
       <pre id="logs">Loading...</pre>
     </div>
+    <div class="card">
+      <h3>Workspace Changes</h3>
+      <div class="row">
+        <button onclick="refreshWorkspace()">Refresh</button>
+        <button onclick="stageSelected()">Stage Selected</button>
+      </div>
+      <div id="workspaceFiles"></div>
+      <h4>Diff</h4>
+      <pre id="workspaceDiff">Loading...</pre>
+    </div>
     <script>
       async function refresh(){
         const state = await fetch('/api/state').then(r=>r.json());
@@ -394,6 +479,30 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.getElementById('model').value = state.model;
         const logs = await fetch('/api/logs?limit=60').then(r=>r.json());
         document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
+      }
+      async function refreshWorkspace(){
+        const ws = await fetch('/api/workspace').then(r=>r.json());
+        const files = ws.files || [];
+        const list = files.map((f, idx) =>
+          '<label style="display:block"><input type="checkbox" class="ws-file" data-file="' + f.replace(/"/g,'&quot;') + '"' + (idx === 0 ? ' checked' : '') + '> ' + f + '</label>'
+        ).join('');
+        document.getElementById('workspaceFiles').innerHTML = list || '<em>No changes.</em>';
+        document.getElementById('workspaceDiff').textContent = ws.diff || ws.status || ws.error || 'No diff.';
+      }
+      async function stageSelected(){
+        const nodes = Array.from(document.querySelectorAll('.ws-file')).filter(n => n.checked);
+        const files = nodes.map(n => n.getAttribute('data-file')).filter(Boolean);
+        if(files.length === 0){
+          document.getElementById('result').textContent = 'No files selected to stage.';
+          return;
+        }
+        const res = await fetch('/api/workspace/stage',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({files})
+        }).then(r=>r.json());
+        document.getElementById('result').textContent = JSON.stringify(res,null,2);
+        await refreshWorkspace();
       }
       async function post(data){
         const res = await fetch('/api/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json());
@@ -479,6 +588,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         pollAgent();
       }
       refresh();
+      refreshWorkspace();
       setInterval(refresh, 3000);
     </script>
   </body>
