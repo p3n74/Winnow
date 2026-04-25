@@ -37,6 +37,10 @@ type AgentSession = {
   args: string[];
 };
 
+type SessionStreamClient = {
+  res: ServerResponse;
+};
+
 async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
   try {
     const filePath = join(process.cwd(), logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -91,6 +95,33 @@ function maybeOpenBrowser(url: string): void {
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
   let config = { ...baseConfig };
   const sessions = new Map<string, AgentSession>();
+  const streamClients = new Map<string, Set<SessionStreamClient>>();
+
+  const pushStreamEvent = (
+    sessionId: string,
+    event: "stdout" | "stderr" | "status" | "done",
+    payload: unknown,
+  ) => {
+    const clients = streamClients.get(sessionId);
+    if (!clients || clients.size === 0) {
+      return;
+    }
+    const body = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of clients) {
+      client.res.write(body);
+    }
+  };
+
+  const closeStreamClients = (sessionId: string) => {
+    const clients = streamClients.get(sessionId);
+    if (!clients) {
+      return;
+    }
+    for (const client of clients) {
+      client.res.end();
+    }
+    streamClients.delete(sessionId);
+  };
 
   const forceCursorNativeConfig = (input: WinnowConfig): WinnowConfig => ({
     ...input,
@@ -137,10 +168,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
 
     child.stdout?.on("data", (buf: Buffer) => {
-      session.output += buf.toString("utf8");
+      const chunk = buf.toString("utf8");
+      session.output += chunk;
+      pushStreamEvent(id, "stdout", { chunk, sessionId: id });
     });
     child.stderr?.on("data", (buf: Buffer) => {
-      session.errorOutput += buf.toString("utf8");
+      const chunk = buf.toString("utf8");
+      session.errorOutput += chunk;
+      pushStreamEvent(id, "stderr", { chunk, sessionId: id });
     });
 
     child.stdin?.write(`${payload.prompt}\n`);
@@ -150,6 +185,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.exitCode = code ?? 1;
       session.status = session.exitCode === 0 ? "done" : "error";
       session.endedAt = new Date().toISOString();
+      pushStreamEvent(id, "status", {
+        status: session.status,
+        exitCode: session.exitCode,
+        endedAt: session.endedAt,
+      });
+      pushStreamEvent(id, "done", { sessionId: id });
+      closeStreamClients(id);
     });
 
     return session;
@@ -214,6 +256,53 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname.startsWith("/api/agent/") && req.method === "GET") {
+      if (url.pathname.endsWith("/stream")) {
+        const id = url.pathname.replace("/api/agent/", "").replace("/stream", "").trim();
+        const session = sessions.get(id);
+        if (!session) {
+          sendJson(res, 404, { ok: false, error: "session not found" });
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+        res.flushHeaders?.();
+
+        const client: SessionStreamClient = { res };
+        const current = streamClients.get(id) ?? new Set<SessionStreamClient>();
+        current.add(client);
+        streamClients.set(id, current);
+
+        res.write(`event: status\ndata: ${JSON.stringify({ status: session.status, sessionId: id })}\n\n`);
+        if (session.output) {
+          res.write(`event: stdout\ndata: ${JSON.stringify({ chunk: session.output, sessionId: id })}\n\n`);
+        }
+        if (session.errorOutput) {
+          res.write(`event: stderr\ndata: ${JSON.stringify({ chunk: session.errorOutput, sessionId: id })}\n\n`);
+        }
+        if (session.status !== "running") {
+          res.write(`event: done\ndata: ${JSON.stringify({ sessionId: id })}\n\n`);
+          res.end();
+          current.delete(client);
+          if (current.size === 0) {
+            streamClients.delete(id);
+          }
+          return;
+        }
+
+        req.on("close", () => {
+          const clients = streamClients.get(id);
+          if (!clients) {
+            return;
+          }
+          clients.delete(client);
+          if (clients.size === 0) {
+            streamClients.delete(id);
+          }
+        });
+        return;
+      }
       const id = url.pathname.replace("/api/agent/", "").trim();
       const session = sessions.get(id);
       if (!session) {
@@ -317,6 +406,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       async function setMode(mode){ await post({mode}); }
       let activeSessionId = null;
       let pollTimer = null;
+      let streamSource = null;
       async function pollAgent(){
         if(!activeSessionId){ return; }
         const res = await fetch('/api/agent/' + activeSessionId).then(r=>r.json());
@@ -329,6 +419,40 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           clearInterval(pollTimer);
           pollTimer = null;
         }
+      }
+      function closeStream(){
+        if(streamSource){
+          streamSource.close();
+          streamSource = null;
+        }
+      }
+      function attachStream(sessionId){
+        closeStream();
+        streamSource = new EventSource('/api/agent/' + sessionId + '/stream');
+        streamSource.addEventListener('stdout', (evt) => {
+          const data = JSON.parse(evt.data || '{}');
+          const out = document.getElementById('agentOutput');
+          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + (data.chunk || '');
+        });
+        streamSource.addEventListener('stderr', (evt) => {
+          const data = JSON.parse(evt.data || '{}');
+          const out = document.getElementById('agentOutput');
+          const prefix = out.textContent && !out.textContent.endsWith('\n') ? '\n' : '';
+          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + prefix + '[stderr]\n' + (data.chunk || '');
+        });
+        streamSource.addEventListener('status', (evt) => {
+          const data = JSON.parse(evt.data || '{}');
+          document.getElementById('agentSessionInfo').textContent = 'session=' + sessionId + ' status=' + (data.status || 'running') + (data.exitCode !== undefined ? (' exit=' + data.exitCode) : '');
+        });
+        streamSource.addEventListener('done', () => {
+          closeStream();
+          if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+          pollAgent();
+        });
+        streamSource.onerror = () => {
+          closeStream();
+          if(!pollTimer){ pollTimer = setInterval(pollAgent, 1000); }
+        };
       }
       async function startAgentRun(){
         const prompt = document.getElementById('agentPrompt').value.trim();
@@ -351,6 +475,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
         if(pollTimer){ clearInterval(pollTimer); }
         pollTimer = setInterval(pollAgent, 1000);
+        attachStream(activeSessionId);
         pollAgent();
       }
       refresh();

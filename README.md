@@ -122,6 +122,7 @@ UI capabilities:
 - Saves changes into `.winnow/profile.json`
 - Agent console that runs `cursor-agent` directly (translation disabled for runs)
 - Model preference toggle for Cursor-native selection (`auto` or `composer`)
+- Real-time agent output streaming in UI via Server-Sent Events (with polling fallback)
 
 ## Notes
 
