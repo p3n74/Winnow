@@ -684,8 +684,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         streamSource.addEventListener('stderr', (evt) => {
           const data = JSON.parse(evt.data || '{}');
           const out = document.getElementById('agentOutput');
-          const prefix = out.textContent && !out.textContent.endsWith('\n') ? '\n' : '';
-          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + prefix + '[stderr]\n' + (data.chunk || '');
+          const prefix = out.textContent && !out.textContent.endsWith('\\n') ? '\\n' : '';
+          out.textContent = (out.textContent === 'Running...' ? '' : out.textContent) + prefix + '[stderr]\\n' + (data.chunk || '');
         });
         streamSource.addEventListener('status', (evt) => {
           const data = JSON.parse(evt.data || '{}');
