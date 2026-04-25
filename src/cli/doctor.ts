@@ -44,19 +44,27 @@ export async function runDoctor(config: WinnowConfig): Promise<number> {
       hasFailure = true;
     }
   } else {
-    const deepseekCheck = await fetch(`${config.deepseekBaseUrl}/v1/models`, {
-      headers: {
-        Authorization: `Bearer ${config.deepseekApiKey}`,
-      },
-    }).then(
-      (res) => ({ ok: res.ok, status: res.status }),
-      () => ({ ok: false, status: 0 }),
-    );
-    process.stdout.write(
-      `DeepSeek backend (${config.deepseekBaseUrl}): ${deepseekCheck.ok ? "OK" : "FAIL"}\n`,
-    );
-    if (!deepseekCheck.ok) {
+    if (!config.deepseekApiKey?.trim()) {
+      process.stdout.write("DeepSeek backend: SKIP (no DEEPSEEK_API_KEY)\n");
       hasFailure = true;
+    } else {
+      const { smokeTestDeepseekChat } = await import("../translator/deepseekChat.js");
+      const smoke = await smokeTestDeepseekChat(config);
+      process.stdout.write(
+        `DeepSeek chat API (${smoke.lastUrl || config.deepseekBaseUrl}): ${smoke.ok ? "OK" : "FAIL"}${
+          smoke.error ? ` — ${smoke.error}` : ""
+        }\n`,
+      );
+      if (!smoke.ok) {
+        hasFailure = true;
+        if (smoke.attemptedUrls.length > 1) {
+          process.stdout.write(`  tried: ${smoke.attemptedUrls.join(" → ")}\n`);
+        }
+        if (smoke.lastBodySnippet) {
+          const oneLine = smoke.lastBodySnippet.replace(/\s+/g, " ").slice(0, 280);
+          process.stdout.write(`  response: ${oneLine}${smoke.lastBodySnippet.length > 280 ? "…" : ""}\n`);
+        }
+      }
     }
   }
 

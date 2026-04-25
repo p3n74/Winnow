@@ -5,6 +5,7 @@ import {
   restoreTechnicalBlocks,
   Translator,
 } from "./common.js";
+import { deepseekChatCompletionCandidates } from "./deepseekChat.js";
 import { fetchJsonWithRetry } from "./http.js";
 
 type DeepSeekRequest = {
@@ -84,26 +85,40 @@ export class DeepSeekTranslator implements Translator {
       messages: [{ role: "user", content: prompt }],
     };
 
-    const body = await fetchJsonWithRetry<DeepSeekResponse>(
-      `${this.config.deepseekBaseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.deepseekApiKey}`,
-        },
-        body: JSON.stringify(payload),
+    const init: RequestInit = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.deepseekApiKey}`,
       },
-      {
-        timeoutMs: this.config.translatorTimeoutMs,
-        retries: this.config.translatorRetries,
-      },
-    );
-    const translated = body.choices?.[0]?.message?.content?.trim();
-    if (!translated) {
-      throw new Error("DeepSeek translation returned empty content");
+      body: JSON.stringify(payload),
+    };
+
+    const urls = deepseekChatCompletionCandidates(this.config.deepseekBaseUrl);
+    let lastErr: Error | undefined;
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      try {
+        const body = await fetchJsonWithRetry<DeepSeekResponse>(url, init, {
+          timeoutMs: this.config.translatorTimeoutMs,
+          retries: this.config.translatorRetries,
+        });
+        const translated = body.choices?.[0]?.message?.content?.trim();
+        if (!translated) {
+          throw new Error("DeepSeek translation returned empty content");
+        }
+        return translated;
+      } catch (e) {
+        lastErr = e as Error;
+        const is404 = lastErr.message.includes("HTTP 404");
+        if (is404 && i < urls.length - 1) {
+          continue;
+        }
+        throw lastErr;
+      }
     }
 
-    return translated;
+    throw lastErr ?? new Error("DeepSeek request failed");
   }
 }

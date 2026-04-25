@@ -43,11 +43,12 @@ describe("OllamaTranslator", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+      text: async () => "server error",
     });
     vi.stubGlobal("fetch", fetchMock);
     const translator = new OllamaTranslator(config);
 
-    await expect(translator.translateInput("你好")).rejects.toThrow("HTTP 500");
+    await expect(translator.translateInput("你好")).rejects.toThrow(/HTTP 500/);
   });
 
   it("protects and restores technical spans", () => {
@@ -73,5 +74,32 @@ describe("DeepSeekTranslator", () => {
 
     expect(out).toBe("translated");
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("retries next URL when first returns 404", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => "not found",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const translator = new DeepSeekTranslator({
+      ...config,
+      translatorBackend: "deepseek_api",
+      translatorRetries: 0,
+    });
+    const out = await translator.translateOutput("hello");
+
+    expect(out).toBe("ok");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/chat/completions");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/v1/chat/completions");
   });
 });

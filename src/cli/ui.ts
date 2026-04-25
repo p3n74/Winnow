@@ -6,9 +6,14 @@ import { basename, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import pty from "node-pty";
-import { WinnowConfig } from "../config/schema.js";
+import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
-import { saveProjectProfile } from "../config/projectProfile.js";
+import {
+  applyProjectProfile,
+  loadProjectProfile,
+  saveProjectProfile,
+} from "../config/projectProfile.js";
+import { loadDotenvFromDisk, readDotenvFile, WINNOW_DOTENV_SPECS, writeDotenvFileFull } from "../config/dotenvFile.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
 import { listProjects, registerProject } from "../config/projects.js";
 import {
@@ -33,6 +38,9 @@ import {
   listCursorSessions,
   SessionSummary,
 } from "../cursor/sessionUtils.js";
+import { chunkBySentence } from "../pipeline/session.js";
+import { createTranslator } from "../translator/factory.js";
+import { DeepSeekTranslator } from "../translator/deepseekTranslator.js";
 
 type UiOptions = {
   port: number;
@@ -66,6 +74,8 @@ type AgentStartRequest = {
   modelPreference?: "default" | "auto" | "composer";
   autonomyMode?: boolean;
   sessionId?: string;
+  /** When true: user text is Chinese → translate to English for cursor-agent; assistant stream → Chinese. */
+  chineseMode?: boolean;
 };
 
 type AgentEvent = {
@@ -73,6 +83,8 @@ type AgentEvent = {
   ts: string;
   kind: "user" | "assistant" | "stderr" | "status" | "tool" | "system";
   content: string;
+  /** English model text before output translation (Chinese mode). */
+  sourceEn?: string;
 };
 
 type AgentSession = {
@@ -108,6 +120,7 @@ type SessionMessage = {
   role: string;
   content: string;
   timestamp?: string;
+  sourceEn?: string;
 };
 
 type LocalSessionIndexEntry = {
@@ -816,6 +829,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         role: event.kind,
         content: event.content,
         timestamp: event.ts,
+        sourceEn: event.sourceEn,
       }));
       return { id, messages };
     }
@@ -1055,8 +1069,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return next;
   };
 
-  const startAgentSession = (payload: AgentStartRequest): AgentSession => {
+  const startAgentSession = async (
+    payload: AgentStartRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<AgentSession> => {
+    const signal = opts?.signal;
     const nativeConfig = forceCursorNativeConfig(config);
+    const cursorExe = (nativeConfig.cursorCommand || "").trim() || "cursor-agent";
     const id = (payload.sessionId || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const baseArgs = parseArgs(payload.args ?? "");
     const autonomyEnabled = payload.autonomyMode !== false;
@@ -1074,7 +1093,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         status: "running",
         endedAt: undefined,
         error: undefined,
-        command: nativeConfig.cursorCommand,
+        command: cursorExe,
         args,
         startedAt: existing.startedAt || new Date().toISOString(),
         events: existing.events ?? [],
@@ -1104,7 +1123,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         startedAt: diskStartedAt,
         output: diskOutput,
         errorOutput: diskErrorOutput,
-        command: nativeConfig.cursorCommand,
+        command: cursorExe,
         args,
         events: diskEvents,
       };
@@ -1114,6 +1133,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
     const prompt = payload.prompt;
+    const chineseMode = payload.chineseMode === true;
+    const translateConfig: WinnowConfig = {
+      ...config,
+      inputMode: chineseMode ? "zh_to_en" : "off",
+      outputMode: chineseMode ? "en_to_zh" : "off",
+      showOriginal: false,
+      dualOutput: false,
+    };
+    const translator = chineseMode ? createTranslator(translateConfig) : null;
 
     const persistRecord = () =>
       writeLocalSessionRecord({
@@ -1130,12 +1158,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         events: session.events,
       });
 
-    const pushEvent = (kind: AgentEvent["kind"], content: string) => {
+    const pushEvent = (kind: AgentEvent["kind"], content: string, meta?: { sourceEn?: string }) => {
       const event: AgentEvent = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: new Date().toISOString(),
         kind,
         content,
+        ...(meta?.sourceEn ? { sourceEn: meta.sourceEn } : {}),
       };
       session.events.push(event);
       if (session.events.length > 2000) {
@@ -1144,7 +1173,42 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       pushStreamEvent(id, "timeline", { sessionId: id, event });
     };
 
+    const abortOrThrow = (): void => {
+      if (!signal?.aborted) {
+        return;
+      }
+      session.status = "error";
+      session.error = "Start cancelled";
+      session.endedAt = new Date().toISOString();
+      pushEvent("status", "Start cancelled.");
+      void persistRecord();
+      finalizeRun(id, "error", null, session.endedAt);
+      void upsertLocalSessionIndex({
+        id,
+        startedAt,
+        updatedAt: session.endedAt,
+        status: "error",
+        preview: prompt.slice(0, 160),
+        source: "winnow-local",
+      });
+      closeStreamClients(id);
+      sessions.delete(id);
+      throw new DOMException("Start cancelled", "AbortError");
+    };
+
     pushEvent("user", prompt);
+
+    let promptForCursor = prompt;
+    if (translator) {
+      abortOrThrow();
+      try {
+        promptForCursor = await translator.translateInput(prompt);
+      } catch (err) {
+        pushEvent("system", `Input translation failed; using original text. ${(err as Error).message}`);
+        promptForCursor = prompt;
+      }
+      abortOrThrow();
+    }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
     void persistRecord();
@@ -1168,7 +1232,38 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       promptPreview: prompt,
     });
 
-    const child = spawn(nativeConfig.cursorCommand, args, {
+    abortOrThrow();
+
+    let assistantOutBuffer = "";
+    let assistantZhChain: Promise<void> = Promise.resolve();
+
+    const flushAssistantTranslation = () => {
+      if (!translator) {
+        return;
+      }
+      const pieces = chunkBySentence(assistantOutBuffer);
+      if (pieces.length > 1) {
+        for (let i = 0; i < pieces.length - 1; i++) {
+          const slice = pieces[i];
+          assistantZhChain = assistantZhChain.then(async () => {
+            try {
+              const zh = await translator.translateOutput(slice);
+              session.output += zh;
+              pushEvent("assistant", zh, { sourceEn: slice });
+            } catch {
+              session.output += slice;
+              pushEvent("assistant", slice);
+            }
+            void persistRecord();
+          });
+        }
+        assistantOutBuffer = pieces[pieces.length - 1];
+      }
+    };
+
+    abortOrThrow();
+
+    const child = spawn(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: uiWorkspace.dir,
       env: process.env,
@@ -1197,16 +1292,21 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             // Only process partial stream chunks to avoid double-printing full collapsed blocks
             if (!data.model_call_id) {
               const text = data.message.content.map((c: any) => c.text).join("");
-              session.output += text;
-              pushEvent("assistant", text);
+              if (translator) {
+                assistantOutBuffer += text;
+                flushAssistantTranslation();
+              } else {
+                session.output += text;
+                pushEvent("assistant", text);
+              }
             }
           } else if (data.type === "tool_call") {
             const toolType = Object.keys(data.tool_call || {})[0] || "tool";
             const toolData = (data.tool_call || {})[toolType] || {};
-            
+
             let action = toolType.replace("ToolCall", "");
             let target = "";
-            
+
             if (toolData.args?.path) {
               target = toolData.args.path.split("/").pop() || toolData.args.path;
             } else if (toolData.args?.command) {
@@ -1219,10 +1319,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
             const prefix = data.subtype === "started" ? "▶" : "✓";
             pushEvent("tool", `${prefix} ${action} ${target}`.trim());
-            
+
             if (data.subtype === "completed") {
-              // Add a newline to output to space out blocks after tool use
-              session.output += "\n";
+              if (translator) {
+                assistantZhChain = assistantZhChain.then(async () => {
+                  session.output += "\n";
+                  void persistRecord();
+                });
+              } else {
+                session.output += "\n";
+              }
             }
           } else if (data.type === "result") {
             if (data.subtype === "success") {
@@ -1239,10 +1345,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               pushEvent("status", `Result: ${data.subtype}`);
             }
           }
-        } catch (e) {
-          // If it fails to parse (e.g. not using stream-json for some reason), fallback to raw text
-          session.output += line + "\n";
-          pushEvent("assistant", line + "\n");
+        } catch {
+          if (translator) {
+            assistantOutBuffer += `${line}\n`;
+            flushAssistantTranslation();
+          } else {
+            session.output += `${line}\n`;
+            pushEvent("assistant", `${line}\n`);
+          }
         }
       }
       void persistRecord();
@@ -1254,32 +1364,57 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       void persistRecord();
     });
 
-    child.stdin?.write(`${prompt}\n`);
+    child.stdin?.write(`${promptForCursor}\n`);
     child.stdin?.end();
 
     child.on("close", (code: number | null) => {
-      session.exitCode = code ?? 1;
-      session.status = session.exitCode === 0 ? "done" : "error";
-      session.endedAt = new Date().toISOString();
-      const msg = session.exitCode === 0 ? "✨ Session closed successfully." : `❌ Session ended with error (exit code: ${session.exitCode})`;
-      pushEvent("status", msg);
-      void persistRecord();
-      finalizeRun(id, session.status, session.exitCode ?? null, session.endedAt);
-      void upsertLocalSessionIndex({
-        id,
-        startedAt,
-        updatedAt: session.endedAt,
-        status: session.status,
-        preview: (session.output || prompt).slice(0, 160),
-        source: "winnow-local",
-      });
-      pushStreamEvent(id, "status", {
-        status: session.status,
-        exitCode: session.exitCode,
-        endedAt: session.endedAt,
-      });
-      pushStreamEvent(id, "done", { sessionId: id });
-      closeStreamClients(id);
+      void (async () => {
+        if (translator && assistantOutBuffer.trim()) {
+          assistantZhChain = assistantZhChain.then(async () => {
+            try {
+              const zh = await translator.translateOutput(assistantOutBuffer);
+              session.output += zh;
+              pushEvent("assistant", zh, { sourceEn: assistantOutBuffer });
+            } catch {
+              session.output += assistantOutBuffer;
+              pushEvent("assistant", assistantOutBuffer);
+            }
+            assistantOutBuffer = "";
+            void persistRecord();
+          });
+        }
+        try {
+          await assistantZhChain;
+        } catch {
+          // ignore translation chain errors
+        }
+
+        session.exitCode = code ?? 1;
+        session.status = session.exitCode === 0 ? "done" : "error";
+        session.endedAt = new Date().toISOString();
+        const msg =
+          session.exitCode === 0
+            ? "✨ Session closed successfully."
+            : `❌ Session ended with error (exit code: ${session.exitCode})`;
+        pushEvent("status", msg);
+        void persistRecord();
+        finalizeRun(id, session.status, session.exitCode ?? null, session.endedAt);
+        void upsertLocalSessionIndex({
+          id,
+          startedAt,
+          updatedAt: session.endedAt,
+          status: session.status,
+          preview: (session.output || prompt).slice(0, 160),
+          source: "winnow-local",
+        });
+        pushStreamEvent(id, "status", {
+          status: session.status,
+          exitCode: session.exitCode,
+          endedAt: session.endedAt,
+        });
+        pushStreamEvent(id, "done", { sessionId: id });
+        closeStreamClients(id);
+      })();
     });
 
     return session;
@@ -1504,6 +1639,60 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/env" && req.method === "GET") {
+      try {
+        const fileRecord = readDotenvFile(winnowLaunchRoot);
+        const entries = WINNOW_DOTENV_SPECS.map((spec) => {
+          const fromProc = process.env[spec.key];
+          const fromFile = fileRecord[spec.key];
+          const effective = String(fromProc ?? fromFile ?? "");
+          const hasValue = effective.trim().length > 0;
+          return {
+            key: spec.key,
+            description: spec.description,
+            sensitive: Boolean(spec.sensitive),
+            value: spec.sensitive ? "" : effective,
+            hasValue,
+          };
+        });
+        sendJson(res, 200, { ok: true, entries });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/env" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { values?: Record<string, string> };
+        const incoming = body.values ?? {};
+        const prev = readDotenvFile(winnowLaunchRoot);
+        const merged: Record<string, string> = { ...prev };
+        for (const spec of WINNOW_DOTENV_SPECS) {
+          if (!(spec.key in incoming)) {
+            continue;
+          }
+          const v = incoming[spec.key];
+          if (v === undefined) {
+            continue;
+          }
+          if (spec.sensitive && String(v).trim() === "") {
+            continue;
+          }
+          merged[spec.key] = String(v);
+        }
+        writeDotenvFileFull(winnowLaunchRoot, merged);
+        loadDotenvFromDisk(winnowLaunchRoot, { override: true });
+        const fromEnv = loadConfigFromEnv();
+        const profile = await loadProjectProfile();
+        config = applyProjectProfile(fromEnv, profile);
+        sendJson(res, 200, { ok: true, message: "Saved .env and reloaded configuration in this process." });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/profile" && req.method === "POST") {
       try {
         const payload = (await readJsonBody(req)) as ProfileUpdateRequest;
@@ -1571,17 +1760,153 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/translate/deepseek-smoke" && req.method === "GET") {
+      try {
+        const { smokeTestDeepseekChat } = await import("../translator/deepseekChat.js");
+        const r = await smokeTestDeepseekChat(config);
+        sendJson(res, 200, {
+          ok: r.ok,
+          attemptedUrls: r.attemptedUrls,
+          lastUrl: r.lastUrl,
+          lastStatus: r.lastStatus,
+          lastBodySnippet: r.lastBodySnippet,
+          error: r.error,
+        });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/translate/prompt-to-english" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { text?: string };
+        const text = (body.text ?? "").trim();
+        if (!text) {
+          sendJson(res, 400, { ok: false, error: "text is required" });
+          return;
+        }
+        if (!config.deepseekApiKey?.trim()) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "DeepSeek API key not configured. Set DEEPSEEK_API_KEY or add it in Settings.",
+          });
+          return;
+        }
+        const dsConfig: WinnowConfig = {
+          ...config,
+          translatorBackend: "deepseek_api",
+          inputMode: "zh_to_en",
+          outputMode: "off",
+          showOriginal: false,
+          dualOutput: false,
+        };
+        const deepseek = new DeepSeekTranslator(dsConfig);
+        const english = await deepseek.translateInput(text);
+        sendJson(res, 200, { ok: true, english });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/translate/zh-to-english" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { text?: string };
+        const text = (body.text ?? "").trim();
+        if (!text) {
+          sendJson(res, 400, { ok: false, error: "text is required" });
+          return;
+        }
+        if (!config.deepseekApiKey?.trim()) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "DeepSeek API key not configured. Set DEEPSEEK_API_KEY or add it in Settings.",
+          });
+          return;
+        }
+        const dsConfig: WinnowConfig = {
+          ...config,
+          translatorBackend: "deepseek_api",
+          inputMode: "zh_to_en",
+          outputMode: "off",
+          showOriginal: false,
+          dualOutput: false,
+        };
+        const deepseek = new DeepSeekTranslator(dsConfig);
+        const english = await deepseek.translateInput(text);
+        sendJson(res, 200, { ok: true, english });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/translate/en-to-chinese" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { text?: string };
+        const text = (body.text ?? "").trim();
+        if (!text) {
+          sendJson(res, 400, { ok: false, error: "text is required" });
+          return;
+        }
+        if (!config.deepseekApiKey?.trim()) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "DeepSeek API key not configured. Set DEEPSEEK_API_KEY or add it in Settings.",
+          });
+          return;
+        }
+        const dsConfig: WinnowConfig = {
+          ...config,
+          translatorBackend: "deepseek_api",
+          inputMode: "off",
+          outputMode: "en_to_zh",
+          showOriginal: false,
+          dualOutput: false,
+        };
+        const deepseek = new DeepSeekTranslator(dsConfig);
+        const chinese = await deepseek.translateOutput(text);
+        sendJson(res, 200, { ok: true, chinese });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/agent/start" && req.method === "POST") {
+      const abortFromDisconnect = new AbortController();
+      // Do not use req "close" — it fires when the *incoming* request stream ends (e.g. after the
+      // POST body is read), which aborts immediately. Use response "close" only before any reply
+      // is sent, i.e. the client actually disconnected while waiting.
+      const onClientGone = (): void => {
+        if (!res.headersSent) {
+          abortFromDisconnect.abort();
+        }
+      };
+      res.on("close", onClientGone);
       try {
         const payload = (await readJsonBody(req)) as AgentStartRequest;
         if (!payload.prompt?.trim()) {
           sendJson(res, 400, { ok: false, error: "prompt is required" });
           return;
         }
-        const session = startAgentSession(payload);
+        const session = await startAgentSession(payload, { signal: abortFromDisconnect.signal });
         sendJson(res, 200, { ok: true, sessionId: session.id });
       } catch (error) {
+        const aborted =
+          error instanceof DOMException && error.name === "AbortError"
+            ? true
+            : (error as Error)?.name === "AbortError";
+        if (aborted) {
+          if (!res.headersSent) {
+            sendJson(res, 499, { ok: false, error: "cancelled" });
+          }
+          return;
+        }
         sendJson(res, 400, { ok: false, error: (error as Error).message });
+      } finally {
+        res.removeListener("close", onClientGone);
       }
       return;
     }
@@ -1868,6 +2193,108 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         font-size: 11px;
         font-family: var(--font-mono);
       }
+      button.secondary {
+        background: var(--panel2);
+        border-color: var(--line);
+        color: var(--text-neon);
+        font-weight: 600;
+      }
+      button.secondary:hover {
+        border-color: var(--accent);
+        color: var(--text-strong);
+      }
+      .agent-zh-prompt-row {
+        display: none;
+        margin-top: 8px;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 8px;
+      }
+      .agent-zh-prompt-row.is-visible {
+        display: flex;
+      }
+      .env-fields .env-row {
+        margin-bottom: 12px;
+      }
+      .env-fields label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .env-fields input {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .winnow-modal-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 20000;
+        background: rgba(0, 0, 0, 0.72);
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      .winnow-modal-backdrop.is-open {
+        display: flex;
+      }
+      .winnow-modal {
+        width: min(640px, 100%);
+        max-height: min(85vh, 760px);
+        display: flex;
+        flex-direction: column;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
+        padding: 16px;
+        gap: 10px;
+      }
+      .winnow-modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+      .winnow-modal-head span {
+        font-weight: 700;
+        color: var(--text-neon);
+        font-size: 14px;
+      }
+      .winnow-modal-sub {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        font-style: italic;
+      }
+      .winnow-modal-body {
+        flex: 1;
+        min-height: 100px;
+        max-height: min(52vh, 480px);
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text);
+        white-space: pre-wrap;
+        line-height: 1.45;
+      }
+      .winnow-modal-err {
+        display: none;
+        margin: 0;
+        color: var(--red-neon);
+        font-size: 12px;
+      }
+      .winnow-modal-err.is-visible {
+        display: block;
+      }
       .statusBadge {
         display: inline-flex;
         align-items: center;
@@ -2065,6 +2492,47 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       .chatMsg:last-child { margin-bottom: 0; }
       .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-style: italic; }
       .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: var(--text); }
+      .chatEnPreview {
+        white-space: pre-wrap;
+        font-size: 12px;
+        font-family: var(--font-mono);
+        line-height: 1.45;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+        margin-top: 8px;
+      }
+      .chatPreviewEnBtn { margin-top: 0; font-size: 11px; padding: 4px 10px; }
+      @keyframes winnow-spin {
+        to { transform: rotate(360deg); }
+      }
+      .agent-run-wrap {
+        position: relative;
+        display: inline-flex;
+        vertical-align: middle;
+      }
+      .agent-run-overlay-spinner {
+        display: none;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        margin: -9px 0 0 -9px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: winnow-spin 0.7s linear infinite;
+        pointer-events: none;
+      }
+      .agent-run-wrap.is-busy .agent-run-overlay-spinner {
+        display: block;
+      }
+      .agent-run-wrap.is-busy > button[data-agent-run] {
+        opacity: 0.45;
+      }
+      .agent-run-cancel-btn {
+        margin-left: 6px;
+      }
       .usageToolbar { margin-top: 4px; }
       .usageToolbar select { max-width: 100%; width: 100%; min-width: 0; }
       .body.dashboard-mode .usageToolbar {
@@ -2411,6 +2879,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             </div>
             <pre id="sessionPreview">No session selected.</pre>
           </div>
+          <div class="panel settings-only flex-panel" style="display:none">
+            <div class="title">Environment (.env)</div>
+            <p class="hint">
+              Loads <code>.env</code> from the project directory when Winnow starts (shell variables still win if both are set).
+              Saving rewrites <code>.env</code> and reloads config in this server process. Use
+              <code>DEEPSEEK_API_KEY</code> — the typo <code>DEEP_SEEK_API_KEY</code> is read as a fallback only.
+            </p>
+            <div id="envFields" class="env-fields"></div>
+            <div class="row small" style="margin-top:12px">
+              <button type="button" id="btnSaveEnv">Save .env</button>
+              <button type="button" class="secondary" id="btnReloadEnv">Reload form</button>
+            </div>
+            <pre id="envSaveHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
+          </div>
         </div>
         <div class="rightCol">
           <div class="panel">
@@ -2422,11 +2904,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
                 <option value="auto">auto</option>
                 <option value="composer">composer</option>
               </select>
+              <label for="agentLanguageMode">Language</label>
+              <select id="agentLanguageMode" title="中文：Composer 用中文；发给 Cursor 前译为英文；助手输出译为中文">
+                <option value="en">English</option>
+                <option value="zh">中文 (translate)</option>
+              </select>
               <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
               <label><input id="continueMode" type="checkbox" /> continue session</label>
               <label>Cursor Args</label>
               <input id="agentArgs" style="width:55%" placeholder="optional args passed to cursor-agent" />
-              <button onclick="startAgentRun()">Run Agent</button>
+              <span class="agent-run-wrap" id="agentRunWrap">
+                <button type="button" id="btnAgentRun" data-agent-run="1" onclick="startAgentRun()">Run Agent</button>
+                <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
+              </span>
+              <button type="button" id="btnAgentStartCancel" class="secondary agent-run-cancel-btn" onclick="cancelAgentStart()" style="display:none">Cancel</button>
               <span class="kbd">Ctrl/Cmd+Enter</span>
             </div>
             <div class="row small">
@@ -2456,8 +2947,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             <div class="small muted">Chat history</div>
             <div id="chatHistory"></div>
             <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
+            <div id="agentZhPromptRow" class="agent-zh-prompt-row">
+              <button type="button" class="secondary" id="btnPreviewEnglishPrompt">Preview English (DeepSeek)</button>
+            </div>
           </div>
         </div>
+      </div>
+    </div>
+    <div id="translatePreviewBackdrop" class="winnow-modal-backdrop" aria-hidden="true">
+      <div class="winnow-modal" role="dialog" aria-modal="true" aria-labelledby="translatePreviewTitle">
+        <div class="winnow-modal-head">
+          <span id="translatePreviewTitle">English preview (DeepSeek)</span>
+          <button type="button" id="translatePreviewClose">Close</button>
+        </div>
+        <p id="translatePreviewSub" class="winnow-modal-sub">Technical English Winnow sends to Cursor — same translation path as Run when Language is 中文.</p>
+        <pre id="translatePreviewBody" class="winnow-modal-body"></pre>
+        <p id="translatePreviewError" class="winnow-modal-err"></p>
       </div>
     </div>
     <div id="mainGridDock" class="main-grid-dock" aria-hidden="true">
@@ -3118,6 +3623,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       async function saveGlossary(){ await post({glossary:document.getElementById('glossary').value}); }
       async function setMode(mode){ await post({mode}); }
       let activeSessionId = null;
+      let agentStartAbort = null;
       let pollTimer = null;
       let streamSource = null;
       let selectedSyncedSession = null;
@@ -3133,6 +3639,218 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
+      const assistantEnCache = new Map();
+      const assistantEnInflight = new Map();
+      const assistantZhCache = new Map();
+      const assistantZhInflight = new Map();
+      function isAgentZhMode(){
+        const sel = document.getElementById('agentLanguageMode');
+        return !!(sel && sel.value === 'zh');
+      }
+      function truncateEnPreview(s, maxLen){
+        const t = String(s || '').trim();
+        if(!t){ return ''; }
+        if(t.length <= maxLen){ return t; }
+        return t.slice(0, maxLen) + '…';
+      }
+      function assistantCacheKey(evId, zhText){
+        if(evId){ return String(evId); }
+        return 'zt:' + String((zhText || '').length) + ':' + String(zhText || '').slice(0, 64);
+      }
+      async function fetchZhToEnglish(zhText){
+        const res = await fetch(withToken('/api/translate/zh-to-english'),{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ text: zhText }),
+        }).then((r) => r.json());
+        if(!res.ok){
+          throw new Error(res.error || JSON.stringify(res));
+        }
+        return res.english || '';
+      }
+      async function resolveAssistantEnglish(key, zhText){
+        if(assistantEnCache.has(key)){
+          return assistantEnCache.get(key);
+        }
+        let p = assistantEnInflight.get(key);
+        if(!p){
+          p = (async () => {
+            try {
+              const en = await fetchZhToEnglish(zhText);
+              assistantEnCache.set(key, en);
+              return en;
+            } finally {
+              assistantEnInflight.delete(key);
+            }
+          })();
+          assistantEnInflight.set(key, p);
+        }
+        return p;
+      }
+      async function fetchEnToChinese(enText){
+        const res = await fetch(withToken('/api/translate/en-to-chinese'),{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ text: enText }),
+        }).then((r) => r.json());
+        if(!res.ok){
+          throw new Error(res.error || JSON.stringify(res));
+        }
+        return res.chinese || '';
+      }
+      async function resolveAssistantChinese(key, enText){
+        if(assistantZhCache.has(key)){
+          return assistantZhCache.get(key);
+        }
+        let p = assistantZhInflight.get(key);
+        if(!p){
+          p = (async () => {
+            try {
+              const zh = await fetchEnToChinese(enText);
+              assistantZhCache.set(key, zh);
+              return zh;
+            } finally {
+              assistantZhInflight.delete(key);
+            }
+          })();
+          assistantZhInflight.set(key, p);
+        }
+        return p;
+      }
+      function setAssistantBubbleEnglishPreview(msgEl, englishFull){
+        const prevEl = msgEl.querySelector('.chatEnPreview');
+        if(!prevEl){ return; }
+        const t = String(englishFull || '').trim();
+        if(!t){
+          prevEl.textContent = '';
+          prevEl.style.display = 'none';
+          return;
+        }
+        prevEl.style.display = 'block';
+        prevEl.textContent = 'EN: ' + truncateEnPreview(t, 160);
+      }
+      function setAssistantBubbleZhPreview(msgEl, zhFull){
+        const prevEl = msgEl.querySelector('.chatEnPreview');
+        if(!prevEl){ return; }
+        const t = String(zhFull || '').trim();
+        if(!t){
+          prevEl.textContent = '';
+          prevEl.style.display = 'none';
+          return;
+        }
+        prevEl.style.display = 'block';
+        prevEl.textContent = '中文: ' + truncateEnPreview(t, 160);
+      }
+      function appendAssistantTranslateBubble(ev){
+        const root = document.getElementById('chatHistory');
+        if(!root || !ev){ return; }
+        const zhMode = isAgentZhMode();
+        const primary = ev.content || '';
+        const evId = ev.id || '';
+        const sourceEn = ev.sourceEn;
+        const cacheKey = assistantCacheKey(evId, primary);
+
+        const msg = document.createElement('div');
+        msg.className = 'chatMsg chatMsg-assistant-translate';
+        msg.dataset.eventId = cacheKey;
+        msg.dataset.assistantText = primary;
+
+        const roleEl = document.createElement('div');
+        roleEl.className = 'chatRole';
+        roleEl.textContent = 'assistant';
+
+        const textEl = document.createElement('div');
+        textEl.className = 'chatText';
+        textEl.textContent = primary;
+
+        const altPrev = document.createElement('div');
+        altPrev.className = 'chatEnPreview small muted';
+        altPrev.style.display = 'none';
+        altPrev.textContent = '';
+
+        const btnRow = document.createElement('div');
+        btnRow.style.marginTop = '8px';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'secondary chatPreviewEnBtn';
+        btn.textContent = zhMode ? 'Preview English' : 'View translation';
+        btn.addEventListener('click', () => {
+          if(zhMode){
+            void openAssistantEnglishModal(msg, evId, primary, sourceEn);
+          } else {
+            void openAssistantChineseModal(msg, evId, primary);
+          }
+        });
+        btnRow.appendChild(btn);
+
+        msg.appendChild(roleEl);
+        msg.appendChild(textEl);
+        msg.appendChild(altPrev);
+        msg.appendChild(btnRow);
+        root.appendChild(msg);
+        root.scrollTop = root.scrollHeight;
+      }
+      async function openAssistantEnglishModal(msgEl, evId, zhText, sourceEn){
+        const backdrop = document.getElementById('translatePreviewBackdrop');
+        const titleEl = document.getElementById('translatePreviewTitle');
+        const subEl = document.getElementById('translatePreviewSub');
+        const bodyEl = document.getElementById('translatePreviewBody');
+        const errEl = document.getElementById('translatePreviewError');
+        if(!backdrop || !bodyEl || !errEl){ return; }
+        if(titleEl){ titleEl.textContent = 'English (assistant reply)'; }
+        if(subEl){ subEl.textContent = 'Technical English corresponding to this assistant message (DeepSeek).'; }
+        errEl.classList.remove('is-visible');
+        errEl.textContent = '';
+        const key = assistantCacheKey(evId, zhText);
+        let english = (sourceEn && String(sourceEn).trim()) || assistantEnCache.get(key) || '';
+        bodyEl.textContent = english || 'Translating…';
+        backdrop.classList.add('is-open');
+        backdrop.setAttribute('aria-hidden','false');
+        if(english){
+          assistantEnCache.set(key, english);
+          if(msgEl){ setAssistantBubbleEnglishPreview(msgEl, english); }
+          return;
+        }
+        try {
+          english = await resolveAssistantEnglish(key, zhText);
+          bodyEl.textContent = english;
+          if(msgEl){ setAssistantBubbleEnglishPreview(msgEl, english); }
+        } catch(err){
+          errEl.textContent = (err && err.message) ? err.message : String(err);
+          errEl.classList.add('is-visible');
+          bodyEl.textContent = '';
+        }
+      }
+      async function openAssistantChineseModal(msgEl, evId, enText){
+        const backdrop = document.getElementById('translatePreviewBackdrop');
+        const titleEl = document.getElementById('translatePreviewTitle');
+        const subEl = document.getElementById('translatePreviewSub');
+        const bodyEl = document.getElementById('translatePreviewBody');
+        const errEl = document.getElementById('translatePreviewError');
+        if(!backdrop || !bodyEl || !errEl){ return; }
+        if(titleEl){ titleEl.textContent = '中文翻译 (助手回复)'; }
+        if(subEl){ subEl.textContent = '简体中文工程向翻译，与流式输出 en→zh 使用相同的 DeepSeek 路径。'; }
+        errEl.classList.remove('is-visible');
+        errEl.textContent = '';
+        const key = assistantCacheKey(evId, enText);
+        let chinese = assistantZhCache.get(key) || '';
+        bodyEl.textContent = chinese || 'Translating…';
+        backdrop.classList.add('is-open');
+        backdrop.setAttribute('aria-hidden','false');
+        if(chinese){
+          if(msgEl){ setAssistantBubbleZhPreview(msgEl, chinese); }
+          return;
+        }
+        try {
+          chinese = await resolveAssistantChinese(key, enText);
+          bodyEl.textContent = chinese;
+          if(msgEl){ setAssistantBubbleZhPreview(msgEl, chinese); }
+        } catch(err){
+          errEl.textContent = (err && err.message) ? err.message : String(err);
+          errEl.classList.add('is-visible');
+          bodyEl.textContent = '';
+        }
+      }
       function estimateTokens(chars){
         return Math.max(0, Math.ceil(chars / 4));
       }
@@ -3185,6 +3903,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const root = document.getElementById('chatHistory');
         if(root){ root.innerHTML = ''; }
         seenTimelineIds.clear();
+        assistantEnCache.clear();
+        assistantEnInflight.clear();
+        assistantZhCache.clear();
+        assistantZhInflight.clear();
       }
       function appendFromTimelineEvent(ev){
         if(!ev || !ev.id){ return; }
@@ -3201,7 +3923,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if(kind === 'user'){ lane = 'user'; }
         else if(kind === 'assistant'){ lane = 'assistant'; }
         else if(kind === 'stderr'){ lane = 'stderr'; }
-        
+
+        if(kind === 'assistant'){
+          appendAssistantTranslateBubble(ev);
+          agentMetrics.outputChars += (ev.content || '').length;
+          agentMetrics.chunkCount += 1;
+          refreshMetrics();
+          return;
+        }
+
         appendChat(lane, ev.content || '');
         if(kind === 'assistant' || kind === 'stderr'){
           agentMetrics.outputChars += (ev.content || '').length;
@@ -3229,6 +3959,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             lane = 'user';
           } else if(role === 'stderr' || role.includes('stderr') || role.includes('error')){
             lane = 'stderr';
+          }
+
+          if(lane === 'assistant'){
+            appendAssistantTranslateBubble({
+              id: msg.id,
+              content: msg.content || '',
+              sourceEn: msg.sourceEn,
+            });
+            continue;
           }
 
           appendChat(lane, msg.content || '');
@@ -3283,6 +4022,69 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         lastTraceAtMs = Date.now();
       }
 
+      async function refreshEnvEditor(){
+        const root = document.getElementById('envFields');
+        const hint = document.getElementById('envSaveHint');
+        if(!root){ return; }
+        root.innerHTML = 'Loading…';
+        if(hint){ hint.textContent = ''; }
+        try {
+          const data = await fetch(withToken('/api/env')).then((r) => r.json());
+          if(!data.ok){
+            root.textContent = data.error || 'Failed to load env';
+            return;
+          }
+          root.innerHTML = '';
+          for(const e of data.entries || []){
+            const row = document.createElement('div');
+            row.className = 'env-row';
+            const lab = document.createElement('label');
+            lab.setAttribute('for', 'env_' + e.key);
+            lab.textContent = e.key + (e.description ? ' — ' + e.description : '');
+            const inp = document.createElement('input');
+            inp.id = 'env_' + e.key;
+            inp.dataset.envKey = e.key;
+            inp.autocomplete = 'off';
+            if(e.sensitive){
+              inp.type = 'password';
+              inp.placeholder = e.hasValue ? 'Leave blank to keep existing value' : 'Paste API key';
+              inp.value = '';
+            } else {
+              inp.type = 'text';
+              inp.value = e.value || '';
+            }
+            row.appendChild(lab);
+            row.appendChild(inp);
+            root.appendChild(row);
+          }
+        } catch(err){
+          root.textContent = (err && err.message) ? err.message : String(err);
+        }
+      }
+
+      async function saveEnvFromForm(){
+        const hint = document.getElementById('envSaveHint');
+        const values = {};
+        document.querySelectorAll('#envFields input[data-env-key]').forEach((inp) => {
+          values[inp.dataset.envKey] = inp.value;
+        });
+        try {
+          const res = await fetch(withToken('/api/env'),{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ values }),
+          }).then((r) => r.json());
+          if(!res.ok){
+            if(hint){ hint.textContent = res.error || JSON.stringify(res); }
+            return;
+          }
+          if(hint){ hint.textContent = res.message || 'Saved.'; }
+          await refreshEnvEditor();
+        } catch(err){
+          if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
+        }
+      }
+
       function setView(view){
         if(usageRefreshTimer){
           clearInterval(usageRefreshTimer);
@@ -3305,11 +4107,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         
         const dashboardOnly = document.querySelectorAll('.dashboard-only');
         const agentOnly = document.querySelectorAll('.agent-only');
+        const settingsOnly = document.querySelectorAll('.settings-only');
 
         if (view === 'os') {
           // Dashboard mode should only render dashboard panels.
           allPanels.forEach((el) => el.style.display = 'none');
           dashboardOnly.forEach(el => el.style.display = '');
+          settingsOnly.forEach(el => el.style.display = 'none');
           rightCol.style.display = 'none';
           body.classList.add('single');
           body.classList.add('dashboard-mode');
@@ -3322,11 +4126,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         } else if (view === 'agent') {
           dashboardOnly.forEach(el => el.style.display = 'none');
           agentOnly.forEach(el => el.style.display = '');
+          settingsOnly.forEach(el => el.style.display = 'none');
         } else if(view === 'settings'){
           body.classList.add('single');
           rightCol.style.display = 'none';
           dashboardOnly.forEach(el => el.style.display = 'none');
           agentOnly.forEach(el => el.style.display = 'none');
+          settingsOnly.forEach(el => el.style.display = '');
+          void refreshEnvEditor();
         }
       }
       if(EMBED_MODE){
@@ -3420,10 +4227,27 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           if(!pollTimer){ pollTimer = setInterval(pollAgent, 1000); }
         };
       }
+      function setAgentStartUiBusy(busy){
+        document.querySelectorAll('[data-agent-run]').forEach((b) => { b.disabled = busy; });
+        document.querySelectorAll('.agent-run-wrap').forEach((w) => { w.classList.toggle('is-busy', busy); });
+        const cancelBtn = document.getElementById('btnAgentStartCancel');
+        if(cancelBtn){
+          cancelBtn.style.display = busy ? 'inline-block' : 'none';
+        }
+      }
+      function cancelAgentStart(){
+        if(agentStartAbort){
+          agentStartAbort.abort();
+        }
+      }
       async function startAgentRun(){
         const prompt = document.getElementById('agentPrompt').value.trim();
         if(!prompt){
           appendChat('system', 'Prompt is required.');
+          return;
+        }
+        const busyGate = document.querySelector('[data-agent-run]');
+        if(busyGate && busyGate.disabled){
           return;
         }
         const continueMode = document.getElementById('continueMode').checked;
@@ -3435,14 +4259,39 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const effectiveArgs = resumeSessionId
           ? (cleanedArgs ? cleanedArgs + ' --resume ' + resumeSessionId : '--resume ' + resumeSessionId)
           : cleanedArgs;
+        const langEl = document.getElementById('agentLanguageMode');
+        const chineseMode = !!(langEl && langEl.value === 'zh');
         const payload = {
           prompt,
           args: effectiveArgs,
           modelPreference: document.getElementById('agentModelPref').value,
           autonomyMode: document.getElementById('autonomyMode').checked,
-          sessionId: resumeSessionId || undefined
+          sessionId: resumeSessionId || undefined,
+          chineseMode,
         };
-        const res = await fetch(withToken('/api/agent/start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
+        agentStartAbort = new AbortController();
+        setAgentStartUiBusy(true);
+        let res;
+        try {
+          const httpRes = await fetch(withToken('/api/agent/start'),{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload),
+            signal: agentStartAbort.signal,
+          });
+          res = await httpRes.json();
+        } catch(err){
+          const name = err && err.name ? err.name : '';
+          if(name === 'AbortError'){
+            appendChat('system', 'Start cancelled.');
+            return;
+          }
+          appendChat('system', 'Failed to start: ' + ((err && err.message) ? err.message : String(err)));
+          return;
+        } finally {
+          setAgentStartUiBusy(false);
+          agentStartAbort = null;
+        }
         if(!res.ok){
           appendChat('system', 'Failed to start: ' + JSON.stringify(res));
           return;
@@ -3573,6 +4422,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           openMainGrid();
         });
       }
+      document.getElementById('btnSaveEnv')?.addEventListener('click', () => { void saveEnvFromForm(); });
+      document.getElementById('btnReloadEnv')?.addEventListener('click', () => { void refreshEnvEditor(); });
       const sessionSelect = document.getElementById('agentSessionSelect');
       if(sessionSelect){
         sessionSelect.addEventListener('change', () => {
@@ -3604,6 +4455,88 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       setView(INITIAL_VIEW);
       setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);
+      function updateAgentZhPromptRow(){
+        const row = document.getElementById('agentZhPromptRow');
+        const sel = document.getElementById('agentLanguageMode');
+        if(!row || !sel){ return; }
+        row.classList.toggle('is-visible', sel.value === 'zh');
+      }
+      function closeTranslatePreviewModal(){
+        const backdrop = document.getElementById('translatePreviewBackdrop');
+        if(!backdrop){ return; }
+        backdrop.classList.remove('is-open');
+        backdrop.setAttribute('aria-hidden','true');
+      }
+      async function previewEnglishPrompt(){
+        const ta = document.getElementById('agentPrompt');
+        const text = ((ta && ta.value) || '').trim();
+        if(!text){
+          appendChat('system', 'Enter prompt text first.');
+          return;
+        }
+        const backdrop = document.getElementById('translatePreviewBackdrop');
+        const titleEl = document.getElementById('translatePreviewTitle');
+        const subEl = document.getElementById('translatePreviewSub');
+        const bodyEl = document.getElementById('translatePreviewBody');
+        const errEl = document.getElementById('translatePreviewError');
+        if(!backdrop || !bodyEl || !errEl){ return; }
+        if(titleEl){ titleEl.textContent = 'English preview (DeepSeek)'; }
+        if(subEl){ subEl.textContent = 'Technical English Winnow sends to Cursor — same translation path as Run when Language is 中文.'; }
+        errEl.classList.remove('is-visible');
+        errEl.textContent = '';
+        bodyEl.textContent = 'Translating…';
+        backdrop.classList.add('is-open');
+        backdrop.setAttribute('aria-hidden','false');
+        try {
+          const res = await fetch(withToken('/api/translate/prompt-to-english'),{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ text }),
+          }).then(r=>r.json());
+          if(!res.ok){
+            errEl.textContent = res.error || JSON.stringify(res);
+            errEl.classList.add('is-visible');
+            bodyEl.textContent = '';
+            return;
+          }
+          bodyEl.textContent = res.english || '';
+        } catch(err){
+          errEl.textContent = (err && err.message) ? err.message : String(err);
+          errEl.classList.add('is-visible');
+          bodyEl.textContent = '';
+        }
+      }
+      (function initAgentLanguageMode(){
+        const sel = document.getElementById('agentLanguageMode');
+        if(!sel){ return; }
+        try {
+          if(sessionStorage.getItem('winnowAgentChineseMode') === '1'){ sel.value = 'zh'; }
+        } catch(_e) {}
+        function updateComposerPlaceholder(){
+          const ta = document.getElementById('agentPrompt');
+          if(!ta){ return; }
+          ta.placeholder = sel.value === 'zh'
+            ? '用中文描述任务；运行前会译为英文再交给 Cursor，助手回复会显示为中文。'
+            : 'Describe the coding task for Cursor agent...';
+          updateAgentZhPromptRow();
+        }
+        sel.addEventListener('change', () => {
+          try { sessionStorage.setItem('winnowAgentChineseMode', sel.value === 'zh' ? '1' : '0'); } catch(_e) {}
+          updateComposerPlaceholder();
+        });
+        updateComposerPlaceholder();
+      })();
+      document.getElementById('btnPreviewEnglishPrompt')?.addEventListener('click', () => { void previewEnglishPrompt(); });
+      document.getElementById('translatePreviewClose')?.addEventListener('click', closeTranslatePreviewModal);
+      const translatePreviewBackdropEl = document.getElementById('translatePreviewBackdrop');
+      translatePreviewBackdropEl?.addEventListener('click', (e) => {
+        if(e.target === translatePreviewBackdropEl){ closeTranslatePreviewModal(); }
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key !== 'Escape'){ return; }
+        const b = document.getElementById('translatePreviewBackdrop');
+        if(b && b.classList.contains('is-open')){ closeTranslatePreviewModal(); }
+      });
     </script>
   </body>
 </html>`);

@@ -22,7 +22,11 @@ export async function fetchJsonWithRetry<T>(
     try {
       const response = await fetch(input, { ...init, signal: controller.signal });
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const detail = await response.text().catch(() => "");
+        const clip = detail.trim().slice(0, 480);
+        throw new Error(
+          clip ? `HTTP ${response.status}: ${clip}` : `HTTP ${response.status}`,
+        );
       }
       return (await response.json()) as T;
     } catch (error) {

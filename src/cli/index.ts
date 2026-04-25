@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { applyProfileDefaults } from "../config/defaults.js";
+import { loadDotenvFromDisk } from "../config/dotenvFile.js";
 import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
 import { applyProjectProfile, loadProjectProfile } from "../config/projectProfile.js";
 import { runWinnowSession } from "../pipeline/session.js";
@@ -110,6 +111,7 @@ export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConf
 export function buildProgram(): Command {
   const program = new Command();
   const getConfig = async (opts: CliOptions): Promise<WinnowConfig> => {
+    loadDotenvFromDisk(process.cwd(), { override: false });
     const fromEnv = loadConfigFromEnv();
     const profile = await loadProjectProfile();
     const mergedBase = applyProjectProfile(fromEnv, profile);

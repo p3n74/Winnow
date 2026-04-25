@@ -26,9 +26,19 @@ export const configSchema = z.object({
   inputMode: z.enum(["off", "zh_to_en"]).default("off"),
   outputMode: z.enum(["off", "en_to_zh"]).default("off"),
   profile: z.enum(["learning_zh", "engineering_exact"]).default("engineering_exact"),
-  showOriginal: z.boolean().default(false),
-  dualOutput: z.boolean().default(false),
-  cursorCommand: z.string().default("cursor-agent"),
+  showOriginal: envBool.default(false),
+  dualOutput: envBool.default(false),
+  /** Blank env values fall back to `cursor-agent` so `spawn` never receives an empty path. */
+  cursorCommand: z.preprocess(
+    (v) => {
+      if (typeof v !== "string") {
+        return undefined;
+      }
+      const t = v.trim();
+      return t === "" ? undefined : t;
+    },
+    z.string().default("cursor-agent"),
+  ),
   logsEnabled: envBool.default(true),
   logsDir: z.string().default(".winnow/logs"),
   sessionId: z.string().optional(),
@@ -46,12 +56,17 @@ export function loadConfigFromEnv(): WinnowConfig {
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL,
     ollamaTranslationModel: process.env.OLLAMA_TRANSLATION_MODEL,
     deepseekBaseUrl: process.env.DEEPSEEK_BASE_URL,
-    deepseekApiKey: process.env.DEEPSEEK_API_KEY,
+    deepseekApiKey: process.env.DEEPSEEK_API_KEY || process.env.DEEP_SEEK_API_KEY,
     deepseekModel: process.env.DEEPSEEK_MODEL,
     translationGlossary: process.env.WINNOW_TRANSLATION_GLOSSARY,
     inputMode: process.env.WINNOW_INPUT_MODE,
     outputMode: process.env.WINNOW_OUTPUT_MODE,
     profile: process.env.WINNOW_PROFILE,
+    showOriginal: process.env.WINNOW_SHOW_ORIGINAL,
+    dualOutput: process.env.WINNOW_DUAL_OUTPUT,
+    cursorCommand: process.env.WINNOW_CURSOR_COMMAND,
+    sessionId: process.env.WINNOW_SESSION_ID,
+    uiWorkspaceDir: process.env.WINNOW_UI_WORKSPACE_DIR,
     logsEnabled: process.env.WINNOW_LOGS_ENABLED,
     logsDir: process.env.WINNOW_LOGS_DIR,
   });
