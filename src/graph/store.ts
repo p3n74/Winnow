@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   path          TEXT,
   signature     TEXT,
   summary_en    TEXT,
+  description_en TEXT,
   detail_level  TEXT NOT NULL,
   tags_json     TEXT NOT NULL DEFAULT '[]',
   state         TEXT NOT NULL DEFAULT 'inferred',
@@ -73,6 +74,10 @@ export function openProjectGraphDb(projectRoot: string): Database.Database {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.exec(SCHEMA_SQL);
+  const nodeCols = db.prepare("PRAGMA table_info(nodes)").all() as Array<{ name: string }>;
+  if (!nodeCols.some((c) => c.name === "description_en")) {
+    db.exec("ALTER TABLE nodes ADD COLUMN description_en TEXT");
+  }
   db.prepare(
     "INSERT INTO graph_meta(key, value_json) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
   ).run(JSON.stringify(SCHEMA_VERSION));
@@ -86,14 +91,15 @@ export function replaceInferredGraph(db: Database.Database, nodes: GraphNode[], 
   const deleteNodes = db.prepare("DELETE FROM nodes WHERE state = 'inferred'");
   const deleteEdges = db.prepare("DELETE FROM edges WHERE state = 'inferred'");
   const upsertNode = db.prepare(`
-    INSERT INTO nodes(id, kind, name, path, signature, summary_en, detail_level, tags_json, state, confidence, created_at, updated_at)
-    VALUES (@id, @kind, @name, @path, @signature, @summaryEn, @detailLevel, @tagsJson, @state, @confidence, @createdAt, @updatedAt)
+    INSERT INTO nodes(id, kind, name, path, signature, summary_en, description_en, detail_level, tags_json, state, confidence, created_at, updated_at)
+    VALUES (@id, @kind, @name, @path, @signature, @summaryEn, @descriptionEn, @detailLevel, @tagsJson, @state, @confidence, @createdAt, @updatedAt)
     ON CONFLICT(id) DO UPDATE SET
       kind = excluded.kind,
       name = excluded.name,
       path = excluded.path,
       signature = excluded.signature,
       summary_en = excluded.summary_en,
+      description_en = excluded.description_en,
       detail_level = excluded.detail_level,
       tags_json = excluded.tags_json,
       confidence = excluded.confidence,

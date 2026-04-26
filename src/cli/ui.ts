@@ -14,6 +14,13 @@ import {
   saveProjectProfile,
 } from "../config/projectProfile.js";
 import { loadDotenvFromDisk, readDotenvFile, WINNOW_DOTENV_SPECS, writeDotenvFileFull } from "../config/dotenvFile.js";
+import {
+  ExternalProvider,
+  getProviderDefinition,
+  PROVIDERS,
+  readProviderVerificationStore,
+  writeProviderVerificationStore,
+} from "../config/providerRegistry.js";
 import { buildAgentWindowPageHtml } from "./agentWindowHtml.js";
 import {
   readProjectDocsIndex,
@@ -66,6 +73,8 @@ import { readCursorSession } from "./ui/cursorSessionRead.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
 import { ProjectGraphService } from "../graph/service.js";
+import { smokeTestProvider } from "../translator/providerSmoke.js";
+import { ExternalChatMessage, runExternalChatCompletion } from "../translator/externalChat.js";
 
 function applyMode(config: WinnowConfig, mode: "zh" | "raw" | "dual"): WinnowConfig {
   if (mode === "zh") {
@@ -153,6 +162,99 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     } catch {
       return [];
     }
+  }
+
+  async function listProviderStatus() {
+    const envFile = readDotenvFile(winnowLaunchRoot);
+    const verified = await readProviderVerificationStore(winnowLaunchRoot);
+    return PROVIDERS.map((provider) => {
+      const key = String(process.env[provider.envKey] ?? envFile[provider.envKey] ?? "").trim();
+      return {
+        provider: provider.id,
+        label: provider.label,
+        envKey: provider.envKey,
+        hasKey: key.length > 0,
+        verifiedAt: verified[provider.id]?.verifiedAt ?? null,
+        models: verified[provider.id]?.models ?? [],
+      };
+    });
+  }
+
+  async function upsertProviderVerification(provider: ExternalProvider, models: string[]): Promise<void> {
+    const store = await readProviderVerificationStore(winnowLaunchRoot);
+    store[provider] = {
+      provider,
+      verifiedAt: new Date().toISOString(),
+      models,
+    };
+    await writeProviderVerificationStore(winnowLaunchRoot, store);
+  }
+
+  async function listSelectableModels(): Promise<string[]> {
+    const base = new Set<string>(["default", "auto", "composer"]);
+    const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
+    try {
+      const out = await new Promise<string>((resolvePromise, rejectPromise) => {
+        const child = spawn(cursorExe, ["models"], {
+          stdio: ["ignore", "pipe", "pipe"],
+          cwd: uiWorkspace.dir,
+          env: process.env,
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout?.on("data", (buf: Buffer) => {
+          stdout += buf.toString("utf8");
+        });
+        child.stderr?.on("data", (buf: Buffer) => {
+          stderr += buf.toString("utf8");
+        });
+        child.on("error", (error) => rejectPromise(error));
+        child.on("close", (code) => {
+          if (code === 0) {
+            resolvePromise(stdout);
+            return;
+          }
+          rejectPromise(new Error(stderr || `cursor-agent models failed with code ${code ?? "unknown"}`));
+        });
+      });
+      for (const line of out.split("\n")) {
+        const model = line.trim();
+        if (!model || model.startsWith("-") || model.toLowerCase().includes("available model")) {
+          continue;
+        }
+        base.add(model);
+      }
+    } catch {
+      // Keep fallback defaults only if model discovery fails.
+    }
+    return [...base];
+  }
+
+  async function listExternalSelectableModels(): Promise<string[]> {
+    const verified = await readProviderVerificationStore(winnowLaunchRoot);
+    const set = new Set<string>();
+    for (const provider of PROVIDERS) {
+      const models = verified[provider.id]?.models ?? [];
+      for (const model of models) {
+        if (provider.id === "deepseek" && model.trim().toLowerCase() === "deepseek-v3") {
+          continue;
+        }
+        set.add(model);
+      }
+    }
+    return [...set];
+  }
+
+  function providerForModel(model: string): ExternalProvider | undefined {
+    const normalized = model.trim().toLowerCase();
+    if (!normalized) {
+      return undefined;
+    }
+    if (normalized.startsWith("deepseek")) return "deepseek";
+    if (normalized.startsWith("gpt-") || normalized.startsWith("o1") || normalized.startsWith("o3") || normalized.startsWith("o4")) return "openai";
+    if (normalized.startsWith("claude")) return "anthropic";
+    if (normalized.startsWith("gemini")) return "gemini";
+    return undefined;
   }
 
   function runGitCommand(args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
@@ -593,14 +695,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   });
 
   const parseArgs = (raw: string): string[] => raw.split(/\s+/).map((x) => x.trim()).filter(Boolean);
-  const ensureModelArg = (args: string[], preference: "default" | "auto" | "composer"): string[] => {
-    if (preference === "default") {
+  const ensureModelArg = (args: string[], preference: string): string[] => {
+    const selected = (preference || "default").trim();
+    if (!selected || selected === "default") {
       return args;
     }
     if (args.includes("--model")) {
       return args;
     }
-    const value = preference === "composer" ? "composer" : "auto";
+    const value = selected;
     return [...args, "--model", value];
   };
   const ensureExecutionArgs = (args: string[], autonomyEnabled: boolean, sessionId?: string): string[] => {
@@ -643,15 +746,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   ): Promise<AgentSession> => {
     const signal = opts?.signal;
     const nativeConfig = forceCursorNativeConfig(config);
+    const executionMode = payload.executionMode === "external" ? "external" : "cursor";
     const cursorExe = (nativeConfig.cursorCommand || "").trim() || "cursor-agent";
     const id = (payload.sessionId || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const baseArgs = parseArgs(payload.args ?? "");
     const autonomyEnabled = payload.autonomyMode !== false;
-    const args = ensureExecutionArgs(
-      ensureModelArg(baseArgs, payload.modelPreference ?? "default"),
-      autonomyEnabled,
-      id
-    );
+    const args =
+      executionMode === "cursor"
+        ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, id)
+        : [];
     const existing = sessions.get(id);
     let session: AgentSession;
 
@@ -661,7 +764,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         status: "running",
         endedAt: undefined,
         error: undefined,
-        command: cursorExe,
+        command: executionMode === "external" ? "external-provider" : cursorExe,
         args,
         startedAt: existing.startedAt || new Date().toISOString(),
         events: existing.events ?? [],
@@ -691,7 +794,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         startedAt: diskStartedAt,
         output: diskOutput,
         errorOutput: diskErrorOutput,
-        command: cursorExe,
+        command: executionMode === "external" ? "external-provider" : cursorExe,
         args,
         events: diskEvents,
       };
@@ -771,7 +874,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       id,
       projectPath: uiWorkspace.dir,
       projectName: basename(uiWorkspace.dir),
-      source: "cursor-agent",
+      source: executionMode === "external" ? "external-provider" : "cursor-agent",
       modelPref: modelPreference,
       startedAt,
       status: "running",
@@ -779,6 +882,104 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
 
     abortOrThrow();
+
+    if (executionMode === "external") {
+      const pushDone = () => {
+        pushStreamEvent(id, "status", {
+          status: session.status,
+          exitCode: session.exitCode,
+          endedAt: session.endedAt,
+        });
+        pushStreamEvent(id, "done", { sessionId: id });
+        closeStreamClients(id);
+      };
+      const completeError = (errorMessage: string) => {
+        session.status = "error";
+        session.exitCode = 1;
+        session.error = errorMessage;
+        session.endedAt = new Date().toISOString();
+        session.errorOutput += `${errorMessage}\n`;
+        pushEvent("stderr", `${errorMessage}\n`);
+        pushEvent("status", "❌ External run failed.");
+        void persistRecord();
+        finalizeRun(id, "error", 1, session.endedAt);
+        void upsertLocalSessionIndex({
+          id,
+          startedAt,
+          updatedAt: session.endedAt,
+          status: "error",
+          preview: (session.output || prompt).slice(0, 160),
+          source: "winnow-local",
+        });
+        pushDone();
+      };
+      try {
+        const model = (payload.modelPreference || "").trim();
+        if (!model) {
+          throw new Error("External mode requires a selected external model.");
+        }
+        const provider = providerForModel(model);
+        if (!provider) {
+          throw new Error(`Cannot infer provider for model "${model}".`);
+        }
+        const providerDef = getProviderDefinition(provider);
+        const envFile = readDotenvFile(winnowLaunchRoot);
+        const apiKey = String(process.env[providerDef.envKey] ?? envFile[providerDef.envKey] ?? "").trim();
+        if (!apiKey) {
+          throw new Error(`Missing ${providerDef.envKey}. Add it in Settings and smoke test it first.`);
+        }
+        const history = session.events
+          .filter((e) => e.kind === "user" || e.kind === "assistant")
+          .slice(-16)
+          .map((e): ExternalChatMessage => ({
+            role: e.kind === "user" ? "user" : "assistant",
+            content: e.content,
+          }));
+        const workspace = await getWorkspaceChanges();
+        const contextBlock =
+          `Workspace: ${uiWorkspace.dir}\n` +
+          `Changed files (${workspace.files.length}): ${workspace.files.slice(0, 60).join(", ") || "(none)"}\n` +
+          `Git status:\n${workspace.status || "(none)"}\n` +
+          `Diff excerpt:\n${(workspace.diff || "").slice(0, 12000) || "(none)"}`;
+        const messages: ExternalChatMessage[] = [
+          {
+            role: "system",
+            content:
+              "You are a coding assistant running in Winnow external mode. Use conversation history and workspace snapshot context. " +
+              "If context is insufficient, say exactly what additional files or commands are needed.",
+          },
+          { role: "system", content: contextBlock },
+          ...history,
+        ];
+        const output = await runExternalChatCompletion({
+          provider,
+          model,
+          apiKey,
+          messages,
+          deepseekBaseUrl: config.deepseekBaseUrl,
+        });
+        session.output += output;
+        session.exitCode = 0;
+        session.status = "done";
+        session.endedAt = new Date().toISOString();
+        pushEvent("assistant", output);
+        pushEvent("status", "✓ External run completed.");
+        void persistRecord();
+        finalizeRun(id, "done", 0, session.endedAt);
+        void upsertLocalSessionIndex({
+          id,
+          startedAt,
+          updatedAt: session.endedAt,
+          status: "done",
+          preview: (session.output || prompt).slice(0, 160),
+          source: "winnow-local",
+        });
+        pushDone();
+      } catch (error) {
+        completeError(error instanceof Error ? error.message : String(error));
+      }
+      return session;
+    }
 
     const child = spawn(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -1076,6 +1277,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/graph/business-logic" && req.method === "GET") {
+      try {
+        const rawLayer = (url.searchParams.get("layer") ?? "full").trim().toLowerCase();
+        const layer = rawLayer === "goal" ? "goal" : "full";
+        const graph = graphService.businessLogicGraph(uiWorkspace.dir, layer);
+        sendJson(res, 200, { ok: true, graph });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/usage/status" && req.method === "GET") {
       sendJson(res, 200, usageDbStatus());
       return;
@@ -1266,6 +1479,90 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         }
         const result = await previewPath(target);
         sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/fs/open" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { path: string };
+        const raw = payload.path?.trim();
+        if (!raw) {
+          sendJson(res, 400, { ok: false, error: "path is required" });
+          return;
+        }
+        const target = resolveUiPath(raw);
+        // On macOS, 'open' uses the default application.
+        // We'll also try 'cursor' command if it might be in PATH,
+        // but 'open' is a safer generic default for a companion UI.
+        spawn("open", [target], { stdio: "ignore", detached: true }).unref();
+        sendJson(res, 200, { ok: true });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/providers/status" && req.method === "GET") {
+      try {
+        const providers = await listProviderStatus();
+        sendJson(res, 200, { ok: true, providers });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/providers/smoke" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { provider?: ExternalProvider; apiKey?: string; persist?: boolean };
+        const provider = payload.provider;
+        if (!provider || !PROVIDERS.some((p) => p.id === provider)) {
+          sendJson(res, 400, { ok: false, error: "provider is required" });
+          return;
+        }
+        const definition = getProviderDefinition(provider);
+        const envFile = readDotenvFile(winnowLaunchRoot);
+        const incoming = String(payload.apiKey ?? "").trim();
+        const effectiveKey = incoming || String(process.env[definition.envKey] ?? envFile[definition.envKey] ?? "").trim();
+        if (!effectiveKey) {
+          sendJson(res, 400, { ok: false, error: `Missing API key for ${provider}` });
+          return;
+        }
+        if (payload.persist && incoming) {
+          const merged = { ...envFile, [definition.envKey]: incoming };
+          writeDotenvFileFull(winnowLaunchRoot, merged);
+          loadDotenvFromDisk(winnowLaunchRoot, { override: true });
+        }
+        const smoke = await smokeTestProvider(provider, effectiveKey, { deepseekBaseUrl: config.deepseekBaseUrl });
+        if (!smoke.ok) {
+          sendJson(res, 200, smoke);
+          return;
+        }
+        await upsertProviderVerification(provider, definition.defaultModels);
+        sendJson(res, 200, { ...smoke, models: definition.defaultModels });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/models/selectable" && req.method === "GET") {
+      try {
+        const models = await listSelectableModels();
+        sendJson(res, 200, { ok: true, models });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/models/external-selectable" && req.method === "GET") {
+      try {
+        const models = await listExternalSelectableModels();
+        sendJson(res, 200, { ok: true, models });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }

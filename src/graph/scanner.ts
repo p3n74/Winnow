@@ -45,6 +45,50 @@ function inferFileSummary(relPath: string): string {
   return "Project file captured by deterministic graph scan.";
 }
 
+function inferFileDescription(relPath: string, functionCount: number, dependencyCount: number): string {
+  if (relPath.includes("/test") || relPath.includes(".test.") || relPath.includes(".spec.")) {
+    return `Test-oriented file with ${functionCount} detected function(s) and ${dependencyCount} internal dependency link(s).`;
+  }
+  if (relPath.endsWith(".md")) {
+    return "Documentation file used for project guidance and reference.";
+  }
+  return `Source file with ${functionCount} detected function(s) and ${dependencyCount} internal dependency link(s).`;
+}
+
+function summarizeSymbol(name: string, body: string): { summary: string; description: string } {
+  const lower = name.toLowerCase();
+  const hasIo = /\bread(File|FileSync)\b|\bwrite(File|FileSync)\b|\bquery\w*\b|\bfetch\(/i.test(body);
+  const hasEvents = /\bemit\b|\bsendJson\b|\bres\.write\b|\bconsole\.(log|warn|error)\b/i.test(body);
+  if (/^(create|update|delete|save|apply)/.test(lower)) {
+    return {
+      summary: "Mutating action function for project workflow.",
+      description: "Likely performs state-changing behavior in a business or data flow.",
+    };
+  }
+  if (/^(load|read|fetch|get|list)/.test(lower)) {
+    return {
+      summary: "Read-oriented function for lookup or retrieval.",
+      description: "Likely gathers data used by downstream workflow steps.",
+    };
+  }
+  if (/^(run|start|build|process|handle)/.test(lower)) {
+    return {
+      summary: "Orchestration function coordinating multiple actions.",
+      description: "Likely acts as an execution entrypoint or flow coordinator.",
+    };
+  }
+  if (hasIo || hasEvents) {
+    return {
+      summary: "Operational function interacting with IO or events.",
+      description: "Contains side-effect patterns such as persistence, network operations, or emitted output.",
+    };
+  }
+  return {
+    summary: "Function symbol inferred by parser.",
+    description: "General-purpose function extracted during project scan.",
+  };
+}
+
 type ExtractedFunction = {
   name: string;
   signature: string;
@@ -229,6 +273,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
   const sourceFiles = relFiles.filter((p) => SOURCE_EXTS.some((ext) => p.endsWith(ext)));
   const sourceSet = new Set(sourceFiles);
   const fileContentByRel = new Map<string, string>();
+  const importCountByRel = new Map<string, number>();
 
   const nodeMap = new Map<string, GraphNode>();
   const edgeMap = new Map<string, GraphEdge>();
@@ -248,6 +293,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
     path: root,
     signature: null,
     summaryEn: "Project root node for deterministic dependency graph.",
+    descriptionEn: "Top-level node representing the currently indexed project workspace.",
     detailLevel: "L0",
     tagsJson: "[]",
     state: "inferred",
@@ -270,6 +316,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
       path: moduleRel === "." ? root : join(root, moduleRel),
       signature: null,
       summaryEn: "Directory/module node inferred from project tree.",
+      descriptionEn: "Represents a directory grouping related files in the source tree.",
       detailLevel: "L1",
       tagsJson: "[]",
       state: "inferred",
@@ -305,6 +352,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
       path: absPath,
       signature: null,
       summaryEn: inferFileSummary(rel),
+      descriptionEn: inferFileDescription(rel, 0, 0),
       detailLevel: "L2",
       tagsJson: "[]",
       state: "inferred",
@@ -343,6 +391,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
     }
     fileContentByRel.set(rel, content);
     const specs = extractDependencySpecifiers(content);
+    importCountByRel.set(rel, specs.length);
     const fromId = makeNodeId("File", rel);
     for (const spec of specs) {
       const depRel = resolveDependencyToRelFile(rel, spec, sourceSet);
@@ -372,10 +421,20 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
       continue;
     }
     const funcs = extractFunctions(content);
+    const fileId = makeNodeId("File", rel);
+    const fileNode = nodeMap.get(fileId);
+    if (fileNode) {
+      fileNode.summaryEn =
+        funcs.length > 0
+          ? `Source file with ${funcs.length} function symbol(s) and ${importCountByRel.get(rel) ?? 0} internal dependency reference(s).`
+          : inferFileSummary(rel);
+      fileNode.descriptionEn = inferFileDescription(rel, funcs.length, importCountByRel.get(rel) ?? 0);
+      fileNode.updatedAt = generatedAt;
+      nodeMap.set(fileId, fileNode);
+    }
     if (funcs.length === 0) {
       continue;
     }
-    const fileId = makeNodeId("File", rel);
     const symbolIdByName = new Map<string, string>();
     for (const fn of funcs) {
       const symbolKey = `${rel}#${fn.name}`;
@@ -387,7 +446,8 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
         name: fn.name,
         path: join(root, rel),
         signature: fn.signature,
-        summaryEn: "Function symbol inferred by regex parser.",
+        summaryEn: summarizeSymbol(fn.name, fn.body).summary,
+        descriptionEn: summarizeSymbol(fn.name, fn.body).description,
         detailLevel: "L3",
         tagsJson: "[]",
         state: "inferred",
@@ -443,6 +503,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
             path: null,
             signature: null,
             summaryEn: "Cross-cutting data entity inferred from function behavior.",
+            descriptionEn: "Abstract data resource inferred from read/write/emission patterns in function bodies.",
             detailLevel: "L2",
             tagsJson: "[]",
             state: "inferred",

@@ -27,9 +27,10 @@ export type ProfileUpdateRequest = {
 export type AgentStartRequest = {
   prompt: string;
   args?: string;
-  modelPreference?: "default" | "auto" | "composer";
+  modelPreference?: string;
   autonomyMode?: boolean;
   sessionId?: string;
+  executionMode?: "cursor" | "external";
 };
 
 export type AgentEvent = {
@@ -90,7 +91,7 @@ export type LocalSessionRecord = {
   endedAt?: string;
   status: "running" | "done" | "error";
   args: string[];
-  modelPreference: "default" | "auto" | "composer";
+  modelPreference: string;
   prompt: string;
   output: string;
   errorOutput: string;

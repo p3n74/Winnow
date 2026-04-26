@@ -1,0 +1,31 @@
+{
+  "scannedAt": "2026-04-25T23:44:34.156Z",
+  "root": "/Users/bastionii/Documents/Github/winnow",
+  "files": [
+    {
+      "relPath": "docs/architecture.md",
+      "kind": "md",
+      "size": 864
+    },
+    {
+      "relPath": "docs/dashboard-backlog.md",
+      "kind": "md",
+      "size": 1203
+    },
+    {
+      "relPath": "docs/plans/plan-store-stable-schema-and-workflow.md",
+      "kind": "md",
+      "size": 9675
+    },
+    {
+      "relPath": "README.md",
+      "kind": "md",
+      "size": 5338
+    },
+    {
+      "relPath": "README.v2.md",
+      "kind": "md",
+      "size": 3793
+    }
+  ]
+}

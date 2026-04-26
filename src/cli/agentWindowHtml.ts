@@ -390,6 +390,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           <main class="main-panel">
             <div class="panel-toolbar">
               <div class="row small">
+                <label>Mode</label>
+                <select id="agentExecutionMode">
+                  <option value="cursor">cursor</option>
+                  <option value="external">external</option>
+                </select>
                 <label>Model</label>
                 <select id="agentModelPref">
                   <option value="default">default</option>
@@ -497,6 +502,60 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function openMainGrid() {
         window.location.assign(withToken("/main"));
+      }
+      async function loadSelectableModels() {
+        const select = document.getElementById("agentModelPref");
+        if (!select) {
+          return;
+        }
+        const previous = select.value || "default";
+        try {
+          const data = await fetch(withToken("/api/models/selectable")).then((r) => r.json());
+          if (!data.ok || !Array.isArray(data.models)) {
+            return;
+          }
+          select.innerHTML = "";
+          data.models.forEach((model) => {
+            const option = document.createElement("option");
+            option.value = String(model || "");
+            option.textContent = String(model || "");
+            select.appendChild(option);
+          });
+          select.value = data.models.includes(previous) ? previous : "default";
+        } catch {
+          // fallback to default static options
+        }
+      }
+      async function loadExternalSelectableModels() {
+        const select = document.getElementById("agentModelPref");
+        if (!select) {
+          return;
+        }
+        const previous = select.value || "";
+        try {
+          const data = await fetch(withToken("/api/models/external-selectable")).then((r) => r.json());
+          select.innerHTML = "";
+          const fallback = [{ value: "", label: "(verify provider key in Settings first)" }];
+          const rows = data.ok && Array.isArray(data.models) && data.models.length > 0 ? data.models.map((m) => ({ value: m, label: m })) : fallback;
+          rows.forEach((row) => {
+            const option = document.createElement("option");
+            option.value = String(row.value || "");
+            option.textContent = String(row.label || "");
+            select.appendChild(option);
+          });
+          select.value = rows.some((r) => r.value === previous) ? previous : String(rows[0].value || "");
+        } catch {
+          select.innerHTML = '<option value="">(failed to load external models)</option>';
+        }
+      }
+      function updateExecutionModeUi() {
+        const modeSelect = document.getElementById("agentExecutionMode");
+        const argsInput = document.getElementById("agentArgs");
+        const mode = (modeSelect && modeSelect.value) || "cursor";
+        if (argsInput) {
+          argsInput.disabled = mode !== "cursor";
+          argsInput.placeholder = mode === "cursor" ? "optional args for cursor-agent" : "not used in external mode";
+        }
       }
       async function refreshAgentCwdBanner() {
         const label = document.getElementById("agentCwdLabel");
@@ -983,6 +1042,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           modelPreference: document.getElementById("agentModelPref").value,
           autonomyMode: document.getElementById("autonomyMode").checked,
           sessionId: resumeSessionId || undefined,
+          executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -1150,6 +1210,18 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         openMainGrid();
       });
       const sessionSelect = document.getElementById("agentSessionSelect");
+      const modeSelect = document.getElementById("agentExecutionMode");
+      if (modeSelect) {
+        modeSelect.addEventListener("change", async () => {
+          const mode = modeSelect.value || "cursor";
+          if (mode === "external") {
+            await loadExternalSelectableModels();
+          } else {
+            await loadSelectableModels();
+          }
+          updateExecutionModeUi();
+        });
+      }
       if (sessionSelect) {
         sessionSelect.addEventListener("change", () => {
           const value = sessionSelect.value || "";
@@ -1172,6 +1244,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       });
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
+      loadSelectableModels();
+      updateExecutionModeUi();
       refreshSessions();
       setInterval(refreshMetrics, 1000);
       if (EMBED_MODE) {

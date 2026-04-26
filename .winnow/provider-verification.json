@@ -1,0 +1,11 @@
+{
+  "deepseek": {
+    "provider": "deepseek",
+    "verifiedAt": "2026-04-26T02:27:47.831Z",
+    "models": [
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "deepseek-v3"
+    ]
+  }
+}

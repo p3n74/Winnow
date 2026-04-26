@@ -863,6 +863,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             </div>
             <pre id="envSaveHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
           </div>
+          <div class="panel settings-only flex-panel" style="display:none">
+            <div class="title">External model providers</div>
+            <p class="hint">Smoke-test each provider key first; verified providers unlock model options in Agent/Main Grid.</p>
+            <div id="providerSettingsRows"></div>
+            <pre id="providerSettingsHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
+          </div>
         </div>
         <div class="rightCol">
           <div class="panel">
@@ -1842,6 +1848,89 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           }
           if(hint){ hint.textContent = res.message || 'Saved.'; }
           await refreshEnvEditor();
+          await loadSelectableModels();
+        } catch(err){
+          if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
+        }
+      }
+
+      async function loadSelectableModels(){
+        const select = document.getElementById('agentModelPref');
+        if(!select){ return; }
+        const previous = select.value || 'default';
+        try{
+          const data = await fetch(withToken('/api/models/selectable')).then((r) => r.json());
+          if(!data.ok || !Array.isArray(data.models)){ return; }
+          select.innerHTML = '';
+          data.models.forEach((model) => {
+            const o = document.createElement('option');
+            o.value = String(model || '');
+            o.textContent = String(model || '');
+            select.appendChild(o);
+          });
+          select.value = data.models.includes(previous) ? previous : 'default';
+        } catch(_e){
+          // keep default static options
+        }
+      }
+
+      async function refreshProviderSettings(){
+        const root = document.getElementById('providerSettingsRows');
+        const hint = document.getElementById('providerSettingsHint');
+        if(!root){ return; }
+        root.innerHTML = 'Loading…';
+        if(hint){ hint.textContent = ''; }
+        try {
+          const data = await fetch(withToken('/api/providers/status')).then((r) => r.json());
+          if(!data.ok){
+            root.textContent = data.error || 'Failed to load providers';
+            return;
+          }
+          const rows = (data.providers || []).map((provider) => {
+            const stamp = provider.verifiedAt ? ('verified ' + formatLocalDateTime(provider.verifiedAt)) : 'not verified yet';
+            return (
+              '<div class="env-row">' +
+                '<label for="provider_' + provider.provider + '">' + provider.label + ' (' + provider.envKey + ')</label>' +
+                '<div class="row small" style="align-items:center">' +
+                  '<input id="provider_' + provider.provider + '" type="password" placeholder="' + (provider.hasKey ? 'Key already set; paste to replace' : 'Paste API key') + '" style="flex:1;min-width:260px" />' +
+                  '<button type="button" data-provider-smoke="' + provider.provider + '">Save + smoke test</button>' +
+                '</div>' +
+                '<div class="small muted">Status: ' + stamp + '</div>' +
+              '</div>'
+            );
+          }).join('');
+          root.innerHTML = rows || '<div class="small muted">No providers configured.</div>';
+          root.querySelectorAll('button[data-provider-smoke]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const provider = btn.getAttribute('data-provider-smoke');
+              if(provider){ void smokeProvider(provider); }
+            });
+          });
+        } catch(err){
+          root.textContent = (err && err.message) ? err.message : String(err);
+        }
+      }
+
+      async function smokeProvider(provider){
+        const inp = document.getElementById('provider_' + provider);
+        const hint = document.getElementById('providerSettingsHint');
+        const apiKey = inp ? String(inp.value || '').trim() : '';
+        if(hint){ hint.textContent = 'Testing ' + provider + '…'; }
+        try {
+          const payload = { provider: provider, apiKey: apiKey, persist: true };
+          const res = await fetch(withToken('/api/providers/smoke'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).then((r) => r.json());
+          if(!res.ok){
+            if(hint){ hint.textContent = provider + ' smoke test failed: ' + (res.error || ('HTTP ' + (res.status || 'error'))); }
+            return;
+          }
+          if(hint){ hint.textContent = provider + ' smoke test passed. Models enabled: ' + (res.models || []).join(', '); }
+          if(inp){ inp.value = ''; }
+          await refreshProviderSettings();
+          await loadSelectableModels();
         } catch(err){
           if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
         }
@@ -1896,6 +1985,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           agentOnly.forEach(el => el.style.display = 'none');
           settingsOnly.forEach(el => el.style.display = '');
           void refreshEnvEditor();
+          void refreshProviderSettings();
         }
       }
       if(EMBED_MODE){
@@ -2259,6 +2349,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       refreshDir();
       refreshWorkspace();
       refreshSessions();
+      loadSelectableModels();
       document.querySelectorAll('.tab').forEach((tab) => {
         const targetView = tab.getAttribute('data-view');
         if(!targetView){ return; }
