@@ -1135,6 +1135,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/favicon.ico" && req.method === "GET") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
     if (url.pathname === "/api/dashboard/last-agent-run" && req.method === "GET") {
       const r = queryLastAgentRun();
       if (!r.ok) {

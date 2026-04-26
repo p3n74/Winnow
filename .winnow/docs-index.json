@@ -1,5 +1,5 @@
 {
-  "scannedAt": "2026-04-25T23:44:34.156Z",
+  "scannedAt": "2026-04-26T03:54:45.480Z",
   "root": "/Users/bastionii/Documents/Github/winnow",
   "files": [
     {
@@ -13,6 +13,36 @@
       "size": 1203
     },
     {
+      "relPath": "docs/graph/lifecycle.md",
+      "kind": "md",
+      "size": 1869
+    },
+    {
+      "relPath": "docs/graph/README.md",
+      "kind": "md",
+      "size": 1108
+    },
+    {
+      "relPath": "docs/graph/rollout-plan.md",
+      "kind": "md",
+      "size": 2685
+    },
+    {
+      "relPath": "docs/graph/schema-v1.md",
+      "kind": "md",
+      "size": 2354
+    },
+    {
+      "relPath": "docs/graph/spec.md",
+      "kind": "md",
+      "size": 2557
+    },
+    {
+      "relPath": "docs/graph/ui-integration.md",
+      "kind": "md",
+      "size": 1942
+    },
+    {
       "relPath": "docs/plans/plan-store-stable-schema-and-workflow.md",
       "kind": "md",
       "size": 9675
@@ -20,12 +50,7 @@
     {
       "relPath": "README.md",
       "kind": "md",
-      "size": 5338
-    },
-    {
-      "relPath": "README.v2.md",
-      "kind": "md",
-      "size": 3793
+      "size": 3807
     }
   ]
 }

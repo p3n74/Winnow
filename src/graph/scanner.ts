@@ -95,6 +95,20 @@ type ExtractedFunction = {
   body: string;
 };
 
+type ImportedBinding = {
+  localName: string;
+  importedName: string;
+  specifier: string;
+};
+
+type SymbolRecord = {
+  id: string;
+  name: string;
+  fileRel: string;
+  signature: string;
+  body: string;
+};
+
 async function walkFiles(root: string, startDir: string, out: string[]): Promise<void> {
   const abs = join(root, startDir);
   let entries;
@@ -137,6 +151,49 @@ function extractDependencySpecifiers(content: string): string[] {
     }
   }
   return [...out];
+}
+
+function extractImportedBindings(content: string): ImportedBinding[] {
+  const out: ImportedBinding[] = [];
+
+  // import { a, b as c } from "x"
+  const namedRe = /import\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = namedRe.exec(content)) !== null) {
+    const rawNames = (m[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const specifier = m[2] ?? "";
+    for (const raw of rawNames) {
+      const aliasMatch = raw.match(/^([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)$/);
+      if (aliasMatch) {
+        out.push({ importedName: aliasMatch[1], localName: aliasMatch[2], specifier });
+      } else if (/^[A-Za-z_]\w*$/.test(raw)) {
+        out.push({ importedName: raw, localName: raw, specifier });
+      }
+    }
+  }
+
+  // import Foo from "x"
+  const defaultRe = /import\s+([A-Za-z_]\w*)\s+from\s+["']([^"']+)["']/g;
+  while ((m = defaultRe.exec(content)) !== null) {
+    out.push({ importedName: "default", localName: m[1], specifier: m[2] ?? "" });
+  }
+
+  // import Foo, { bar as baz } from "x"
+  const mixedRe = /import\s+([A-Za-z_]\w*)\s*,\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/g;
+  while ((m = mixedRe.exec(content)) !== null) {
+    out.push({ importedName: "default", localName: m[1], specifier: m[3] ?? "" });
+    const rawNames = (m[2] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    for (const raw of rawNames) {
+      const aliasMatch = raw.match(/^([A-Za-z_]\w*)\s+as\s+([A-Za-z_]\w*)$/);
+      if (aliasMatch) {
+        out.push({ importedName: aliasMatch[1], localName: aliasMatch[2], specifier: m[3] ?? "" });
+      } else if (/^[A-Za-z_]\w*$/.test(raw)) {
+        out.push({ importedName: raw, localName: raw, specifier: m[3] ?? "" });
+      }
+    }
+  }
+
+  return out;
 }
 
 function resolveDependencyToRelFile(
@@ -237,6 +294,21 @@ function extractCallTargets(body: string): string[] {
   return [...out];
 }
 
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function dependsOnReturnValue(body: string, callee: string): boolean {
+  const c = escapeRegExp(callee);
+  const patterns = [
+    new RegExp(`\\b(?:const|let|var)\\s+[A-Za-z_]\\w*\\s*=\\s*(?:await\\s+)?${c}\\s*\\(`),
+    new RegExp(`\\breturn\\s+(?:await\\s+)?${c}\\s*\\(`),
+    new RegExp(`\\bif\\s*\\(\\s*(?:await\\s+)?${c}\\s*\\(`),
+    new RegExp(`\\b[A-Za-z_]\\w*\\s*=\\s*(?:await\\s+)?${c}\\s*\\(`),
+  ];
+  return patterns.some((re) => re.test(body));
+}
+
 function inferDataOps(
   body: string,
 ): Array<{ kind: "reads" | "writes" | "emits"; entityKey: string; entityLabel: string; reason: string }> {
@@ -273,6 +345,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
   const sourceFiles = relFiles.filter((p) => SOURCE_EXTS.some((ext) => p.endsWith(ext)));
   const sourceSet = new Set(sourceFiles);
   const fileContentByRel = new Map<string, string>();
+  const importedBindingsByFile = new Map<string, ImportedBinding[]>();
   const importCountByRel = new Map<string, number>();
 
   const nodeMap = new Map<string, GraphNode>();
@@ -390,6 +463,7 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
       continue;
     }
     fileContentByRel.set(rel, content);
+    importedBindingsByFile.set(rel, extractImportedBindings(content));
     const specs = extractDependencySpecifiers(content);
     importCountByRel.set(rel, specs.length);
     const fromId = makeNodeId("File", rel);
@@ -415,6 +489,10 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
     }
   }
 
+  const symbolRecords: SymbolRecord[] = [];
+  const symbolsByFile = new Map<string, SymbolRecord[]>();
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+
   for (const rel of sourceFiles) {
     const content = fileContentByRel.get(rel);
     if (!content) {
@@ -435,11 +513,9 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
     if (funcs.length === 0) {
       continue;
     }
-    const symbolIdByName = new Map<string, string>();
     for (const fn of funcs) {
       const symbolKey = `${rel}#${fn.name}`;
       const symbolId = makeNodeId("Symbol", symbolKey);
-      symbolIdByName.set(fn.name, symbolId);
       addNode({
         id: symbolId,
         kind: "Symbol",
@@ -455,6 +531,20 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
         createdAt: generatedAt,
         updatedAt: generatedAt,
       });
+      const rec: SymbolRecord = {
+        id: symbolId,
+        name: fn.name,
+        fileRel: rel,
+        signature: fn.signature,
+        body: fn.body,
+      };
+      symbolRecords.push(rec);
+      const byFile = symbolsByFile.get(rel) ?? [];
+      byFile.push(rec);
+      symbolsByFile.set(rel, byFile);
+      const byName = symbolsByName.get(fn.name) ?? [];
+      byName.push(rec);
+      symbolsByName.set(fn.name, byName);
       addEdge({
         id: makeEdgeId(fileId, "contains", symbolId),
         fromId: fileId,
@@ -469,63 +559,128 @@ export async function buildDeterministicProjectGraph(projectRoot: string): Promi
         updatedAt: generatedAt,
       });
     }
+  }
 
-    for (const fn of funcs) {
-      const fromId = symbolIdByName.get(fn.name);
-      if (!fromId) continue;
-      for (const callee of extractCallTargets(fn.body)) {
-        const toId = symbolIdByName.get(callee);
-        if (!toId || toId === fromId) {
-          continue;
+  for (const rec of symbolRecords) {
+    const fromId = rec.id;
+    const callTargets = extractCallTargets(rec.body);
+    const importedBindings = importedBindingsByFile.get(rec.fileRel) ?? [];
+    const importedByLocal = new Map(importedBindings.map((b) => [b.localName, b]));
+    const fileLocalSymbols = symbolsByFile.get(rec.fileRel) ?? [];
+
+    for (const callee of callTargets) {
+      const candidates: Array<{ target: SymbolRecord; confidence: number; evidenceType: string }> = [];
+
+      const imported = importedByLocal.get(callee);
+      if (imported) {
+        const depRel = resolveDependencyToRelFile(rec.fileRel, imported.specifier, sourceSet);
+        if (depRel) {
+          const depSymbols = symbolsByFile.get(depRel) ?? [];
+          const named = depSymbols.filter((s) => s.name === imported.importedName || s.name === callee);
+          if (named.length > 0) {
+            for (const target of named) candidates.push({ target, confidence: 0.9, evidenceType: "import_named" });
+          } else if (depSymbols.length === 1) {
+            candidates.push({ target: depSymbols[0], confidence: 0.72, evidenceType: "import_single_symbol_guess" });
+          }
         }
+      }
+
+      const sameFile = fileLocalSymbols.filter((s) => s.name === callee);
+      for (const target of sameFile) {
+        candidates.push({ target, confidence: 0.85, evidenceType: "same_file" });
+      }
+
+      const globalByName = symbolsByName.get(callee) ?? [];
+      if (globalByName.length === 1) {
+        candidates.push({ target: globalByName[0], confidence: 0.68, evidenceType: "global_unique" });
+      }
+
+      const seenTargetIds = new Set<string>();
+      for (const cand of candidates.sort((a, b) => b.confidence - a.confidence)) {
+        if (cand.target.id === fromId || seenTargetIds.has(cand.target.id)) continue;
+        seenTargetIds.add(cand.target.id);
         addEdge({
-          id: makeEdgeId(fromId, "calls", toId),
+          id: makeEdgeId(fromId, "calls", cand.target.id),
           fromId,
-          toId,
+          toId: cand.target.id,
           kind: "calls",
-          summaryEn: `Function call inferred: ${fn.name} -> ${callee}`,
+          summaryEn: `Function call inferred: ${rec.name} -> ${cand.target.name}`,
           weight: 1,
           state: "inferred",
-          confidence: 0.7,
-          evidenceJson: JSON.stringify([{ type: "callee", value: callee, file: rel }]),
+          confidence: cand.confidence,
+          evidenceJson: JSON.stringify([
+            {
+              type: cand.evidenceType,
+              value: callee,
+              file: rec.fileRel,
+              toFile: cand.target.fileRel,
+              connectionType: "invokes",
+              connectionLabel: "Invokes",
+            },
+          ]),
           createdAt: generatedAt,
           updatedAt: generatedAt,
         });
-      }
 
-      for (const op of inferDataOps(fn.body)) {
-        const entityId = makeNodeId("DataEntity", op.entityKey);
-        if (!nodeMap.has(entityId)) {
-          addNode({
-            id: entityId,
-            kind: "DataEntity",
-            name: op.entityLabel,
-            path: null,
-            signature: null,
-            summaryEn: "Cross-cutting data entity inferred from function behavior.",
-            descriptionEn: "Abstract data resource inferred from read/write/emission patterns in function bodies.",
-            detailLevel: "L2",
-            tagsJson: "[]",
+        if (dependsOnReturnValue(rec.body, callee)) {
+          addEdge({
+            id: makeEdgeId(fromId, "consumes", cand.target.id),
+            fromId,
+            toId: cand.target.id,
+            kind: "consumes",
+            summaryEn: `Return-value dependency inferred: ${rec.name} consumes output of ${cand.target.name}`,
+            weight: 1,
             state: "inferred",
-            confidence: 0.65,
+            confidence: Math.max(0.62, cand.confidence - 0.08),
+            evidenceJson: JSON.stringify([
+              {
+                type: "return_value_dependency",
+                value: callee,
+                file: rec.fileRel,
+                toFile: cand.target.fileRel,
+                connectionType: "consumes_output_of",
+                connectionLabel: "Consumes Output Of",
+              },
+            ]),
             createdAt: generatedAt,
             updatedAt: generatedAt,
           });
         }
-        addEdge({
-          id: makeEdgeId(fromId, op.kind, entityId),
-          fromId,
-          toId: entityId,
-          kind: op.kind,
-          summaryEn: op.reason,
-          weight: 1,
+      }
+    }
+
+    for (const op of inferDataOps(rec.body)) {
+      const entityId = makeNodeId("DataEntity", op.entityKey);
+      if (!nodeMap.has(entityId)) {
+        addNode({
+          id: entityId,
+          kind: "DataEntity",
+          name: op.entityLabel,
+          path: null,
+          signature: null,
+          summaryEn: "Cross-cutting data entity inferred from function behavior.",
+          descriptionEn: "Abstract data resource inferred from read/write/emission patterns in function bodies.",
+          detailLevel: "L2",
+          tagsJson: "[]",
           state: "inferred",
           confidence: 0.65,
-          evidenceJson: JSON.stringify([{ type: "behavioral_regex", file: rel }]),
           createdAt: generatedAt,
           updatedAt: generatedAt,
         });
       }
+      addEdge({
+        id: makeEdgeId(fromId, op.kind, entityId),
+        fromId,
+        toId: entityId,
+        kind: op.kind,
+        summaryEn: op.reason,
+        weight: 1,
+        state: "inferred",
+        confidence: 0.65,
+        evidenceJson: JSON.stringify([{ type: "behavioral_regex", file: rec.fileRel }]),
+        createdAt: generatedAt,
+        updatedAt: generatedAt,
+      });
     }
   }
 

@@ -239,6 +239,7 @@ export function buildMainTerminalHtml(token?: string): string {
         gap: 8px;
         display: flex;
         flex-direction: column;
+        min-height: 0;
       }
       .graphRoot.graphOverlayOpen {
         position: fixed;
@@ -254,6 +255,9 @@ export function buildMainTerminalHtml(token?: string): string {
         box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255,255,255,0.03);
         animation: graphOverlayIn 180ms ease-out;
         backdrop-filter: blur(2px);
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        overflow: hidden;
       }
       @keyframes graphOverlayIn {
         from { opacity: 0; transform: translateY(8px) scale(0.995); }
@@ -274,6 +278,7 @@ export function buildMainTerminalHtml(token?: string): string {
         backdrop-filter: blur(2px);
         border-radius: 8px;
         padding: 8px;
+        min-height: 0;
       }
       .graphToolbar .reconnect {
         transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
@@ -301,6 +306,7 @@ export function buildMainTerminalHtml(token?: string): string {
           linear-gradient(180deg, rgba(4, 17, 24, 0.88), rgba(2, 7, 11, 0.95)),
           #02070b;
         min-height: 320px;
+        height: 100%;
         overflow: hidden;
         cursor: grab;
         touch-action: none;
@@ -311,14 +317,18 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .graphWorkArea {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
+        grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.85fr);
         gap: 10px;
         align-items: start;
-        min-height: 380px;
+        min-height: 0;
+        height: 100%;
+        overflow: hidden;
       }
       @media (max-width: 1300px) {
         .graphWorkArea {
           grid-template-columns: 1fr;
+          grid-template-rows: minmax(0, 1fr) auto;
+          overflow: auto;
         }
       }
       .graphHoverCard {
@@ -348,7 +358,7 @@ export function buildMainTerminalHtml(token?: string): string {
       .graphCanvasSvg {
         display: block;
         min-width: 100%;
-        min-height: 320px;
+        min-height: 100%;
         transition: opacity 140ms ease, transform 140ms ease;
       }
       .graphCanvasSvg.isRefreshing {
@@ -362,6 +372,7 @@ export function buildMainTerminalHtml(token?: string): string {
         font-size: 11px;
         color: var(--muted);
         margin-top: 2px;
+        padding: 2px 2px 0;
       }
       .graphExplorerPanel {
         border: 1px solid var(--line);
@@ -371,16 +382,24 @@ export function buildMainTerminalHtml(token?: string): string {
         padding: 10px;
         font-size: 12px;
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
-        max-height: calc(100vh - 200px);
+        height: 100%;
+        max-height: 100%;
         overflow-y: auto;
         transition: transform 180ms ease, opacity 180ms ease, border-color 180ms ease;
         transform: translateX(8px);
         opacity: 0.92;
+        min-height: 0;
       }
       .graphExplorerPanel.open {
         transform: translateX(0);
         opacity: 1;
         border-color: rgba(34,211,238,0.45);
+      }
+      @media (max-width: 1300px) {
+        .graphExplorerPanel {
+          max-height: 40vh;
+          height: auto;
+        }
       }
       .graphExplorerTitle {
         font-size: 12px;
@@ -618,6 +637,8 @@ export function buildMainTerminalHtml(token?: string): string {
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                     <h4 class="graphExplorerTitle" style="margin:0;">Technical explorer</h4>
                     <div style="display:flex; gap:6px;">
+                      <button type="button" class="reconnect" id="btnGraphLocalDeps" disabled>Show local dependencies</button>
+                    <button type="button" class="reconnect" id="btnGraphExternalDeps" disabled>Show external dependencies</button>
                       <button type="button" class="graphJumpBtn" id="btnGraphBack" style="display:none;">Back</button>
                       <button type="button" class="graphJumpBtn" id="btnGraphFocusReset" disabled>Reset</button>
                       <button type="button" class="graphJumpBtn" id="btnGraphExit">Exit</button>
@@ -627,9 +648,6 @@ export function buildMainTerminalHtml(token?: string): string {
                   <div id="graphSelectedFile" class="graphBreadcrumb" style="display:none"></div>
                   <input id="graphFunctionFilter" class="graphFilterInput" type="text" placeholder="Filter functions..." />
                   <ul id="graphFunctionList" class="graphFnList"></ul>
-                  <div class="graphExplorerActions">
-                    <button type="button" class="reconnect" id="btnGraphLocalDeps" disabled>Show local dependencies</button>
-                  </div>
                 </div>
               </div>
             </div>
@@ -640,6 +658,7 @@ export function buildMainTerminalHtml(token?: string): string {
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="https://unpkg.com/@xterm/xterm/lib/xterm.js"></script>
     <script src="https://unpkg.com/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script>
@@ -647,6 +666,9 @@ export function buildMainTerminalHtml(token?: string): string {
       let graphViewMode = "technical";
       let pane2Mode = "workspace";
       let graphOverlayOpen = false;
+      let graphSimulation = null;
+      let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
+      let graphDragState = { active: false, nodeId: null, pinOnRelease: false };
       let graphNodeCache = { nodes: [], edges: [] };
       let graphViewBox = { x: 0, y: 0, w: 1200, h: 600, baseW: 1200, baseH: 600 };
       let graphDrag = { active: false, startX: 0, startY: 0, initX: 0, initY: 0 };
@@ -656,8 +678,11 @@ export function buildMainTerminalHtml(token?: string): string {
         fileNodePath: "",
         functionNodeId: null,
         localDeps: false,
+        externalSeedIds: [],
         hoveredFunctionNodeId: null,
         functions: [],
+        displayNodes: [],
+        displayEdges: [],
       };
       const panes = ["1","3","4","5"];
       const paneState = new Map();
@@ -827,6 +852,34 @@ export function buildMainTerminalHtml(token?: string): string {
         svg.removeAttribute("width");
         svg.removeAttribute("height");
       }
+      function fitGraphViewToRenderedNodes(nodeIds, padding){
+        const svg = document.getElementById("graphCanvas");
+        if(!svg || !Array.isArray(nodeIds) || nodeIds.length === 0){ return; }
+        const pad = typeof padding === "number" ? padding : 90;
+        const ids = new Set(nodeIds.filter(Boolean));
+        const rects = Array.from(svg.querySelectorAll(".graphNodeCard"))
+          .filter((el)=>ids.has(el.getAttribute("data-node-id") || ""))
+          .map((el)=>el.querySelector("rect"))
+          .filter(Boolean);
+        if(rects.length === 0){ return; }
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        rects.forEach((r)=>{
+          const x = Number(r.getAttribute("x") || "0");
+          const y = Number(r.getAttribute("y") || "0");
+          const w = Number(r.getAttribute("width") || "0");
+          const h = Number(r.getAttribute("height") || "0");
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x + w);
+          maxY = Math.max(maxY, y + h);
+        });
+        if(!Number.isFinite(minX) || !Number.isFinite(minY)){ return; }
+        graphViewBox.x = minX - pad;
+        graphViewBox.y = minY - pad;
+        graphViewBox.w = Math.max(420, (maxX - minX) + pad * 2);
+        graphViewBox.h = Math.max(280, (maxY - minY) + pad * 2);
+        applyGraphViewBox();
+      }
       
       function initGraphCanvasInteractions(){
         const wrap = document.querySelector(".graphCanvasWrap");
@@ -879,14 +932,18 @@ export function buildMainTerminalHtml(token?: string): string {
       }
 
       function resetGraphExplorerState(){
+        window.__graphSelectedFnId = "";
         graphFocusState = {
           fileNodeId: null,
           fileNodeName: "",
           fileNodePath: "",
           functionNodeId: null,
           localDeps: false,
+          externalSeedIds: [],
           hoveredFunctionNodeId: null,
           functions: [],
+          displayNodes: [],
+          displayEdges: [],
         };
         const hint = document.getElementById("graphExplorerHint");
         const file = document.getElementById("graphSelectedFile");
@@ -894,6 +951,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const filter = document.getElementById("graphFunctionFilter");
         const panel = document.getElementById("graphExplorerPanel");
         const depsBtn = document.getElementById("btnGraphLocalDeps");
+        const extBtn = document.getElementById("btnGraphExternalDeps");
         const resetBtn = document.getElementById("btnGraphFocusReset");
         const backBtn = document.getElementById("btnGraphBack");
         if(hint){ hint.textContent = "Click a file node in Technical View to list functions."; }
@@ -904,6 +962,7 @@ export function buildMainTerminalHtml(token?: string): string {
           depsBtn.textContent = "Show local dependencies";
           depsBtn.disabled = true;
         }
+        if(extBtn){ extBtn.disabled = true; }
         if(resetBtn){ resetBtn.disabled = true; }
         if(backBtn){ backBtn.style.display = "none"; }
         if(panel){ panel.classList.remove("open"); }
@@ -956,13 +1015,19 @@ export function buildMainTerminalHtml(token?: string): string {
             const fnId = btn.getAttribute("data-fn-id");
             if(!fnId){ return; }
             graphFocusState.functionNodeId = fnId;
-            graphFocusState.localDeps = false;
+            window.__graphSelectedFnId = fnId;
+            graphFocusState.localDeps = true;
+            if(!graphFocusState.externalSeedIds.includes(fnId)){
+              graphFocusState.externalSeedIds.push(fnId);
+            }
             const depsBtn = document.getElementById("btnGraphLocalDeps");
+            const extBtn = document.getElementById("btnGraphExternalDeps");
             const resetBtn = document.getElementById("btnGraphFocusReset");
-            if(depsBtn){ depsBtn.textContent = "Show local dependencies"; depsBtn.disabled = false; }
+            if(depsBtn){ depsBtn.textContent = "Hide local dependencies"; depsBtn.disabled = false; }
+            if(extBtn){ extBtn.disabled = false; }
             if(resetBtn){ resetBtn.disabled = false; }
             renderFunctionList();
-            void renderTechnicalFocusGraph();
+            rebuildFocusedGraphAndRender();
           });
           btn.addEventListener("mouseenter",()=>{
             const fileId = graphFocusState.fileNodeId;
@@ -1001,6 +1066,143 @@ export function buildMainTerminalHtml(token?: string): string {
         const tail = parts.slice(-3);
         return tail.join(" > ");
       }
+      function symbolFileRelFromId(symbolId){
+        const raw = String(symbolId || "");
+        if(!raw.startsWith("symbol::")){ return ""; }
+        const rest = raw.slice("symbol::".length);
+        const hashIdx = rest.indexOf("#");
+        return hashIdx >= 0 ? rest.slice(0, hashIdx) : "";
+      }
+      function symbolFileNodeId(symbolId){
+        const rel = symbolFileRelFromId(symbolId);
+        return rel ? ("file::" + rel) : "";
+      }
+      function mergeGraphData(baseNodes, baseEdges, addNodes, addEdges){
+        const nodeById = new Map((baseNodes || []).map((n)=>[n.id, n]));
+        (addNodes || []).forEach((n)=>{ if(n && n.id && !nodeById.has(n.id)){ nodeById.set(n.id, n); } });
+        const edgeById = new Map((baseEdges || []).map((e)=>[e.id, e]));
+        (addEdges || []).forEach((e)=>{
+          if(!e){ return; }
+          const key = e.id || (e.fromId + "::" + e.kind + "::" + e.toId);
+          if(!edgeById.has(key)){ edgeById.set(key, { ...e, id: key }); }
+        });
+        return { nodes: Array.from(nodeById.values()), edges: Array.from(edgeById.values()) };
+      }
+      function collectLocalDependencyData(selectedFnId){
+        const nearNodes = graphNodeCache.nodes || [];
+        const nearEdges = graphNodeCache.edges || [];
+        const symbolNodes = nearNodes.filter((n)=>n && n.kind === "Symbol");
+        const byId = new Map(symbolNodes.map((n)=>[n.id, n]));
+        const callEdges = nearEdges.filter((e)=>
+          (e.kind === "calls" || e.kind === "consumes") &&
+          (e.fromId === selectedFnId || e.toId === selectedFnId) &&
+          byId.has(e.fromId) && byId.has(e.toId)
+        );
+        const depIds = new Set([selectedFnId]);
+        callEdges.forEach((e)=>{ depIds.add(e.fromId); depIds.add(e.toId); });
+        const depNodes = symbolNodes.filter((n)=>depIds.has(n.id));
+        return { nodes: depNodes, edges: callEdges };
+      }
+      function collectExternalDependencyData(seedFnId){
+        const allNodes = graphNodeCache.nodes || [];
+        const allEdges = graphNodeCache.edges || [];
+        const byId = new Map(allNodes.map((n)=>[n.id, n]));
+        const seedNode = byId.get(seedFnId);
+        if(!seedNode){ return { nodes: [], edges: [] }; }
+        const seedFileRel = symbolFileRelFromId(seedFnId);
+        const relationEdges = allEdges.filter((e)=>
+          (e.kind === "calls" || e.kind === "consumes") &&
+          (e.fromId === seedFnId || e.toId === seedFnId)
+        );
+        const externalSymbolIds = new Set();
+        relationEdges.forEach((e)=>{
+          const other = e.fromId === seedFnId ? e.toId : e.fromId;
+          const otherRel = symbolFileRelFromId(other);
+          if(otherRel && otherRel !== seedFileRel){ externalSymbolIds.add(other); }
+        });
+        const externalSymbols = Array.from(externalSymbolIds).map((id)=>byId.get(id)).filter(Boolean);
+        const addNodes = [seedNode].concat(externalSymbols);
+        const addEdges = relationEdges.filter((e)=>externalSymbolIds.has(e.fromId) || externalSymbolIds.has(e.toId));
+        externalSymbols.forEach((sym)=>{
+          const fileId = symbolFileNodeId(sym.id);
+          const fileNode = byId.get(fileId);
+          if(fileNode){ addNodes.push(fileNode); }
+          const hasContain = allEdges.some((e)=>e.kind === "contains" && e.fromId === fileId && e.toId === sym.id);
+          if(hasContain){
+            const contain = allEdges.find((e)=>e.kind === "contains" && e.fromId === fileId && e.toId === sym.id);
+            if(contain){ addEdges.push(contain); }
+          } else if(fileId){
+            addEdges.push({
+              id: fileId + "::contains::" + sym.id,
+              fromId: fileId,
+              toId: sym.id,
+              kind: "contains",
+              summaryEn: "File contains symbol",
+            });
+          }
+        });
+        return { nodes: addNodes, edges: addEdges };
+      }
+      function bindFocusedSymbolSelection(displayNodes){
+        const svg = document.getElementById("graphCanvas");
+        const focusHint = document.getElementById("graphExplorerHint");
+        if(!svg){ return; }
+        const byId = new Map((displayNodes || []).map((n)=>[n.id, n]));
+        svg.querySelectorAll(".graphNodeHotspot").forEach((el)=>{
+          el.addEventListener("click",()=>{
+            const nodeId = el.getAttribute("data-node-id") || "";
+            const node = byId.get(nodeId);
+            if(!node || node.kind !== "Symbol"){ return; }
+            graphFocusState.functionNodeId = node.id;
+            window.__graphSelectedFnId = node.id;
+            graphFocusState.localDeps = true;
+            if(!graphFocusState.externalSeedIds.includes(node.id)){
+              graphFocusState.externalSeedIds.push(node.id);
+            }
+            const extBtn = document.getElementById("btnGraphExternalDeps");
+            if(extBtn){ extBtn.disabled = false; }
+            if(focusHint){
+              focusHint.textContent = "Selected function " + (node.name || node.id) + ". Auto-expanded local + one-degree external dependencies.";
+            }
+            rebuildFocusedGraphAndRender();
+          });
+        });
+      }
+      function rebuildFocusedGraphAndRender(){
+        if(!graphFocusState.fileNodeId || !graphFocusState.functionNodeId){ return; }
+        const byId = new Map((graphNodeCache.nodes || []).map((n)=>[n.id, n]));
+        const selectedFile = byId.get(graphFocusState.fileNodeId);
+        const selectedFn = byId.get(graphFocusState.functionNodeId);
+        if(!selectedFile || !selectedFn){ return; }
+        let merged = mergeGraphData(
+          [selectedFile, selectedFn],
+          [{
+            id: selectedFile.id + "::contains::" + selectedFn.id,
+            fromId: selectedFile.id,
+            toId: selectedFn.id,
+            kind: "contains",
+            summaryEn: "File contains selected function",
+          }],
+          [],
+          [],
+        );
+        if(graphFocusState.localDeps){
+          const local = collectLocalDependencyData(selectedFn.id);
+          merged = mergeGraphData(merged.nodes, merged.edges, local.nodes, local.edges);
+        }
+        (graphFocusState.externalSeedIds || []).forEach((seedId)=>{
+          const ext = collectExternalDependencyData(seedId);
+          merged = mergeGraphData(merged.nodes, merged.edges, ext.nodes, ext.edges);
+        });
+        graphFocusState.displayNodes = merged.nodes;
+        graphFocusState.displayEdges = merged.edges;
+        renderGraphErd(merged.nodes, merged.edges);
+        bindFocusedSymbolSelection(merged.nodes);
+        setTimeout(()=>{
+          const focusIds = (merged.nodes || []).filter((n)=>n && (n.kind === "File" || n.kind === "Symbol")).map((n)=>n.id);
+          fitGraphViewToRenderedNodes(focusIds, graphFocusState.localDeps ? 120 : 100);
+        }, 0);
+      }
       function computeAncestorPath(fileNodeId, nodes, edges){
         const byId = new Map((nodes || []).map((n)=>[n.id, n]));
         const parentEdgeByChild = new Map();
@@ -1036,6 +1238,7 @@ export function buildMainTerminalHtml(token?: string): string {
         graphFocusState.fileNodePath = fileNode && fileNode.path ? String(fileNode.path) : "";
         graphFocusState.functionNodeId = null;
         graphFocusState.localDeps = false;
+        graphFocusState.externalSeedIds = [];
         graphFocusState.functions = [];
         if(panel){ panel.classList.add("open"); }
         if(backBtn){ backBtn.style.display = "inline-block"; }
@@ -1100,6 +1303,7 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       async function renderTechnicalFocusGraph(){
         if(!graphFocusState.fileNodeId || !graphFocusState.functionNodeId){ return; }
+        window.__graphSelectedFnId = graphFocusState.functionNodeId;
         const hint = document.getElementById("graphHint");
         const focusHint = document.getElementById("graphExplorerHint");
         const svg = document.getElementById("graphCanvas");
@@ -1111,54 +1315,7 @@ export function buildMainTerminalHtml(token?: string): string {
           if(focusHint){ focusHint.textContent = "Focused nodes are missing. Try rebuilding graph."; }
           return;
         }
-        let nodes = [selectedFile, selectedFn];
-        let edges = [{
-          id: selectedFile.id + "::contains::" + selectedFn.id,
-          fromId: selectedFile.id,
-          toId: selectedFn.id,
-          kind: "contains",
-          summaryEn: "File contains selected function",
-        }];
-        if(graphFocusState.localDeps){
-          const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(selectedFn.id) + "/neighbors")).then((r)=>r.json());
-          if(res.ok){
-            const nearNodes = res.nodes || [];
-            const nearEdges = res.edges || [];
-
-            // Merge into global cache
-            const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
-            nearNodes.forEach((n)=>{ if(n && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
-            const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id));
-            nearEdges.forEach((e)=>{ if(e && !existingEdgeIds.has(e.id)){ graphNodeCache.edges.push(e); } });
-
-            const symbolNodes = nearNodes.filter((n)=>n && n.kind === "Symbol");
-            const byId = new Map(symbolNodes.map((n)=>[n.id, n]));
-            const callEdges = nearEdges.filter((e)=>
-              e.kind === "calls" && (e.fromId === selectedFn.id || e.toId === selectedFn.id) &&
-              byId.has(e.fromId) && byId.has(e.toId)
-            );
-            const depIds = new Set([selectedFn.id]);
-            callEdges.forEach((e)=>{ depIds.add(e.fromId); depIds.add(e.toId); });
-            const depNodes = symbolNodes.filter((n)=>depIds.has(n.id));
-            nodes = [selectedFile].concat(depNodes);
-            edges = [{
-              id: selectedFile.id + "::contains::" + selectedFn.id,
-              fromId: selectedFile.id,
-              toId: selectedFn.id,
-              kind: "contains",
-              summaryEn: "File contains selected function",
-            }].concat(callEdges.map((e)=>({
-              id: e.id || (e.fromId + "::calls::" + e.toId),
-              fromId: e.fromId,
-              toId: e.toId,
-              kind: "calls",
-              summaryEn: e.fromId === selectedFn.id
-                ? "Selected function depends on this function."
-                : "This function depends on selected function.",
-            })));
-          }
-        }
-        renderGraphErd(nodes, edges);
+        rebuildFocusedGraphAndRender();
         if(hint){
           hint.textContent = graphFocusState.localDeps
             ? "Focused view: file + function + local dependencies (arrows show direction)."
@@ -1166,7 +1323,7 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(focusHint){
           focusHint.textContent = graphFocusState.localDeps
-            ? "Arrows from selected function mean dependencies it calls. Arrows into it mean dependents."
+            ? "Connection types: Invokes, Invoked By, Consumes Output Of, Provides Output To. External one-degree links are included for selected seeds."
             : "Use 'Show local dependencies' to expand connected local functions.";
         }
       }
@@ -1194,6 +1351,7 @@ export function buildMainTerminalHtml(token?: string): string {
           contains: "rgba(34,211,238,0.45)",
           depends_on: "rgba(125,211,252,0.55)",
           calls: "rgba(94,234,212,0.62)",
+          consumes: "rgba(167,139,250,0.78)",
           reads: "rgba(250,204,21,0.7)",
           writes: "rgba(248,113,113,0.7)",
           emits: "rgba(253,186,116,0.72)",
@@ -1201,6 +1359,159 @@ export function buildMainTerminalHtml(token?: string): string {
           related_to: "rgba(196,181,253,0.72)",
         };
         return map[kind] || "rgba(125,211,252,0.4)";
+      }
+      function nodeSizeByKind(kind){
+        if(kind === "File"){ return { w: 230, h: 72 }; }
+        if(kind === "Symbol"){ return { w: 220, h: 68 }; }
+        if(kind === "Module"){ return { w: 210, h: 64 }; }
+        return { w: 210, h: 64 };
+      }
+      function nodeLane(kind){
+        if(kind === "Project"){ return 0; }
+        if(kind === "Module"){ return 1; }
+        if(kind === "File"){ return 2; }
+        if(kind === "Symbol"){ return 3; }
+        if(kind === "Workflow" || kind === "Concept"){ return 4; }
+        return 5;
+      }
+      function rectBoundaryPoint(node, tx, ty){
+        const cx = node.x || 0;
+        const cy = node.y || 0;
+        const hw = (node.w || 200) / 2;
+        const hh = (node.h || 64) / 2;
+        const dx = tx - cx;
+        const dy = ty - cy;
+        if(dx === 0 && dy === 0){ return { x: cx, y: cy }; }
+        const sx = Math.abs(dx) / hw;
+        const sy = Math.abs(dy) / hh;
+        const s = Math.max(sx, sy);
+        return { x: cx + dx / s, y: cy + dy / s };
+      }
+      function edgePathWithRouting(source, target, edgeIdx){
+        const sp = rectBoundaryPoint(source, target.x || 0, target.y || 0);
+        const tp = rectBoundaryPoint(target, source.x || 0, source.y || 0);
+        const mx = (sp.x + tp.x) / 2;
+        const my = (sp.y + tp.y) / 2;
+        const dx = tp.x - sp.x;
+        const dy = tp.y - sp.y;
+        const len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+        const nx = -dy / len;
+        const ny = dx / len;
+        const baseOffset = Math.min(56, Math.max(18, len * 0.12));
+        const signedOffset = baseOffset * ((edgeIdx % 2 === 0 ? 1 : -1) * (1 + Math.floor(edgeIdx / 2) * 0.35));
+        const cx = mx + nx * signedOffset;
+        const cy = my + ny * signedOffset;
+        const d = "M " + sp.x + " " + sp.y + " Q " + cx + " " + cy + " " + tp.x + " " + tp.y;
+        return { d, sp, tp, cx, cy, mx, my };
+      }
+      function parseEdgeConnectionLabel(edge){
+        if(edge.kind === "calls"){
+          return edge.fromId === (window.__graphSelectedFnId || "") ? "Invokes" : "Invoked By";
+        }
+        if(edge.kind === "consumes"){
+          return edge.fromId === (window.__graphSelectedFnId || "") ? "Consumes Output Of" : "Provides Output To";
+        }
+        return "";
+      }
+      function stopGraphSimulation(){
+        if(graphSimulation){
+          try { graphSimulation.stop(); } catch(_e){}
+          graphSimulation = null;
+        }
+      }
+      function setupHoverForce(graph){
+        let simNodes = [];
+        const adjacency = new Map();
+        (graph.edges || []).forEach((e)=>{
+          if(!adjacency.has(e.fromId)){ adjacency.set(e.fromId, new Set()); }
+          if(!adjacency.has(e.toId)){ adjacency.set(e.toId, new Set()); }
+          adjacency.get(e.fromId).add(e.toId);
+          adjacency.get(e.toId).add(e.fromId);
+        });
+        function force(alpha){
+          if(!graphSimState.hoveredNodeId){ return; }
+          const hoveredId = graphSimState.hoveredNodeId;
+          const neigh = adjacency.get(hoveredId);
+          if(!neigh || neigh.size === 0){ return; }
+          const center = simNodes.find((n)=>n.id === hoveredId);
+          if(!center){ return; }
+          simNodes.forEach((n)=>{
+            if(!neigh.has(n.id)){ return; }
+            const dx = (center.x || 0) - (n.x || 0);
+            const dy = (center.y || 0) - (n.y || 0);
+            n.vx = (n.vx || 0) + dx * alpha * 0.02;
+            n.vy = (n.vy || 0) + dy * alpha * 0.02;
+          });
+        }
+        force.initialize = function(nodes){ simNodes = nodes; };
+        return force;
+      }
+      function setupBoundsForce(width, height){
+        let simNodes = [];
+        function force(){
+          const pad = 36;
+          for(const n of simNodes){
+            const hw = (n.w || 200) / 2;
+            const hh = (n.h || 64) / 2;
+            if((n.x || 0) < pad + hw) n.x = pad + hw;
+            if((n.y || 0) < pad + hh) n.y = pad + hh;
+            if((n.x || 0) > width - pad - hw) n.x = width - pad - hw;
+            if((n.y || 0) > height - pad - hh) n.y = height - pad - hh;
+          }
+        }
+        force.initialize = function(nodes){ simNodes = nodes; };
+        return force;
+      }
+      function renderGraphErdStatic(nodes, edges){
+        const svg = document.getElementById("graphCanvas");
+        const legend = document.getElementById("graphLegend");
+        const hoverCard = document.getElementById("graphHoverCard");
+        if(!svg || !legend){ return; }
+        if(hoverCard){ hoverCard.style.display = "none"; }
+        if(!nodes || nodes.length === 0){
+          svg.innerHTML = '<text x="24" y="40" fill="#7dd3fc" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
+          legend.innerHTML = "";
+          return;
+        }
+        const layout = layoutErd(nodes);
+        applyGraphViewBox(layout.width, layout.height);
+        const markerDefs =
+          '<defs>' +
+          '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+          '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.82)"></path>' +
+          '</marker>' +
+          "</defs>";
+        const edgeSvg = (edges || []).map((e)=>{
+          const from = layout.positions.get(e.fromId);
+          const to = layout.positions.get(e.toId);
+          if(!from || !to){ return ""; }
+          const sx = from.x + from.w;
+          const sy = from.y + (from.h / 2);
+          const tx = to.x;
+          const ty = to.y + (to.h / 2);
+          const cx1 = sx + Math.max(20, (tx - sx) * 0.4);
+          const cx2 = tx - Math.max(20, (tx - sx) * 0.4);
+          const d = "M " + sx + " " + sy + " C " + cx1 + " " + sy + ", " + cx2 + " " + ty + ", " + tx + " " + ty;
+          return '<path class="graphEdgePath" data-edge-id="' + escHtml(e.id || "") + '" d="' + d + '" stroke="' + edgeColor(e.kind) + '" stroke-width="1.6" fill="none" marker-end="url(#graphArrow)"></path>';
+        }).join("");
+        const nodeSvg = nodes.map((n)=>{
+          const p = layout.positions.get(n.id);
+          if(!p){ return ""; }
+          const title = escHtml(n.name || n.id);
+          const subtitle = escHtml(n.kind || "Node");
+          const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
+          const fill = nodeColor(n.kind);
+          return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
+            '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
+            '<text x="' + (p.x + 8) + '" y="' + (p.y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
+            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+            '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '">' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="transparent"></rect>' +
+            '</g>' +
+            '</g>';
+        }).join("");
+        svg.innerHTML = markerDefs + '<g>' + edgeSvg + '</g><g>' + nodeSvg + "</g>";
       }
       function layoutErd(nodes){
         const kindOrder = ["Project","Module","File","Symbol","Workflow","Concept","DataEntity"];
@@ -1304,73 +1615,188 @@ export function buildMainTerminalHtml(token?: string): string {
         const legend = document.getElementById("graphLegend");
         const hoverCard = document.getElementById("graphHoverCard");
         if(!svg || !legend){ return; }
+        if(typeof d3 === "undefined" || !d3.forceSimulation){
+          renderGraphErdStatic(nodes, edges);
+          return;
+        }
+        stopGraphSimulation();
         if(hoverCard){ hoverCard.style.display = "none"; }
         if(!nodes || nodes.length === 0){
           svg.innerHTML = '<text x="24" y="40" fill="#7dd3fc" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
           legend.innerHTML = "";
           return;
         }
-        const layout = layoutErd(nodes);
-        applyGraphViewBox(layout.width, layout.height);
-        const markerDefs =
-          '<defs>' +
-          '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
-          '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.7)"></path>' +
-          '</marker>' +
-          "</defs>";
-        const edgeSvg = (edges || []).map((e)=>{
-          const from = layout.positions.get(e.fromId);
-          const to = layout.positions.get(e.toId);
-          if(!from || !to){ return ""; }
-          const sx = from.x + from.w;
-          const sy = from.y + (from.h / 2);
-          const tx = to.x;
-          const ty = to.y + (to.h / 2);
-          const cx1 = sx + Math.max(20, (tx - sx) * 0.4);
-          const cx2 = tx - Math.max(20, (tx - sx) * 0.4);
-          const d = "M " + sx + " " + sy + " C " + cx1 + " " + sy + ", " + cx2 + " " + ty + ", " + tx + " " + ty;
-          return '<path class="graphEdgePath" data-edge-id="' + escHtml(e.id || "") + '" d="' + d + '" stroke="' + edgeColor(e.kind) + '" stroke-width="1.6" fill="none" marker-end="url(#graphArrow)">' +
-            "<title>" + escHtml((e.kind || "edge") + ": " + (e.fromId || "") + " -> " + (e.toId || "")) + "</title>" +
-            "</path>";
-        }).join("");
-        const nodeSvg = nodes.map((n)=>{
-          const p = layout.positions.get(n.id);
-          if(!p){ return ""; }
-          const title = escHtml(n.name || n.id);
-          const subtitle = escHtml(n.kind || "Node");
-          const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
-          const fill = nodeColor(n.kind);
-          return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
-            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
-            '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
-            '<text x="' + (p.x + 8) + '" y="' + (p.y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
-            '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '">' +
-            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="transparent"></rect>' +
-            '</g>' +
-            '</g>';
-        }).join("");
-        svg.innerHTML = markerDefs + '<g>' + edgeSvg + "</g>" + '<g>' + nodeSvg + "</g>";
-        if(hoverCard){
-          svg.querySelectorAll(".graphNodeHotspot").forEach((el)=>{
-            el.addEventListener("mousemove",(event)=>{
-              const summary = el.getAttribute("data-summary") || "No overview available.";
-              const nodeName = el.getAttribute("data-node") || "Node";
-              hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br>" + summary;
-              hoverCard.style.display = "block";
-              hoverCard.style.left = (event.offsetX + 14) + "px";
-              hoverCard.style.top = (event.offsetY + 14) + "px";
+        const width = Math.max(1200, Math.floor((svg.parentElement && svg.parentElement.clientWidth) || 1200));
+        const height = Math.max(640, Math.floor((svg.parentElement && svg.parentElement.clientHeight) || 700));
+        applyGraphViewBox(width, height);
+        const simNodes = (nodes || []).map((n, i)=>{
+          const size = nodeSizeByKind(n.kind);
+          const theta = (i / Math.max(1, nodes.length)) * Math.PI * 2;
+          return { ...n, w: size.w, h: size.h, x: width / 2 + Math.cos(theta) * (180 + i * 2), y: height / 2 + Math.sin(theta) * (160 + i * 2) };
+        });
+        const byId = new Map(simNodes.map((n)=>[n.id, n]));
+        const simEdges = (edges || [])
+          .filter((e)=>e && typeof e.fromId === "string" && typeof e.toId === "string")
+          .filter((e)=>byId.has(e.fromId) && byId.has(e.toId))
+          .map((e)=>({ ...e, source: e.fromId, target: e.toId }));
+
+        function renderTick(){
+          const markerDefs =
+            '<defs>' +
+            '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+            '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.82)"></path>' +
+            '</marker>' +
+            "</defs>";
+          const edgeLabelSvg = [];
+          const edgeSvg = simEdges.map((e, idx)=>{
+            const s = byId.get(e.fromId);
+            const t = byId.get(e.toId);
+            if(!s || !t){ return ""; }
+            const routed = edgePathWithRouting(s, t, idx);
+            const label = parseEdgeConnectionLabel(e);
+            const hovered = graphSimState.hoveredNodeId;
+            const selected = window.__graphSelectedFnId || "";
+            const isEmphasized = Boolean(
+              (hovered && (e.fromId === hovered || e.toId === hovered)) ||
+              (selected && (e.fromId === selected || e.toId === selected))
+            );
+            if(label){
+              const ang = Math.atan2(routed.tp.y - routed.sp.y, routed.tp.x - routed.sp.x) * (180 / Math.PI);
+              edgeLabelSvg.push(
+                '<g transform="translate(' + routed.mx + ' ' + routed.my + ') rotate(' + ang + ')">' +
+                  '<rect x="-50" y="-10" width="100" height="14" rx="7" ry="7" fill="rgba(2,12,20,0.88)" stroke="rgba(125,211,252,0.28)"></rect>' +
+                  '<text x="0" y="0" fill="#bae6fd" font-size="9" text-anchor="middle" font-family="ui-sans-serif, system-ui">' + escHtml(label) + '</text>' +
+                '</g>'
+              );
+            }
+            const edgeWidth = isEmphasized ? 2.2 : (e.kind === "contains" ? 1.2 : (e.kind === "calls" || e.kind === "consumes") ? 1.8 : 1.4);
+            const edgeOpacity = isEmphasized ? 1 : (e.kind === "contains" ? 0.38 : 0.88);
+            return '<path class="graphEdgePath" data-edge-id="' + escHtml(e.id || "") + '" d="' + routed.d + '" stroke="' + edgeColor(e.kind) + '" stroke-opacity="' + edgeOpacity + '" stroke-width="' + edgeWidth + '" fill="none" marker-end="url(#graphArrow)"></path>';
+          }).join("");
+          const nodeSvg = simNodes.map((n)=>{
+            const x = (n.x || 0) - n.w / 2;
+            const y = (n.y || 0) - n.h / 2;
+            const title = escHtml(n.name || n.id);
+            const subtitle = escHtml(n.kind || "Node");
+            const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
+            const fill = nodeColor(n.kind);
+            return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
+              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
+              '<rect x="' + x + '" y="' + y + '" width="' + n.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
+              '<text x="' + (x + 8) + '" y="' + (y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
+              '<text x="' + (x + 8) + '" y="' + (y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+              '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '" data-kind="' + escHtml(n.kind || "") + '">' +
+              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="transparent"></rect>' +
+              '</g>' +
+              '</g>';
+          }).join("");
+          svg.innerHTML = markerDefs + '<g>' + edgeSvg + "</g>" + '<g>' + edgeLabelSvg.join("") + "</g>" + '<g>' + nodeSvg + "</g>";
+          if(hoverCard){
+            svg.querySelectorAll(".graphNodeHotspot").forEach((el)=>{
+              el.addEventListener("mousemove",(event)=>{
+                const summary = el.getAttribute("data-summary") || "No overview available.";
+                const nodeName = el.getAttribute("data-node") || "Node";
+                hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br>" + summary;
+                hoverCard.style.display = "block";
+                hoverCard.style.left = (event.offsetX + 14) + "px";
+                hoverCard.style.top = (event.offsetY + 14) + "px";
+              });
+              el.addEventListener("mouseenter",()=>{
+                graphSimState.hoveredNodeId = el.getAttribute("data-node-id") || null;
+                graphSimState.lastInteractionTs = Date.now();
+                if(graphSimulation){ graphSimulation.alphaTarget(0.14).restart(); }
+              });
+              el.addEventListener("mouseleave",()=>{
+                hoverCard.style.display = "none";
+                graphSimState.hoveredNodeId = null;
+                if(graphSimulation){ graphSimulation.alphaTarget(0); }
+              });
+              el.addEventListener("click",()=>{
+                const nodeId = el.getAttribute("data-node-id") || "";
+                const nodeKind = el.getAttribute("data-kind") || "";
+                const nodeName = el.getAttribute("data-node") || "File";
+                if(graphViewMode === "technical" && nodeKind === "File" && nodeId){
+                  void loadFunctionsForFile(nodeId, nodeName);
+                }
+              });
+              el.addEventListener("mousedown",(evt)=>{
+                const nodeId = el.getAttribute("data-node-id");
+                if(!nodeId){ return; }
+                const node = byId.get(nodeId);
+                if(!node){ return; }
+                graphDragState.active = true;
+                graphDragState.nodeId = nodeId;
+                graphDragState.pinOnRelease = Boolean(evt.shiftKey || evt.metaKey || evt.altKey || evt.ctrlKey);
+                node.fx = node.x;
+                node.fy = node.y;
+                graphSimState.lastInteractionTs = Date.now();
+                if(graphSimulation){ graphSimulation.alphaTarget(0.22).restart(); }
+                evt.preventDefault();
+              });
             });
-            el.addEventListener("mouseleave",()=>{
-              hoverCard.style.display = "none";
-            });
-          });
+          }
+          const kinds = Array.from(new Set(simNodes.map((n)=>n.kind || "Other")));
+          let legendHtml = kinds.sort().map((kind)=>'<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + nodeColor(kind) + '"></span>' + escHtml(kind) + "</span>").join("");
+          if((window.__graphSelectedFnId || "")){
+            legendHtml += '<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + edgeColor("calls") + '"></span>Invokes / Invoked By</span>' +
+              '<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + edgeColor("consumes") + '"></span>Consumes Output Of / Provides Output To</span>';
+          }
+          legend.innerHTML = legendHtml;
         }
-        const kinds = Array.from(new Set(nodes.map((n)=>n.kind || "Other")));
-        legend.innerHTML = kinds
-          .sort()
-          .map((kind)=>'<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + nodeColor(kind) + '"></span>' + escHtml(kind) + "</span>")
-          .join("");
+
+        graphSimulation = d3.forceSimulation(simNodes)
+          .force("charge", d3.forceManyBody().strength(-420))
+          .force("link", d3.forceLink(simEdges).id((d)=>d.id).distance((e)=>{
+            if(e.kind === "contains") return 180;
+            if(e.kind === "calls") return 145;
+            if(e.kind === "consumes") return 165;
+            return 160;
+          }).strength((e)=>{
+            if(e.kind === "contains") return 0.26;
+            return 0.2;
+          }))
+          .force("center", d3.forceCenter(width / 2, height / 2))
+          .force("collide", d3.forceCollide().radius((d)=>Math.max(d.w, d.h) * 0.55 + 12).iterations(2))
+          .force("hover-cluster", setupHoverForce({ nodes: simNodes, edges: simEdges }))
+          .alpha(1)
+          .alphaDecay(0.035)
+          .velocityDecay(0.32)
+          .on("tick", renderTick);
+
+        function moveDrag(evt){
+          if(!graphDragState.active || !graphDragState.nodeId){ return; }
+          const node = byId.get(graphDragState.nodeId);
+          if(!node){ return; }
+          const rect = svg.getBoundingClientRect();
+          const x = ((evt.clientX - rect.left) / rect.width) * width;
+          const y = ((evt.clientY - rect.top) / rect.height) * height;
+          node.fx = x;
+          node.fy = y;
+          graphSimState.lastInteractionTs = Date.now();
+          if(graphSimulation){ graphSimulation.alphaTarget(0.24).restart(); }
+        }
+        function endDrag(){
+          if(!graphDragState.active || !graphDragState.nodeId){ return; }
+          const node = byId.get(graphDragState.nodeId);
+          if(node && !graphDragState.pinOnRelease){
+            node.fx = null;
+            node.fy = null;
+          }
+          graphDragState.active = false;
+          graphDragState.nodeId = null;
+          graphDragState.pinOnRelease = false;
+          if(graphSimulation){ graphSimulation.alphaTarget(0); }
+        }
+        svg.onmousemove = moveDrag;
+        svg.onmouseup = endDrag;
+        svg.onmouseleave = ()=>{ if(graphDragState.active){ endDrag(); } };
+
+        renderTick();
+        setTimeout(()=>{
+          if(graphSimulation && !graphDragState.active && Date.now() - (graphSimState.lastInteractionTs || 0) > 2500){
+            graphSimulation.stop();
+          }
+        }, 3200);
       }
       async function refreshGraphErd(){
         const hint = document.getElementById("graphHint");
@@ -1394,8 +1820,9 @@ export function buildMainTerminalHtml(token?: string): string {
                 " rendered with " + nodes.length + " node(s) and " + edges.length + " edge(s).";
             }
           } else {
-            const nodesRes = await fetch(withToken("/api/graph/nodes?limit=260")).then((r)=>r.json());
-            const edgesRes = await fetch(withToken("/api/graph/edges?limit=700")).then((r)=>r.json());
+            stopGraphSimulation();
+            const nodesRes = await fetch(withToken("/api/graph/nodes?limit=2000")).then((r)=>r.json());
+            const edgesRes = await fetch(withToken("/api/graph/edges?limit=4000")).then((r)=>r.json());
             if(!nodesRes.ok || !edgesRes.ok){
               if(hint){ hint.textContent = "Graph visualization unavailable: " + ((nodesRes.error || edgesRes.error || "unknown")); }
               renderGraphErd([], []);
@@ -1404,99 +1831,9 @@ export function buildMainTerminalHtml(token?: string): string {
             const sourceNodes = nodesRes.nodes || [];
             const sourceEdges = edgesRes.edges || [];
             graphNodeCache = { nodes: sourceNodes, edges: sourceEdges };
-            const technicalNodes = sourceNodes.filter((n)=>n && (n.kind === "Project" || n.kind === "Module" || n.kind === "File"));
-            const technicalNodeIds = new Set(technicalNodes.map((n)=>n.id));
-            const technicalEdges = sourceEdges.filter((e)=>e && e.kind === "contains" && technicalNodeIds.has(e.fromId) && technicalNodeIds.has(e.toId));
-            const treeLayout = layoutTechnicalTree(technicalNodes, technicalEdges);
-            const svg = document.getElementById("graphCanvas");
-            const legend = document.getElementById("graphLegend");
-            if(!svg || !legend){
-              renderGraphErd(technicalNodes, technicalEdges);
-            } else if(!technicalNodes.length){
-              renderGraphErd([], []);
-            } else {
-              applyGraphViewBox(treeLayout.width, treeLayout.height);
-              const markerDefs =
-                '<defs>' +
-                '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
-                '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.7)"></path>' +
-                '</marker>' +
-                "</defs>";
-              const edgeSvg = technicalEdges.map((e)=>{
-                const from = treeLayout.positions.get(e.fromId);
-                const to = treeLayout.positions.get(e.toId);
-                if(!from || !to){ return ""; }
-                const sx = from.x + from.w;
-                const sy = from.y + (from.h / 2);
-                const tx = to.x;
-                const ty = to.y + (to.h / 2);
-                const cx1 = sx + Math.max(26, (tx - sx) * 0.35);
-                const cx2 = tx - Math.max(26, (tx - sx) * 0.35);
-                const d = "M " + sx + " " + sy + " C " + cx1 + " " + sy + ", " + cx2 + " " + ty + ", " + tx + " " + ty;
-                return '<path class="graphEdgePath" data-edge-id="' + escHtml(e.id || "") + '" d="' + d + '" stroke="' + edgeColor("contains") + '" stroke-width="1.6" fill="none" marker-end="url(#graphArrow)"></path>';
-              }).join("");
-              const nodeSvg = technicalNodes.map((n)=>{
-                const p = treeLayout.positions.get(n.id);
-                if(!p){ return ""; }
-                const title = escHtml(n.name || n.id);
-                const subtitle = escHtml(n.kind || "Node");
-                const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
-                const fill = nodeColor(n.kind);
-                return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
-                  '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
-                  '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
-                  '<text x="' + (p.x + 8) + '" y="' + (p.y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-                  '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 44) + '</text>' +
-                  '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-id="' + escHtml(n.id) + '" data-kind="' + escHtml(n.kind || "") + '" data-node-id="' + escHtml(n.id) + '">' +
-                  '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="transparent"></rect>' +
-                  '</g>' +
-                  '</g>';
-              }).join("");
-              svg.innerHTML = markerDefs + '<g>' + edgeSvg + "</g>" + '<g>' + nodeSvg + "</g>";
-              if(graphFocusState.fileNodeId){
-                const ctx = computeAncestorPath(graphFocusState.fileNodeId, technicalNodes, technicalEdges);
-                svg.querySelectorAll(".graphNodeCard").forEach((el)=>{
-                  const id = el.getAttribute("data-node-id");
-                  if(!id || ctx.nodeIds.has(id)){ return; }
-                  el.classList.add("graphNodeDimmed");
-                });
-                svg.querySelectorAll(".graphEdgePath").forEach((el)=>{
-                  const id = el.getAttribute("data-edge-id");
-                  if(!id || ctx.edgeIds.has(id)){ return; }
-                  el.classList.add("graphNodeDimmed");
-                });
-              }
-              const hoverCard = document.getElementById("graphHoverCard");
-              if(hoverCard){
-                svg.querySelectorAll(".graphNodeHotspot").forEach((el)=>{
-                  el.addEventListener("mousemove",(event)=>{
-                    const summary = el.getAttribute("data-summary") || "No overview available.";
-                    const nodeName = el.getAttribute("data-node") || "Node";
-                    hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br>" + summary;
-                    hoverCard.style.display = "block";
-                    hoverCard.style.left = (event.offsetX + 14) + "px";
-                    hoverCard.style.top = (event.offsetY + 14) + "px";
-                  });
-                  el.addEventListener("mouseleave",()=>{
-                    hoverCard.style.display = "none";
-                  });
-                  el.addEventListener("click",()=>{
-                    if(graphViewMode !== "technical"){ return; }
-                    const kind = el.getAttribute("data-kind") || "";
-                    if(kind !== "File"){ return; }
-                    const nodeId = el.getAttribute("data-id");
-                    const nodeName = el.getAttribute("data-node") || "File";
-                    if(!nodeId){ return; }
-                    void loadFunctionsForFile(nodeId, nodeName);
-                  });
-                });
-              }
-              legend.innerHTML = ["Project","Module","File"]
-                .map((kind)=>'<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + nodeColor(kind) + '"></span>' + kind + "</span>")
-                .join("");
-            }
+            renderGraphErd(sourceNodes, sourceEdges);
             if(hint){
-              hint.textContent = "Technical structure tree rendered with " + technicalNodes.length + " node(s) and " + technicalEdges.length + " edge(s).";
+              hint.textContent = "Technical full graph rendered with " + sourceNodes.length + " node(s) and " + sourceEdges.length + " edge(s).";
             }
             if(graphFocusState.fileNodeId && graphFocusState.functionNodeId){
               await renderTechnicalFocusGraph();
@@ -1673,16 +2010,34 @@ export function buildMainTerminalHtml(token?: string): string {
         graphFocusState.localDeps = !graphFocusState.localDeps;
         const btn = document.getElementById("btnGraphLocalDeps");
         if(btn){ btn.textContent = graphFocusState.localDeps ? "Hide local dependencies" : "Show local dependencies"; }
-        void renderTechnicalFocusGraph();
+        rebuildFocusedGraphAndRender();
+      });
+      document.getElementById("btnGraphExternalDeps")?.addEventListener("click",()=>{
+        if(!graphFocusState.functionNodeId){ return; }
+        if(!graphFocusState.externalSeedIds.includes(graphFocusState.functionNodeId)){
+          graphFocusState.externalSeedIds.push(graphFocusState.functionNodeId);
+        }
+        graphFocusState.localDeps = true;
+        const depsBtn = document.getElementById("btnGraphLocalDeps");
+        if(depsBtn){ depsBtn.textContent = "Hide local dependencies"; }
+        const hint = document.getElementById("graphExplorerHint");
+        if(hint){
+          hint.textContent = "Expanded one-degree external dependencies for selected function. Select another function and expand again to cascade.";
+        }
+        rebuildFocusedGraphAndRender();
       });
       document.getElementById("btnGraphFocusReset")?.addEventListener("click",()=>{
+        window.__graphSelectedFnId = "";
         graphFocusState.functionNodeId = null;
         graphFocusState.localDeps = false;
+        graphFocusState.externalSeedIds = [];
         const btn = document.getElementById("btnGraphLocalDeps");
         if(btn){
           btn.textContent = "Show local dependencies";
           btn.disabled = true;
         }
+        const extBtn = document.getElementById("btnGraphExternalDeps");
+        if(extBtn){ extBtn.disabled = true; }
         const resetBtn = document.getElementById("btnGraphFocusReset");
         if(resetBtn){ resetBtn.disabled = true; }
         const list = document.getElementById("graphFunctionList");
