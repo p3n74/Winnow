@@ -459,9 +459,11 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         display: none;
         flex-direction: column;
         align-items: center;
+        justify-content: center;
         gap: 12px;
-        margin-top: 10px;
-        padding: 14px 16px;
+        margin-top: 0;
+        padding: 10px 12px;
+        min-height: 100px;
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
         background: var(--panel2);
@@ -2004,6 +2006,13 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         agentFlavorIndex = (agentFlavorIndex + 1) % AGENT_RUN_FLAVOR.length;
         el.textContent = AGENT_RUN_FLAVOR[agentFlavorIndex];
       }
+      function syncAgentLoadingHeight(){
+        const ta = document.getElementById('agentPrompt');
+        const banner = document.getElementById('agentRunLoadingBanner');
+        if(!ta || !banner){ return; }
+        const px = Math.max(100, Math.round(ta.getBoundingClientRect().height || 0));
+        banner.style.minHeight = px + 'px';
+      }
       function applyAgentRunUi(){
         const locked = agentStartInFlight || agentSessionRunning;
         document.querySelectorAll('[data-agent-run]').forEach((b) => {
@@ -2014,7 +2023,9 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const ta = document.getElementById('agentPrompt');
         if(ta){
           ta.disabled = locked;
+          ta.style.display = locked ? 'none' : '';
         }
+        syncAgentLoadingHeight();
         const banner = document.getElementById('agentRunLoadingBanner');
         const cancelBtn = document.getElementById('btnAgentRunCancel');
         if(banner){
@@ -2181,7 +2192,9 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       function clearPrompt(){
         const area = document.getElementById('agentPrompt');
         area.value = '';
-        area.focus();
+        if(!area.disabled){
+          area.focus();
+        }
       }
       async function refreshSessions(){
         const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
@@ -2276,6 +2289,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           startAgentRun();
         }
       });
+      document.getElementById('agentPrompt').addEventListener('input', syncAgentLoadingHeight);
+      window.addEventListener('resize', syncAgentLoadingHeight);
       const projectFilter = document.getElementById('projectFilter');
       if(projectFilter){
         projectFilter.addEventListener('input', () => renderProjects(allProjects));
@@ -2289,6 +2304,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       setView(INITIAL_VIEW);
       setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);
+      syncAgentLoadingHeight();
     </script>
   </body>
 </html>`;
