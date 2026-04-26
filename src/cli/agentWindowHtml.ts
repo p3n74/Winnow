@@ -72,6 +72,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-style: italic;
       }
       .title-bar nav a:hover { color: var(--text-neon); }
+      .title-bar nav a.nav-locked {
+        pointer-events: none;
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
       .body { flex: 1; min-height: 0; display: flex; min-width: 0; }
       .activity-bar {
         width: 48px;
@@ -615,6 +620,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let agentStartAbort = null;
       let agentStartInFlight = false;
       let agentSessionRunning = false;
+      let agentNavLockInstalled = false;
       let agentFlavorTimer = null;
       let agentFlavorIndex = 0;
       const AGENT_RUN_FLAVOR = [
@@ -625,6 +631,42 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         "Double-checking edge cases…",
         "Almost there — still working…",
       ];
+      function agentNavLockActive() {
+        return agentStartInFlight || agentSessionRunning;
+      }
+      function onAgentBeforeUnload(e) {
+        if (!agentNavLockActive()) {
+          return;
+        }
+        e.preventDefault();
+        e.returnValue = "";
+      }
+      function onAgentPopState() {
+        if (!agentNavLockActive()) {
+          return;
+        }
+        try {
+          history.pushState({ winnowAgentNavLock: 1 }, "", window.location.href);
+        } catch (_e) {}
+      }
+      function syncAgentNavigationLock() {
+        const want = agentNavLockActive();
+        if (want && !agentNavLockInstalled) {
+          try {
+            history.pushState({ winnowAgentNavLock: 1 }, "", window.location.href);
+          } catch (_e) {}
+          window.addEventListener("beforeunload", onAgentBeforeUnload);
+          window.addEventListener("popstate", onAgentPopState);
+          agentNavLockInstalled = true;
+        } else if (!want && agentNavLockInstalled) {
+          window.removeEventListener("beforeunload", onAgentBeforeUnload);
+          window.removeEventListener("popstate", onAgentPopState);
+          agentNavLockInstalled = false;
+        }
+        document.querySelectorAll(".title-bar nav a").forEach((a) => {
+          a.classList.toggle("nav-locked", want);
+        });
+      }
       let pollTimer = null;
       let streamSource = null;
       let selectedSyncedSession = null;
@@ -982,6 +1024,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (cancelBtn) {
           cancelBtn.disabled = false;
         }
+        syncAgentNavigationLock();
       }
       async function cancelAgentRun() {
         if (agentStartInFlight && agentStartAbort) {
@@ -1203,10 +1246,24 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       document.getElementById("linkDashboard").addEventListener("click", (e) => {
         e.preventDefault();
+        if (agentNavLockActive()) {
+          appendChat(
+            "system",
+            "Finish or cancel the agent run before leaving this page — refresh and navigation reset live state.",
+          );
+          return;
+        }
         openDashboard();
       });
       document.getElementById("linkMainGrid").addEventListener("click", (e) => {
         e.preventDefault();
+        if (agentNavLockActive()) {
+          appendChat(
+            "system",
+            "Finish or cancel the agent run before leaving this page — refresh and navigation reset live state.",
+          );
+          return;
+        }
         openMainGrid();
       });
       const sessionSelect = document.getElementById("agentSessionSelect");

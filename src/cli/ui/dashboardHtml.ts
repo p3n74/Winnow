@@ -92,6 +92,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
       .tab:hover { color: var(--text-strong); background: rgba(34, 211, 238, 0.08); }
       .tab.active { color: var(--text-neon); background: var(--panel2); border-color: var(--line); font-weight: 600; }
+      .tab:disabled { opacity: 0.45; cursor: not-allowed; }
       .body {
         flex: 0 0 auto;
         display: grid;
@@ -1615,6 +1616,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       let agentStartAbort = null;
       let agentStartInFlight = false;
       let agentSessionRunning = false;
+      let agentNavLockInstalled = false;
       let agentFlavorTimer = null;
       let agentFlavorIndex = 0;
       const AGENT_RUN_FLAVOR = [
@@ -1625,6 +1627,47 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         "Double-checking edge cases…",
         "Almost there — still working…",
       ];
+      function agentNavLockActive() {
+        return agentStartInFlight || agentSessionRunning;
+      }
+      function onAgentBeforeUnload(e) {
+        if (!agentNavLockActive()) {
+          return;
+        }
+        e.preventDefault();
+        e.returnValue = "";
+      }
+      function onAgentPopState() {
+        if (!agentNavLockActive()) {
+          return;
+        }
+        try {
+          history.pushState({ winnowAgentNavLock: 1 }, "", window.location.href);
+        } catch (_e) {}
+      }
+      function syncAgentNavigationLock() {
+        const want = agentNavLockActive();
+        if (want && !agentNavLockInstalled) {
+          try {
+            history.pushState({ winnowAgentNavLock: 1 }, "", window.location.href);
+          } catch (_e) {}
+          window.addEventListener("beforeunload", onAgentBeforeUnload);
+          window.addEventListener("popstate", onAgentPopState);
+          agentNavLockInstalled = true;
+        } else if (!want && agentNavLockInstalled) {
+          window.removeEventListener("beforeunload", onAgentBeforeUnload);
+          window.removeEventListener("popstate", onAgentPopState);
+          agentNavLockInstalled = false;
+        }
+        document.querySelectorAll(".tab[data-view]").forEach((tab) => {
+          const v = tab.getAttribute("data-view");
+          tab.disabled = want && v !== "agent";
+        });
+        const gridBtn = document.getElementById("mainGridBtn");
+        if (gridBtn) {
+          gridBtn.disabled = want;
+        }
+      }
       let pollTimer = null;
       let streamSource = null;
       let selectedSyncedSession = null;
@@ -1937,6 +1980,14 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
 
       function setView(view){
+        const busy = agentStartInFlight || agentSessionRunning;
+        if(busy && view !== 'agent'){
+          const msg = 'Finish or cancel the agent run before leaving the Agent tab — navigation would lose live state.';
+          const result = document.getElementById('result');
+          if(result){ result.textContent = msg; }
+          appendChat('system', msg);
+          return;
+        }
         if(usageRefreshTimer){
           clearInterval(usageRefreshTimer);
           usageRefreshTimer = null;
@@ -2142,6 +2193,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         if(cancelBtn){
           cancelBtn.disabled = false;
         }
+        syncAgentNavigationLock();
       }
       async function cancelAgentRun(){
         if(agentStartInFlight && agentStartAbort){
@@ -2359,6 +2411,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       if(mainGridBtn){
         mainGridBtn.addEventListener('click', (evt) => {
           evt.preventDefault();
+          if(agentNavLockActive()){
+            appendChat('system', 'Finish or cancel the agent run before opening Main Grid — navigation would lose live state.');
+            return;
+          }
           openMainGrid();
         });
       }

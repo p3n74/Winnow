@@ -39,7 +39,7 @@ function resolveShell() {
 }
 
 const shell = resolveShell();
-const child = pty.spawn(shell, ["-lc", "exit"], {
+const child = pty.spawn(shell, ["-c", "exit"], {
   name: "xterm-256color",
   cols: 80,
   rows: 24,

@@ -47,16 +47,11 @@ Winnow closes that gap:
 npm run setup
 ```
 
-On macOS, this now bootstraps system dependencies with Homebrew:
-- `ranger`
-- `htop`
-- `netwatch`
-- `cursor` (desktop app)
+On macOS, Homebrew installs `ranger` and `htop`. The **Cursor Agent CLI** (`cursor-agent`, from [cursor.com/install](https://cursor.com/install)) is installed next (not the Cursor desktop app).
 
-On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** to install:
-- Node.js LTS (must stay in the supported `>=20 <23` range for Winnow)
-- Git for Windows (Git Bash, used by the UI terminal panes)
-- Cursor (`Anysphere.Cursor`)
+Pane 4 defaults to a `netwatch` command if present on your `PATH`; that is a separate custom tool and is **not** installed by this script.
+
+On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** for Node.js LTS and Git for Windows, then installs the **Cursor Agent CLI** from [cursor.com/install?win32=true](https://cursor.com/install?win32=true) (not the Cursor desktop app).
 
 Native modules need a local build toolchain (Visual Studio Build Tools with “Desktop development with C++”, or the standalone MSVC toolchain) if `npm rebuild node-pty` fails.
 
@@ -66,7 +61,7 @@ If you prefer manual setup:
 npm install
 ```
 
-Use Node `>=20 <23` (Node 22 LTS recommended).
+Use **Node.js 20 or newer** (current or LTS is fine).
 
 ### 2) Run CLI
 
@@ -118,11 +113,11 @@ iscc scripts\installer\WinnowSetup.iss
 
 ## Requirements
 
-- Cursor app installed and authenticated (provides `cursor-agent`)
+- **Cursor Agent CLI** (`cursor-agent` on `PATH`; setup installs it via Cursor’s official installer — sign in when the CLI prompts you)
 - `ranger` on `PATH` (pane 1 default)
 - `htop` on `PATH` (pane 3 default)
-- `netwatch` on `PATH` (pane 4 default)
-- **Windows:** Git for Windows (`bash.exe`) so the main terminal grid can spawn PTYs; optional tools like `ranger` / `htop` / `netwatch` are not installed by the Windows script (use WSL, Scoop, or custom pane commands)
+- Pane 4 defaults to `netwatch` only if you install that yourself (or pass `--pane4-cmd` with another program)
+- **Windows:** Git for Windows (`bash.exe`) so the main terminal grid can spawn PTYs; optional tools like `ranger` / `htop` are not installed by the Windows script (use WSL, Scoop, or custom pane commands)
 
 ## Storage and project artifacts
 

@@ -3,10 +3,10 @@ set -euo pipefail
 
 TARGET_NODE_MAJOR=22
 
-ensure_node22() {
+ensure_node_supported() {
   local current_major
   current_major="$(node -p "process.versions.node.split('.')[0]")"
-  if [ "${current_major}" -ge 20 ] && [ "${current_major}" -lt 23 ]; then
+  if [ "${current_major}" -ge 20 ]; then
     return 0
   fi
 
@@ -41,15 +41,15 @@ ensure_node22() {
   exit 1
 }
 
-ensure_node22
+ensure_node_supported
 
 ensure_pty() {
-  if node -e "import pty from 'node-pty'; try { const p=pty.spawn('/bin/zsh',['-lc','exit'],{name:'xterm-256color',cols:80,rows:24,cwd:process.cwd(),env:process.env}); p.onExit(()=>process.exit(0)); } catch { process.exit(1); }" >/dev/null 2>&1; then
+  if node -e "import pty from 'node-pty'; try { const p=pty.spawn('/bin/zsh',['-c','exit'],{name:'xterm-256color',cols:80,rows:24,cwd:process.cwd(),env:process.env}); p.onExit(()=>process.exit(0)); } catch { process.exit(1); }" >/dev/null 2>&1; then
     return 0
   fi
   echo "[winnow-ui] Rebuilding node-pty for this system..."
   npm rebuild node-pty --build-from-source >/dev/null
-  if ! node -e "import pty from 'node-pty'; try { const p=pty.spawn('/bin/zsh',['-lc','exit'],{name:'xterm-256color',cols:80,rows:24,cwd:process.cwd(),env:process.env}); p.onExit(()=>process.exit(0)); } catch { process.exit(1); }" >/dev/null 2>&1; then
+  if ! node -e "import pty from 'node-pty'; try { const p=pty.spawn('/bin/zsh',['-c','exit'],{name:'xterm-256color',cols:80,rows:24,cwd:process.cwd(),env:process.env}); p.onExit(()=>process.exit(0)); } catch { process.exit(1); }" >/dev/null 2>&1; then
     echo "[winnow-ui] ERROR: node-pty still failed after rebuild."
     echo "[winnow-ui] Run: npm run setup"
     exit 1

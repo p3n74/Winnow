@@ -20,7 +20,7 @@
   "license": "ISC",
   "type": "module",
   "engines": {
-    "node": ">=20 <23"
+    "node": ">=20"
   },
   "bin": {
     "winnow": "dist/cli/index.js"

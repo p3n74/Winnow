@@ -27,16 +27,6 @@ ensure_brew_pkg() {
   brew install "${pkg}"
 }
 
-ensure_brew_cask() {
-  local cask="$1"
-  if brew list --cask --versions "${cask}" >/dev/null 2>&1; then
-    echo "[winnow-setup] ${cask} already installed."
-    return 0
-  fi
-  echo "[winnow-setup] Installing ${cask}..."
-  brew install --cask "${cask}"
-}
-
 install_system_dependencies() {
   echo "[winnow-setup] Installing system dependencies..."
   case "${OS}" in
@@ -44,16 +34,37 @@ install_system_dependencies() {
       ensure_homebrew
       ensure_brew_pkg "ranger"
       ensure_brew_pkg "htop"
-      ensure_brew_pkg "netwatch"
-      ensure_brew_cask "cursor"
       ;;
     *)
       echo "[winnow-setup] WARNING: Auto-install for ${OS} is not configured."
       echo "[winnow-setup] Please install these manually and rerun setup if needed:"
       echo "  - ranger"
       echo "  - htop"
-      echo "  - netwatch"
-      echo "  - cursor"
+      echo "  - Cursor Agent CLI: https://cursor.com/docs/cli/overview"
+      ;;
+  esac
+}
+
+ensure_cursor_agent_cli() {
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v cursor-agent >/dev/null 2>&1; then
+    echo "[winnow-setup] cursor-agent already on PATH ($(command -v cursor-agent))."
+    return 0
+  fi
+  case "${OS}" in
+    Darwin|Linux)
+      echo "[winnow-setup] Installing Cursor Agent CLI (cursor-agent) from cursor.com…"
+      curl -fsSL https://cursor.com/install | bash
+      export PATH="${HOME}/.local/bin:${PATH}"
+      if command -v cursor-agent >/dev/null 2>&1; then
+        echo "[winnow-setup] cursor-agent is available ($(command -v cursor-agent))."
+        return 0
+      fi
+      echo "[winnow-setup] WARNING: cursor-agent not on PATH after install. Add ~/.local/bin to PATH (see installer output) and open a new terminal."
+      ;;
+    *)
+      echo "[winnow-setup] WARNING: Cursor Agent CLI auto-install is only wired for macOS and Linux."
+      echo "[winnow-setup] Install manually: https://cursor.com/docs/cli/overview"
       ;;
   esac
 }
@@ -78,15 +89,16 @@ elif [ -s "/opt/homebrew/opt/nvm/nvm.sh" ]; then
   nvm use "${TARGET_NODE_MAJOR}"
 else
   current_major="$(node -p "process.versions.node.split('.')[0]")"
-  if [ "${current_major}" -lt 20 ] || [ "${current_major}" -ge 23 ]; then
+  if [ "${current_major}" -lt 20 ]; then
     echo "[winnow-setup] ERROR: Node version $(node -v) is unsupported and nvm is not available."
-    echo "[winnow-setup] Install nvm or switch to Node 22, then rerun setup."
+    echo "[winnow-setup] Install nvm or upgrade to Node 20+, then rerun setup."
     exit 1
   fi
 fi
 
 echo "[winnow-setup] Using node $(node -v)"
 install_system_dependencies
+ensure_cursor_agent_cli
 echo "[winnow-setup] Installing dependencies..."
 npm install
 echo "[winnow-setup] Rebuilding node-pty for local macOS toolchain..."

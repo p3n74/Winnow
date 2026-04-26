@@ -22,7 +22,7 @@ function Test-NodeSupported {
         return $false
     }
     $major = [int](node -p "process.versions.node.split('.')[0]")
-    return ($major -ge 20 -and $major -lt 23)
+    return ($major -ge 20)
 }
 
 function Test-WingetAvailable {
@@ -65,7 +65,7 @@ if (-not (Test-NodeSupported)) {
 }
 
 if (-not (Test-NodeSupported)) {
-    Write-WinnowSetup "ERROR: Node.js is still missing or not in PATH after install."
+    Write-WinnowSetup "ERROR: Node.js is still missing or below v20 after install."
     Write-WinnowSetup "Close this window, open a new PowerShell, and run this script again."
     exit 1
 }
@@ -73,9 +73,39 @@ if (-not (Test-NodeSupported)) {
 Write-WinnowSetup "Using node $(node -v)"
 
 Install-WingetPackage -Id "Git.Git" -DisplayName "Git for Windows"
-Install-WingetPackage -Id "Anysphere.Cursor" -DisplayName "Cursor"
 
-Write-WinnowSetup "Optional tools (ranger, htop, netwatch) are not installed automatically on Windows."
+function Ensure-CursorAgentCli {
+    Refresh-PathFromRegistry
+    $agentRoot = Join-Path $env:LOCALAPPDATA "cursor-agent"
+    if (Get-Command cursor-agent -ErrorAction SilentlyContinue) {
+        Write-WinnowSetup "cursor-agent already on PATH."
+        return
+    }
+    $agentExe = Join-Path $agentRoot "cursor-agent.exe"
+    if (Test-Path $agentExe) {
+        if ($env:PATH -notlike "*${agentRoot}*") {
+            $env:Path = "${agentRoot};$env:Path"
+        }
+        Write-WinnowSetup "cursor-agent found at $agentExe (added to PATH for this session)."
+        return
+    }
+    Write-WinnowSetup "Installing Cursor Agent CLI (cursor-agent) from cursor.com…"
+    $script = (Invoke-WebRequest -Uri "https://cursor.com/install?win32=true" -UseBasicParsing).Content
+    Invoke-Expression $script
+    Refresh-PathFromRegistry
+    if (-not (Get-Command cursor-agent -ErrorAction SilentlyContinue) -and (Test-Path $agentExe)) {
+        $env:Path = "${agentRoot};$env:Path"
+    }
+    if (Get-Command cursor-agent -ErrorAction SilentlyContinue) {
+        Write-WinnowSetup "cursor-agent is available."
+        return
+    }
+    Write-WinnowSetup "WARNING: cursor-agent not on PATH after install. Open a new PowerShell or add $agentRoot to your user PATH."
+}
+
+Ensure-CursorAgentCli
+
+Write-WinnowSetup "Optional tools (ranger, htop) are not installed automatically on Windows."
 Write-WinnowSetup "Use WSL, Scoop, or custom pane commands if you need those binaries."
 
 Write-WinnowSetup "Installing npm dependencies..."
@@ -87,4 +117,4 @@ npm run build
 Write-WinnowSetup "Rebuilding node-pty for this machine..."
 npm rebuild node-pty --build-from-source
 
-Write-WinnowSetup "Setup complete. Next: open Cursor once to finish login, then run npm run ui or npm run doctor."
+Write-WinnowSetup "Setup complete. Next: sign in to the Cursor Agent CLI if prompted (see https://cursor.com/docs/cli/overview), then run npm run doctor or npm run ui."

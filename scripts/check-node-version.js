@@ -2,7 +2,7 @@
 
 const [major] = process.versions.node.split(".").map((value) => Number(value));
 
-if (Number.isFinite(major) && major >= 20 && major < 23) {
+if (Number.isFinite(major) && major >= 20) {
   process.exit(0);
 }
 
@@ -10,11 +10,11 @@ const message = [
   "",
   "[winnow] Unsupported Node.js version detected.",
   `[winnow] Current: v${process.versions.node}`,
-  "[winnow] Required: >=20 and <23 (Node 22 LTS recommended).",
+  "[winnow] Required: Node.js 20 or newer (LTS recommended).",
   "",
   "Fix with nvm:",
-  "  nvm install 22",
-  "  nvm use 22",
+  "  nvm install --lts",
+  "  nvm use --lts",
   "  npm install",
   "",
   "Or use the automated setup script:",

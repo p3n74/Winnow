@@ -12,10 +12,10 @@ function nodeMajor() {
 
 function ensureNodeVersion() {
   const major = nodeMajor();
-  if (Number.isFinite(major) && major >= 20 && major < 23) {
+  if (Number.isFinite(major) && major >= 20) {
     return true;
   }
-  process.stderr.write(`[winnow-ui] ERROR: Node ${process.version} is unsupported (need >=20 and <23).\n`);
+  process.stderr.write(`[winnow-ui] ERROR: Node ${process.version} is unsupported (need Node 20 or newer).\n`);
   process.stderr.write("[winnow-ui] Run: npm run setup\n");
   return false;
 }

@@ -573,10 +573,11 @@ export function buildMainTerminalHtml(token?: string): string {
       <div id="pane2Wrap" class="pane">
         <div class="paneInner">
           <div class="paneHead">
-            <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">login shell</span></span>
+            <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="System shell, docs, and graph">
-                <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, and system shell">
+                <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
               </div>
@@ -584,7 +585,14 @@ export function buildMainTerminalHtml(token?: string): string {
             </div>
           </div>
           <div class="pane2Body">
-            <div id="pane2TerminalWrap" class="pane2View" aria-hidden="false">
+            <div id="pane2Workspace" class="pane2View" aria-hidden="false">
+              <iframe
+                class="cursorHost"
+                title="Winnow Agent workspace"
+                src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
+              ></iframe>
+            </div>
+            <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
               <div id="pane2term" class="term"></div>
             </div>
             <div id="pane2Docs" class="pane2View isHidden pane2DocsRoot" aria-hidden="true">
@@ -651,7 +659,7 @@ export function buildMainTerminalHtml(token?: string): string {
     <script>
       const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
       let graphViewMode = "technical";
-      let pane2Mode = "terminal";
+      let pane2Mode = "workspace";
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
@@ -744,32 +752,39 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       function setPane2Tab(mode){
         pane2Mode = mode;
+        const wsEl = document.getElementById("pane2Workspace");
         const tsEl = document.getElementById("pane2TerminalWrap");
         const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
         const chip = document.getElementById("pane2ModeChip");
+        const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
         const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
         const recon = document.getElementById("reconnectPane2");
+        const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
         const isDoc = mode === "docs";
         const isGraph = mode === "graph";
-        if(tsEl && docEl && graphEl){
+        if(wsEl && tsEl && docEl && graphEl){
+          wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
           docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
+          wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isTerm ? "login shell" : isDoc ? "md · pdf" : "project graph";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : "project graph";
         }
-        if(tt && td && tg){
+        if(tw && tt && td && tg){
+          tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
           td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
+          tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
@@ -1956,6 +1971,7 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(hint){ hint.textContent = relPath; }
       }
+      document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
@@ -2073,7 +2089,7 @@ export function buildMainTerminalHtml(token?: string): string {
       });
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
-      setPane2Tab("terminal");
+      setPane2Tab("workspace");
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{
         btn.addEventListener("click",()=>{
           const paneId = btn.getAttribute("data-pane");

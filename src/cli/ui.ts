@@ -509,7 +509,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   /** Live cursor-agent child processes keyed by session id (for cancel / stop). */
   const agentRunChildProcesses = new Map<string, ChildProcess>();
   const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
-  const supportsPty = nodeMajor >= 20 && nodeMajor < 23;
+  const supportsPty = nodeMajor >= 20;
 
   const requireToken = Boolean(options.token);
   const isAuthorized = (url: URL): boolean => {
@@ -577,7 +577,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const rawCommand = (paneCommands[paneId] || "").trim();
     const launchScript = rawCommand ? `${rawCommand}; exec ${shell}` : `exec ${shell}`;
     try {
-      return pty.spawn(shell, ["-lc", launchScript], {
+      // Use `-c` (not `-lc`) so panes start as normal interactive shells without forcing a login-shell profile pass.
+      return pty.spawn(shell, ["-c", launchScript], {
         name: "xterm-256color",
         cols: 120,
         rows: 36,
@@ -607,7 +608,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(
           `\r\n[main-grid disabled: Node ${process.versions.node} is unsupported for PTY]\r\n` +
-            `[use Node 22 LTS and rerun: npm run setup]\r\n`,
+            `[use Node 20+ and rerun: npm run setup]\r\n`,
         );
       }
       ws.close(1011, "unsupported node version for pty");

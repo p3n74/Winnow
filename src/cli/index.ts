@@ -211,7 +211,7 @@ export function buildProgram(): Command {
     .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
     .option(
       "--pane2-cmd <cmd>",
-      "pane 2 shell: optional command run before login shell (empty = plain shell only)",
+      "pane 2 shell: optional command run before interactive shell (empty = plain shell only)",
       "",
     )
     .option("--pane3-cmd <cmd>", "pane 3 command", "htop")
