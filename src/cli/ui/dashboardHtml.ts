@@ -13,19 +13,19 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         /* True black (OLED: pixels off). Primary = pastel + neon cyan; accents = red family. */
         --bg: #000000;
         --panel: #000000;
-        --panel2: #0a0a0a;
+        --panel2: #050505;
         --line: rgba(34, 211, 238, 0.32);
         --line-faint: rgba(34, 211, 238, 0.12);
-        --text: #7dd3fc;
+        --text: #67e8f9;
         --text-strong: #22d3ee;
-        --text-neon: #5eead4;
-        --muted: rgba(125, 211, 252, 0.58);
+        --text-neon: #22d3ee;
+        --muted: rgba(34, 211, 238, 0.7);
         --accent: #22d3ee;
         --accent-hover: #67e8f9;
-        --red-pastel: #fecaca;
-        --red-neon: #f87171;
-        --danger: #f87171;
-        --success: #2dd4bf;
+        --red-pastel: #ff4d4d;
+        --red-neon: #ff2d2d;
+        --danger: #ff2d2d;
+        --success: #22d3ee;
         --radius: 8px;
         --radius-sm: 6px;
         --shadow: none;
@@ -309,7 +309,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         gap: 10px;
       }
       .body.dashboard-mode .metric {
-        background: linear-gradient(180deg, rgba(5, 25, 30, 0.55), rgba(0, 0, 0, 0.98));
+        background: rgba(0, 0, 0, 0.98);
         border-color: var(--line);
       }
       #usageKpiTodayIn, #usageKpiLifeIn { color: var(--text-strong); font-weight: 700; }
@@ -1125,8 +1125,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               {
                 label: 'Output tokens',
                 data: outs,
-                borderColor: '#f87171',
-                backgroundColor: 'rgba(248,113,113,0.14)',
+                borderColor: '#ff2d2d',
+                backgroundColor: 'rgba(255,45,45,0.14)',
                 fill: stacked,
                 pointRadius: 0,
                 pointHoverRadius: 3,
@@ -1176,7 +1176,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               legend: {
                 position: 'top',
                 labels: {
-                  color: '#5eead4',
+                  color: '#22d3ee',
                   boxWidth: 14,
                   boxHeight: 14,
                   padding: 16,

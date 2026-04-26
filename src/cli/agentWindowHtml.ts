@@ -14,26 +14,26 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
     <style>
       :root {
         --bg: #000000;
-        --panel2: #0a0a0a;
+        --panel2: #050505;
         --line: rgba(34, 211, 238, 0.32);
         --line-faint: rgba(34, 211, 238, 0.12);
-        --text: #7dd3fc;
+        --text: #67e8f9;
         --text-strong: #22d3ee;
-        --text-neon: #5eead4;
-        --muted: rgba(125, 211, 252, 0.58);
-        --red-pastel: #fecaca;
-        --red-neon: #f87171;
+        --text-neon: #22d3ee;
+        --muted: rgba(34, 211, 238, 0.7);
+        --red-pastel: #ff4d4d;
+        --red-neon: #ff2d2d;
         --vscode-editor-background: var(--bg);
         --vscode-sideBar-background: var(--panel2);
         --vscode-activityBar-background: #000000;
         --vscode-titleBar-activeBackground: var(--panel2);
         --vscode-panel-border: var(--line);
         --vscode-input-background: var(--panel2);
-        --vscode-button-background: #0e7490;
+        --vscode-button-background: #22d3ee;
         --vscode-foreground: var(--text);
         --vscode-descriptionForeground: var(--muted);
         --accent: #22d3ee;
-        --accent-soft: #5eead4;
+        --accent-soft: #67e8f9;
       }
       * { box-sizing: border-box; }
       html, body {

@@ -13,19 +13,19 @@ export function buildMainTerminalHtml(token?: string): string {
       :root {
         --bg: #000000;
         --panel: #000000;
-        --panel2: #0a0a0a;
+        --panel2: #050505;
         --line: rgba(34, 211, 238, 0.32);
         --line-faint: rgba(34, 211, 238, 0.12);
-        --text: #7dd3fc;
+        --text: #67e8f9;
         --text-strong: #22d3ee;
-        --text-neon: #5eead4;
-        --muted: rgba(125, 211, 252, 0.58);
+        --text-neon: #22d3ee;
+        --muted: rgba(34, 211, 238, 0.7);
         --accent: #22d3ee;
         --accent-hover: #67e8f9;
-        --red-pastel: #fecaca;
-        --red-neon: #f87171;
-        --danger: #f87171;
-        --success: #2dd4bf;
+        --red-pastel: #ff4d4d;
+        --red-neon: #ff2d2d;
+        --danger: #ff2d2d;
+        --success: #22d3ee;
         --radius: 8px;
         --radius-sm: 6px;
         --shadow: none;
@@ -228,7 +228,7 @@ export function buildMainTerminalHtml(token?: string): string {
         width: 100%;
         height: 100%;
         border: 0;
-        background: #111;
+        background: var(--bg);
       }
       .docsMdRendered.isHidden,
       .docsPdfViewer.isHidden {
@@ -248,11 +248,8 @@ export function buildMainTerminalHtml(token?: string): string {
         padding: 12px;
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        background:
-          radial-gradient(1200px 500px at 12% -10%, rgba(34, 211, 238, 0.12), transparent 55%),
-          radial-gradient(1100px 500px at 90% 0%, rgba(103, 232, 249, 0.08), transparent 52%),
-          rgba(0, 0, 0, 0.94);
-        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255,255,255,0.03);
+        background: rgba(0, 0, 0, 0.96);
+        box-shadow: 0 0 0 1px var(--line-faint);
         animation: graphOverlayIn 180ms ease-out;
         backdrop-filter: blur(2px);
         display: grid;
@@ -274,7 +271,7 @@ export function buildMainTerminalHtml(token?: string): string {
         position: sticky;
         top: 0;
         z-index: 2;
-        background: linear-gradient(180deg, rgba(0,0,0,0.86), rgba(0,0,0,0.5));
+        background: rgba(0,0,0,0.9);
         backdrop-filter: blur(2px);
         border-radius: 8px;
         padding: 8px;
@@ -302,15 +299,13 @@ export function buildMainTerminalHtml(token?: string): string {
         position: relative;
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        background:
-          linear-gradient(180deg, rgba(4, 17, 24, 0.88), rgba(2, 7, 11, 0.95)),
-          #02070b;
+        background: var(--bg);
         min-height: 320px;
         height: 100%;
         overflow: hidden;
         cursor: grab;
         touch-action: none;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        box-shadow: none;
       }
       .graphCanvasWrap:active {
         cursor: grabbing;
@@ -338,7 +333,7 @@ export function buildMainTerminalHtml(token?: string): string {
         max-width: 320px;
         pointer-events: none;
         border: 1px solid var(--line);
-        background: rgba(2, 7, 11, 0.97);
+        background: rgba(0, 0, 0, 0.97);
         color: var(--text);
         border-radius: 8px;
         padding: 8px 10px;
@@ -377,11 +372,11 @@ export function buildMainTerminalHtml(token?: string): string {
       .graphExplorerPanel {
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        background: linear-gradient(180deg, rgba(13, 35, 46, 0.42), rgba(2, 9, 14, 0.34));
-        backdrop-filter: blur(8px);
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: none;
         padding: 10px;
         font-size: 12px;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        box-shadow: none;
         height: 100%;
         max-height: 100%;
         overflow-y: auto;
@@ -422,7 +417,7 @@ export function buildMainTerminalHtml(token?: string): string {
         text-align: left;
         border: 1px solid var(--line-faint);
         border-radius: 6px;
-        background: #021018;
+        background: var(--bg);
         color: var(--text);
         padding: 6px 8px;
         cursor: pointer;
@@ -448,7 +443,7 @@ export function buildMainTerminalHtml(token?: string): string {
         border: 1px solid rgba(34,211,238,0.3);
         border-radius: 8px;
         padding: 7px 10px;
-        background: rgba(2, 12, 20, 0.82);
+        background: rgba(0, 0, 0, 0.82);
         color: var(--text);
         outline: none;
         margin-bottom: 8px;
@@ -473,8 +468,8 @@ export function buildMainTerminalHtml(token?: string): string {
         border-radius: 999px;
         padding: 1px 7px;
         font-size: 10px;
-        color: #9ae6ff;
-        background: rgba(8, 30, 44, 0.45);
+        color: var(--text);
+        background: rgba(0, 0, 0, 0.65);
       }
       .graphFnSub {
         margin-top: 4px;
@@ -484,16 +479,16 @@ export function buildMainTerminalHtml(token?: string): string {
         gap: 8px;
       }
       .graphJumpBtn {
-        border: 1px solid rgba(125,211,252,0.35);
+        border: 1px solid rgba(34,211,238,0.35);
         border-radius: 6px;
-        background: rgba(3, 20, 30, 0.82);
-        color: #c4ebff;
+        background: rgba(0, 0, 0, 0.82);
+        color: var(--text);
         font-size: 10px;
         padding: 2px 7px;
         cursor: pointer;
       }
       .graphJumpBtn:hover {
-        border-color: rgba(125,211,252,0.7);
+        border-color: rgba(34,211,238,0.7);
       }
       .graphBreadcrumb {
         display: inline-flex;
@@ -501,11 +496,11 @@ export function buildMainTerminalHtml(token?: string): string {
         align-items: center;
         gap: 6px;
         font-size: 11px;
-        color: #b9ebff;
+        color: var(--text);
         border: 1px solid rgba(34,211,238,0.25);
         border-radius: 999px;
         padding: 4px 9px;
-        background: rgba(6, 24, 34, 0.55);
+        background: rgba(0, 0, 0, 0.55);
       }
       .graphNodeDimmed {
         opacity: 0.28;
@@ -524,7 +519,7 @@ export function buildMainTerminalHtml(token?: string): string {
         border: 1px solid var(--line-faint);
         border-radius: 99px;
         padding: 2px 8px;
-        background: linear-gradient(180deg, rgba(2, 16, 24, 0.95), rgba(0, 0, 0, 0.95));
+        background: rgba(0, 0, 0, 0.95);
         transition: border-color 120ms ease, transform 120ms ease;
       }
       .graphLegendItem:hover {
@@ -578,11 +573,10 @@ export function buildMainTerminalHtml(token?: string): string {
       <div id="pane2Wrap" class="pane">
         <div class="paneInner">
           <div class="paneHead">
-            <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
+            <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">login shell</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, and system shell">
-                <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
-                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
+              <div class="paneTabs" role="tablist" aria-label="System shell, docs, and graph">
+                <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
               </div>
@@ -590,14 +584,7 @@ export function buildMainTerminalHtml(token?: string): string {
             </div>
           </div>
           <div class="pane2Body">
-            <div id="pane2Workspace" class="pane2View">
-              <iframe
-                class="cursorHost"
-                title="Cursor Panel"
-                src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
-              ></iframe>
-            </div>
-            <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
+            <div id="pane2TerminalWrap" class="pane2View" aria-hidden="false">
               <div id="pane2term" class="term"></div>
             </div>
             <div id="pane2Docs" class="pane2View isHidden pane2DocsRoot" aria-hidden="true">
@@ -664,7 +651,7 @@ export function buildMainTerminalHtml(token?: string): string {
     <script>
       const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
       let graphViewMode = "technical";
-      let pane2Mode = "workspace";
+      let pane2Mode = "terminal";
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
@@ -703,7 +690,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const term = new Terminal({
           cursorBlink:true,
           fontSize:12,
-          theme:{background:"#000000",foreground:"#7dd3fc",cursor:"#5eead4", selectionBackground: "rgba(34, 211, 238, 0.28)"}
+          theme:{background:"#000000",foreground:"#67e8f9",cursor:"#22d3ee", selectionBackground: "rgba(34, 211, 238, 0.28)"}
         });
         const fit = new FitAddon.FitAddon();
         term.loadAddon(fit);
@@ -724,7 +711,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const term = new Terminal({
           cursorBlink:true,
           fontSize:12,
-          theme:{background:"#000000",foreground:"#7dd3fc",cursor:"#5eead4", selectionBackground: "rgba(34, 211, 238, 0.28)"}
+          theme:{background:"#000000",foreground:"#67e8f9",cursor:"#22d3ee", selectionBackground: "rgba(34, 211, 238, 0.28)"}
         });
         const fit = new FitAddon.FitAddon();
         term.loadAddon(fit);
@@ -757,39 +744,32 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       function setPane2Tab(mode){
         pane2Mode = mode;
-        const wsEl = document.getElementById("pane2Workspace");
         const tsEl = document.getElementById("pane2TerminalWrap");
         const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
         const chip = document.getElementById("pane2ModeChip");
-        const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
         const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
         const recon = document.getElementById("reconnectPane2");
-        const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
         const isDoc = mode === "docs";
         const isGraph = mode === "graph";
-        if(wsEl && tsEl && docEl && graphEl){
-          wsEl.classList.toggle("isHidden", !isWs);
+        if(tsEl && docEl && graphEl){
           tsEl.classList.toggle("isHidden", !isTerm);
           docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
-          wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isTerm ? "login shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : "winnow-agent-ui";
+          chip.textContent = isTerm ? "login shell" : isDoc ? "md · pdf" : "project graph";
         }
-        if(tw && tt && td && tg){
-          tw.classList.toggle("paneTabActive", isWs);
+        if(tt && td && tg){
           tt.classList.toggle("paneTabActive", isTerm);
           td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
-          tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
@@ -1338,27 +1318,27 @@ export function buildMainTerminalHtml(token?: string): string {
         const map = {
           Project: "#67e8f9",
           Module: "#22d3ee",
-          File: "#5eead4",
-          Symbol: "#a7f3d0",
-          Workflow: "#fca5a5",
-          Concept: "#fda4af",
-          DataEntity: "#ddd6fe",
+          File: "#22d3ee",
+          Symbol: "#67e8f9",
+          Workflow: "#ff2d2d",
+          Concept: "#ff4d4d",
+          DataEntity: "#22d3ee",
         };
-        return map[kind] || "#93c5fd";
+        return map[kind] || "#22d3ee";
       }
       function edgeColor(kind){
         const map = {
           contains: "rgba(34,211,238,0.45)",
-          depends_on: "rgba(125,211,252,0.55)",
-          calls: "rgba(94,234,212,0.62)",
-          consumes: "rgba(167,139,250,0.78)",
-          reads: "rgba(250,204,21,0.7)",
-          writes: "rgba(248,113,113,0.7)",
-          emits: "rgba(253,186,116,0.72)",
-          drives: "rgba(251,146,60,0.65)",
-          related_to: "rgba(196,181,253,0.72)",
+          depends_on: "rgba(34,211,238,0.55)",
+          calls: "rgba(34,211,238,0.62)",
+          consumes: "rgba(34,211,238,0.78)",
+          reads: "rgba(34,211,238,0.7)",
+          writes: "rgba(255,45,45,0.7)",
+          emits: "rgba(34,211,238,0.72)",
+          drives: "rgba(255,45,45,0.65)",
+          related_to: "rgba(34,211,238,0.72)",
         };
-        return map[kind] || "rgba(125,211,252,0.4)";
+        return map[kind] || "rgba(34,211,238,0.4)";
       }
       function nodeSizeByKind(kind){
         if(kind === "File"){ return { w: 230, h: 72 }; }
@@ -1469,7 +1449,7 @@ export function buildMainTerminalHtml(token?: string): string {
         if(!svg || !legend){ return; }
         if(hoverCard){ hoverCard.style.display = "none"; }
         if(!nodes || nodes.length === 0){
-          svg.innerHTML = '<text x="24" y="40" fill="#7dd3fc" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
+          svg.innerHTML = '<text x="24" y="40" fill="#67e8f9" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
           legend.innerHTML = "";
           return;
         }
@@ -1478,7 +1458,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const markerDefs =
           '<defs>' +
           '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
-          '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.82)"></path>' +
+          '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(34,211,238,0.82)"></path>' +
           '</marker>' +
           "</defs>";
         const edgeSvg = (edges || []).map((e)=>{
@@ -1502,10 +1482,10 @@ export function buildMainTerminalHtml(token?: string): string {
           const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
           const fill = nodeColor(n.kind);
           return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
-            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#000000" stroke="' + fill + '" stroke-width="1.4"></rect>' +
             '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
             '<text x="' + (p.x + 8) + '" y="' + (p.y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#67e8f9" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
             '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '">' +
             '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="transparent"></rect>' +
             '</g>' +
@@ -1622,7 +1602,7 @@ export function buildMainTerminalHtml(token?: string): string {
         stopGraphSimulation();
         if(hoverCard){ hoverCard.style.display = "none"; }
         if(!nodes || nodes.length === 0){
-          svg.innerHTML = '<text x="24" y="40" fill="#7dd3fc" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
+          svg.innerHTML = '<text x="24" y="40" fill="#67e8f9" font-size="14">No graph nodes yet. Click "Rebuild Graph".</text>';
           legend.innerHTML = "";
           return;
         }
@@ -1644,7 +1624,7 @@ export function buildMainTerminalHtml(token?: string): string {
           const markerDefs =
             '<defs>' +
             '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
-            '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(125,211,252,0.82)"></path>' +
+            '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(34,211,238,0.82)"></path>' +
             '</marker>' +
             "</defs>";
           const edgeLabelSvg = [];
@@ -1664,8 +1644,8 @@ export function buildMainTerminalHtml(token?: string): string {
               const ang = Math.atan2(routed.tp.y - routed.sp.y, routed.tp.x - routed.sp.x) * (180 / Math.PI);
               edgeLabelSvg.push(
                 '<g transform="translate(' + routed.mx + ' ' + routed.my + ') rotate(' + ang + ')">' +
-                  '<rect x="-50" y="-10" width="100" height="14" rx="7" ry="7" fill="rgba(2,12,20,0.88)" stroke="rgba(125,211,252,0.28)"></rect>' +
-                  '<text x="0" y="0" fill="#bae6fd" font-size="9" text-anchor="middle" font-family="ui-sans-serif, system-ui">' + escHtml(label) + '</text>' +
+                  '<rect x="-50" y="-10" width="100" height="14" rx="7" ry="7" fill="rgba(0,0,0,0.88)" stroke="rgba(34,211,238,0.28)"></rect>' +
+                  '<text x="0" y="0" fill="#67e8f9" font-size="9" text-anchor="middle" font-family="ui-sans-serif, system-ui">' + escHtml(label) + '</text>' +
                 '</g>'
               );
             }
@@ -1681,10 +1661,10 @@ export function buildMainTerminalHtml(token?: string): string {
             const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
             const fill = nodeColor(n.kind);
             return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
-              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="#040b10" stroke="' + fill + '" stroke-width="1.4"></rect>' +
+              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="#000000" stroke="' + fill + '" stroke-width="1.4"></rect>' +
               '<rect x="' + x + '" y="' + y + '" width="' + n.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
               '<text x="' + (x + 8) + '" y="' + (y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-              '<text x="' + (x + 8) + '" y="' + (y + 36) + '" fill="#e0f2fe" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+              '<text x="' + (x + 8) + '" y="' + (y + 36) + '" fill="#67e8f9" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
               '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '" data-kind="' + escHtml(n.kind || "") + '">' +
               '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="transparent"></rect>' +
               '</g>' +
@@ -1976,7 +1956,6 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(hint){ hint.textContent = relPath; }
       }
-      document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
@@ -2094,6 +2073,7 @@ export function buildMainTerminalHtml(token?: string): string {
       });
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
+      setPane2Tab("terminal");
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{
         btn.addEventListener("click",()=>{
           const paneId = btn.getAttribute("data-pane");
