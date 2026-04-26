@@ -934,6 +934,21 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const glue = path.includes('?') ? '&' : '?';
         return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
       }
+      function formatLocalDateTime(value, opts){
+        const dt = new Date(value || '');
+        if(!Number.isFinite(dt.getTime())){
+          return String(value || '');
+        }
+        return dt.toLocaleString([], opts || {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
+      }
       function hideMainGridDock(){
         const dock = document.getElementById('mainGridDock');
         if(!dock){ return; }
@@ -1057,7 +1072,13 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             const inVal = Number(b && b.in);
             const outVal = Number(b && b.out);
             return {
-              label: String((b && b.ts) || '').replace('T', ' ').slice(0, 16),
+                  label: formatLocalDateTime((b && b.ts) || '', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                  }),
               inVal: Number.isFinite(inVal) ? inVal : 0,
               outVal: Number.isFinite(outVal) ? outVal : 0,
             };
@@ -1212,7 +1233,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\"/g,'&quot;');
           };
           return '<tr>' +
-            '<td class="small">' + esc((row.startedAt || '').replace('T',' ').slice(0,19)) + '</td>' +
+            '<td class="small">' + esc(formatLocalDateTime(row.startedAt || '')) + '</td>' +
             '<td class="small" title="' + esc(row.projectPath) + '">' + esc(row.projectName) + '</td>' +
             '<td class="small muted">' + esc(row.model || row.modelPref || '—') + '</td>' +
             '<td class="small usageTokIn">' + fmtTok(row.inputTokens) + '</td>' +
@@ -1346,7 +1367,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             const status = (r.status || '—');
             const ex = (r.exitCode == null) ? '—' : String(r.exitCode);
             const tok = (fmtTok(r.inputTokens || 0) + ' / ' + fmtTok(r.outputTokens || 0));
-            const started = (r.startedAt || '').replace('T', ' ').slice(0, 19);
+            const started = formatLocalDateTime(r.startedAt || '');
             const prev = (r.promptPreview || '').slice(0, 120) + (r.promptPreview && r.promptPreview.length > 120 ? '…' : '');
             el.innerHTML =
               '<div class="metrics dashboardMetrics" style="margin-top:0">' +
@@ -1395,7 +1416,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               note.style.display = 'none';
             }
             if (d.measuredAt && at) {
-              const t = d.measuredAt.replace('T', ' ').slice(0, 19);
+              const t = formatLocalDateTime(d.measuredAt);
               at.textContent = 'Updated ' + t;
             }
             const rows = (d.projects || []).map(function (p) {
@@ -1720,7 +1741,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const prev = selectedResumeSessionId || select.value || '';
         const options = ['<option value="">(new session)</option>']
           .concat(cachedSessionRows.map((s) => {
-            const label = '[' + (s.updatedAt || '').replace('T',' ').slice(0,19) + '] ' + String(s.id || '').slice(0,8) + '  ' + (s.preview || '');
+            const label = '[' + formatLocalDateTime(s.updatedAt || '') + '] ' + String(s.id || '').slice(0,8) + '  ' + (s.preview || '');
             return '<option value="' + s.id + '">' + label.replace(/"/g, '&quot;') + '</option>';
           }));
         select.innerHTML = options.join('');
@@ -2138,7 +2159,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           const rows = (data.sessions || []).map((s, idx) => {
             const isSelected = s.id === activeSessionId;
             const style = isSelected ? ' style="border:1px solid var(--accent)"' : '';
-            const ts = (s.updatedAt || '').replace('T', ' ').slice(0, 19);
+            const ts = formatLocalDateTime(s.updatedAt || '');
             return '<button type="button" class="entry sync-session" data-session-id="' + s.id + '"' + style + '>[' + ts + '] ' + String(s.id).slice(0, 8) + '  ' + (s.preview || '') + '</button>';
           }).join('');
           const listEl = document.getElementById('sessionList');
@@ -2168,7 +2189,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         updateResumeSelect(data.sessions || []);
         const rows = (data.sessions || []).map((s, idx) =>
           '<button class="entry sync-session" data-session-id="' + s.id + '"' + (idx===0 ? ' style="border:1px solid var(--accent)"' : '') + '>' +
-          '[' + (s.updatedAt || '').replace('T',' ').slice(0,19) + '] ' + s.id.slice(0,8) + '  ' + (s.preview || '') +
+          '[' + formatLocalDateTime(s.updatedAt || '') + '] ' + s.id.slice(0,8) + '  ' + (s.preview || '') +
           '</button>'
         ).join('');
         document.getElementById('sessionList').innerHTML = rows || '<span class="muted small">No transcript sessions found yet.</span>';

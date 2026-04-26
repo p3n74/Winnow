@@ -475,6 +475,21 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         const glue = path.includes("?") ? "&" : "?";
         return path + glue + "token=" + encodeURIComponent(AUTH_TOKEN);
       }
+      function formatLocalDateTime(value) {
+        const dt = new Date(value || "");
+        if (!Number.isFinite(dt.getTime())) {
+          return String(value || "");
+        }
+        return dt.toLocaleString([], {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+      }
       function openDashboard() {
         window.location.assign(withToken("/"));
       }
@@ -697,13 +712,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         const prev = selectedResumeSessionId || select.value || "";
         const options = ['<option value="">(new session)</option>'].concat(
           cachedSessionRows.map((s) => {
-            const label =
-              "[" +
-              (s.updatedAt || "").replace("T", " ").slice(0, 19) +
-              "] " +
-              String(s.id || "").slice(0, 8) +
-              "  " +
-              (s.preview || "");
+            const label = "[" + formatLocalDateTime(s.updatedAt || "") + "] " + String(s.id || "").slice(0, 8) + "  " + (s.preview || "");
             return '<option value="' + s.id + '">' + label.replace(/"/g, "&quot;") + "</option>";
           }),
         );
@@ -1046,7 +1055,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               (idx === 0 ? ' style="border:1px solid var(--accent)"' : "") +
               ">" +
               "[" +
-              (s.updatedAt || "").replace("T", " ").slice(0, 19) +
+              formatLocalDateTime(s.updatedAt || "") +
               "] " +
               s.id.slice(0, 8) +
               "  " +
