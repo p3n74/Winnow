@@ -11,7 +11,7 @@ Most AI coding tools are either:
 - powerful in the terminal but fragmented across too many commands and panes.
 
 Winnow closes that gap:
-- **IDE-like flow** with dashboard, agent workspace, docs pane, and terminal grid
+- **IDE-like flow** with dashboard, agent workspace, docs and graph views, and a multi-pane terminal grid
 - **Workflow density** through cherry-picked shortcuts and fast paths
 - **Session continuity** so context is never lost between runs
 - **Experiment surface** for evolving into advanced autonomous/agentic patterns
@@ -24,20 +24,41 @@ Winnow closes that gap:
 - **Opinionated where it matters**: practical defaults, focused controls, and quick actions that remove friction.
 - **Extensible by design**: `.winnow` workspace data, local session artifacts, and modular CLI/UI code make experimentation straightforward.
 
-## Core capabilities
+## Features
 
-- Dashboard with system status, usage metrics, recent runs, and project visibility
-- Agent workspace with:
-  - model preference
-  - autonomy/continue toggles
-  - resume session picker
-  - streaming timeline + thinking trace + chat history
-  - run/cancel/stop controls
-- Main terminal grid with multiple panes and reconnect controls
-- Session sync from local Winnow sessions and Cursor transcripts
-- Docs panel for indexed Markdown/PDF browsing
-- Workspace helpers: file/diff visibility and selective staging flows
-- Token-protected HTTP/WebSocket access for shared/LAN usage
+### CLI and sessions
+
+- **Default command** — forwards arguments to `cursor-agent` (override with `--cursor-command`).
+- **`winnow session`** — interactive prompt with runtime toggles for translation and execution options.
+- **`winnow doctor` / `winnow status`** — health checks for the agent binary and translator backends; quick runtime snapshot.
+- **Optional translation** — Ollama or DeepSeek API backends, profiles (`learning_zh`, `engineering_exact`), and separate input/output translation modes (see `--help` on the root command).
+
+### Web companion UI (`winnow ui`)
+
+- **Dashboard** — system snapshot, disk summary, registered projects, usage runs and filters, and the last agent run recap.
+- **Agent workspace** — selectable models (including externally advertised lists where configured), resume picker for prior sessions, execution-mode style controls, streaming run timeline (thinking + chat), and run / cancel / stop wired to the agent API. Optional **graph seed** mode prepends Winnow graph hints to narrow agent scope.
+- **Main grid** — five configurable terminal panes (xterm + WebSocket PTYs), per-pane reconnect, and a **Workspace** companion with tabs for embedded Cursor host, shell, **Docs**, and a **Graph** overlay.
+- **Docs** — workspace-wide index of Markdown and PDF (`.winnow/docs-index.json`), refresh/reindex, rendered Markdown (sanitized) and in-browser PDF.
+- **Project graph** — SQLite-backed graph service exposed over HTTP: summary, nodes/edges, neighborhood expansion, rebuild/reconcile, corrections, and business-logic views; the grid UI supports technical vs business graph modes and file→function exploration (see `docs/graph/`).
+- **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions.
+- **Files** — directory listing, preview, and “open in editor” helpers from the UI server.
+- **Shared / LAN use** — optional `?token=…` gate and bindable `--host` (token auto-generated when binding `0.0.0.0` without one).
+
+### Data on disk
+
+- Agent sessions under `.winnow/sessions`, JSONL logs under `.winnow/logs`, docs index and graph database under `.winnow` (see **Storage and project artifacts** below).
+- Cursor transcript paths under `~/.cursor/projects/…` when syncing or resuming from IDE runs.
+
+## What's new
+
+Highlights from recent development (newest first; use `git log` for the full story):
+
+- **Project graph** — HTTP APIs plus an interactive graph in the main grid (technical / business layers, neighborhood drill-down, corrections workflow). The agent dashboard can **seed prompts from graph context** when graph seed mode is enabled.
+- **Providers and models** — external provider hooks, smoke checks from the UI, and selectable model lists (including externally advertised models when configured).
+- **Docs in the UI** — indexed Markdown and PDF with refresh, rendered in the Workspace **Docs** tab.
+- **Agent lifecycle** — clearer loading and run states, cancel/stop endpoints, and tighter resume and execution-mode controls in the agent UI.
+- **Windows installer** — Inno Setup–based `.exe` under `scripts/installer/` (see **Windows installer (.exe)** below), alongside `npm run setup` for macOS and Windows.
+- **Setup and runtime** — Node version policy, PTY/shell behavior, and navigation guards polished for day-to-day use.
 
 ## Quickstart
 
@@ -123,6 +144,8 @@ iscc scripts\installer\WinnowSetup.iss
 
 - Local agent sessions: `.winnow/sessions`
 - Runtime logs: `.winnow/logs` (JSONL)
+- Docs index (Markdown/PDF catalog): `.winnow/docs-index.json`
+- Project graph (SQLite): `.winnow/graph/` (see `docs/graph/schema-v1.md`)
 - Cursor transcript sync default:
   `~/.cursor/projects/<workspace-id>/agent-transcripts`
 
