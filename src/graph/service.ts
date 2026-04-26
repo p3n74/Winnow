@@ -588,5 +588,146 @@ export class ProjectGraphService {
       },
     };
   }
+
+  /**
+   * LIKE search across name, path, and summary (deduped by node id).
+   * Short or test-ish terms skip `path` matching so `test` does not match every `*.test.ts` file.
+   */
+  searchNodesByTerms(projectRoot: string, terms: string[], limit: number): GraphNode[] {
+    const db = this.ensureDb(projectRoot);
+    const pathMatchMinLen = 5;
+    const neverPathMatch = new Set([
+      "e2e",
+      "fixture",
+      "fixtures",
+      "jest",
+      "mock",
+      "mocks",
+      "spec",
+      "specs",
+      "test",
+      "tests",
+      "vitest",
+    ]);
+    const safeTerms = terms
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length >= 3)
+      .map((t) => t.replace(/%/g, "").replace(/_/g, ""))
+      .filter((t) => t.length >= 3)
+      .slice(0, 16);
+    if (safeTerms.length === 0 || limit <= 0) {
+      return [];
+    }
+    const clauses: string[] = [];
+    const args: unknown[] = [];
+    for (const t of safeTerms) {
+      const pattern = `%${t}%`;
+      const usePath = t.length >= pathMatchMinLen && !neverPathMatch.has(t);
+      if (usePath) {
+        clauses.push(
+          "(LOWER(name) LIKE ? OR LOWER(COALESCE(path, '')) LIKE ? OR LOWER(COALESCE(summary_en, '')) LIKE ?)",
+        );
+        args.push(pattern, pattern, pattern);
+      } else {
+        clauses.push("(LOWER(name) LIKE ? OR LOWER(COALESCE(summary_en, '')) LIKE ?)");
+        args.push(pattern, pattern);
+      }
+    }
+    const where = clauses.join(" OR ");
+    const lim = Math.max(1, Math.min(300, Math.floor(limit)));
+    const rows = db
+      .prepare(
+        `SELECT id, kind, name, path, signature, summary_en AS summaryEn, description_en AS descriptionEn, detail_level AS detailLevel,
+         tags_json AS tagsJson, state, confidence, created_at AS createdAt, updated_at AS updatedAt
+         FROM nodes WHERE ${where}
+         ORDER BY CASE kind WHEN 'Symbol' THEN 0 WHEN 'File' THEN 1 WHEN 'Workflow' THEN 2 ELSE 3 END, LENGTH(name) ASC LIMIT ${lim}`,
+      )
+      .all(...args) as GraphNode[];
+    const byId = new Map<string, GraphNode>();
+    for (const n of rows) {
+      byId.set(n.id, n);
+    }
+    return [...byId.values()];
+  }
+
+  listEdgesIncidentToNodes(projectRoot: string, nodeIds: string[], limit: number): GraphEdge[] {
+    const db = this.ensureDb(projectRoot);
+    const unique = [...new Set(nodeIds.map((id) => id.trim()).filter(Boolean))];
+    if (unique.length === 0 || limit <= 0) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const out: GraphEdge[] = [];
+    const chunkSize = 40;
+    const maxTotal = Math.max(1, Math.min(500, Math.floor(limit)));
+    for (let i = 0; i < unique.length && out.length < maxTotal; i += chunkSize) {
+      const slice = unique.slice(i, i + chunkSize);
+      const ph = slice.map(() => "?").join(",");
+      const remaining = maxTotal - out.length;
+      const rows = db
+        .prepare(
+          `SELECT id, from_id AS fromId, to_id AS toId, kind, summary_en AS summaryEn, weight, state, confidence,
+           evidence_json AS evidenceJson, created_at AS createdAt, updated_at AS updatedAt
+           FROM edges WHERE from_id IN (${ph}) OR to_id IN (${ph}) LIMIT ${remaining}`,
+        )
+        .all(...slice, ...slice) as GraphEdge[];
+      for (const row of rows) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        out.push(row);
+        if (out.length >= maxTotal) {
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  getNodesByIds(projectRoot: string, nodeIds: string[]): GraphNode[] {
+    const db = this.ensureDb(projectRoot);
+    const unique = [...new Set(nodeIds.map((id) => id.trim()).filter(Boolean))];
+    if (unique.length === 0) {
+      return [];
+    }
+    const out: GraphNode[] = [];
+    const chunkSize = 80;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+      const slice = unique.slice(i, i + chunkSize);
+      const ph = slice.map(() => "?").join(",");
+      const rows = db
+        .prepare(
+          `SELECT id, kind, name, path, signature, summary_en AS summaryEn, description_en AS descriptionEn, detail_level AS detailLevel,
+           tags_json AS tagsJson, state, confidence, created_at AS createdAt, updated_at AS updatedAt
+           FROM nodes WHERE id IN (${ph})`,
+        )
+        .all(...slice) as GraphNode[];
+      out.push(...rows);
+    }
+    return out;
+  }
+
+  getFileNodesByPaths(projectRoot: string, paths: string[], limit: number): GraphNode[] {
+    const db = this.ensureDb(projectRoot);
+    const unique = [...new Set(paths.map((p) => p.trim()).filter(Boolean))];
+    if (unique.length === 0 || limit <= 0) {
+      return [];
+    }
+    const out: GraphNode[] = [];
+    const chunkSize = 40;
+    for (let i = 0; i < unique.length && out.length < limit; i += chunkSize) {
+      const slice = unique.slice(i, i + chunkSize);
+      const ph = slice.map(() => "?").join(",");
+      const remaining = limit - out.length;
+      const rows = db
+        .prepare(
+          `SELECT id, kind, name, path, signature, summary_en AS summaryEn, description_en AS descriptionEn, detail_level AS detailLevel,
+           tags_json AS tagsJson, state, confidence, created_at AS createdAt, updated_at AS updatedAt
+           FROM nodes WHERE kind = 'File' AND path IN (${ph}) LIMIT ${remaining}`,
+        )
+        .all(...slice) as GraphNode[];
+      out.push(...rows);
+    }
+    return out;
+  }
 }
 

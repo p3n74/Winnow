@@ -72,6 +72,7 @@ import { sendJson, readJsonBody } from "./ui/httpUtil.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
+import { buildAgentGraphContextPreamble } from "../graph/agentGraphSeed.js";
 import { ProjectGraphService } from "../graph/service.js";
 import { smokeTestProvider } from "../translator/providerSmoke.js";
 import { ExternalChatMessage, runExternalChatCompletion } from "../translator/externalChat.js";
@@ -821,6 +822,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
     const prompt = payload.prompt;
+    const graphSeedEnabled = payload.graphSeed !== false;
+    const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
+    const effectivePrompt =
+      graphPreamble.trim().length > 0
+        ? `${graphPreamble.trim()}\n\n---\n\n## User request\n\n${prompt}`
+        : prompt;
 
     const persistRecord = () =>
       writeLocalSessionRecord({
@@ -875,6 +882,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     };
 
     pushEvent("user", prompt);
+    if (graphSeedEnabled && graphPreamble.trim().length > 0) {
+      pushEvent("status", `Graph seed: prepended ${graphPreamble.length} characters of project-graph context.`);
+    }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
     void persistRecord();
@@ -958,6 +968,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           `Changed files (${workspace.files.length}): ${workspace.files.slice(0, 60).join(", ") || "(none)"}\n` +
           `Git status:\n${workspace.status || "(none)"}\n` +
           `Diff excerpt:\n${(workspace.diff || "").slice(0, 12000) || "(none)"}`;
+        const graphSeedBlock =
+          graphPreamble.trim().length > 0
+            ? [
+                {
+                  role: "system" as const,
+                  content:
+                    "Project graph seed (heuristic, may be incomplete). Prefer opening these files/symbols before scanning the whole tree.\n\n" +
+                    graphPreamble.trim(),
+                },
+              ]
+            : [];
         const messages: ExternalChatMessage[] = [
           {
             role: "system",
@@ -966,6 +987,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               "If context is insufficient, say exactly what additional files or commands are needed.",
           },
           { role: "system", content: contextBlock },
+          ...graphSeedBlock,
           ...history,
         ];
         const output = await runExternalChatCompletion({
@@ -1084,7 +1106,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       void persistRecord();
     });
 
-    child.stdin?.write(`${prompt}\n`);
+    child.stdin?.write(`${effectivePrompt}\n`);
     child.stdin?.end();
 
     child.on("close", (code: number | null) => {

@@ -29,6 +29,8 @@ export type AgentStartRequest = {
   args?: string;
   modelPreference?: string;
   autonomyMode?: boolean;
+  /** When true (default), prepend a Winnow graph-derived scope hint to the agent prompt. */
+  graphSeed?: boolean;
   sessionId?: string;
   executionMode?: "cursor" | "external";
 };

@@ -7,3 +7,5 @@ coverage/
 .winnow/logs/
 .winnow/profile.json
 .winnow/sessions/
+.winnow/graph/*.db-shm
+.winnow/graph/*.db-wal

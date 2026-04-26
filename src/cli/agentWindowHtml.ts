@@ -321,6 +321,57 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       .composer-actions > .small.muted:first-child {
         margin-right: auto;
       }
+      .heuristic-engine {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px 3px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line-faint);
+        background: rgba(5, 5, 5, 0.65);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        user-select: none;
+        vertical-align: middle;
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .heuristic-engine:hover {
+        border-color: var(--line);
+        color: var(--text);
+      }
+      .heuristic-engine-input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .heuristic-engine-light {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        box-shadow: 0 0 8px currentColor;
+        transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .heuristic-engine--on .heuristic-engine-light {
+        background: #4ade80;
+        color: #4ade80;
+      }
+      .heuristic-engine--off .heuristic-engine-light {
+        background: #f87171;
+        color: #f87171;
+      }
+      .heuristic-engine-label {
+        font-style: italic;
+      }
       #sessionList {
         border: 1px solid var(--line);
         border-radius: 4px;
@@ -407,6 +458,15 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                   <option value="composer">composer</option>
                 </select>
                 <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
+                <label
+                  id="heuristicEngineWrap"
+                  class="heuristic-engine heuristic-engine--on"
+                  title="When on, prepends Winnow graph hints (technical + business) to narrow agent scope"
+                >
+                  <input id="graphSeedMode" type="checkbox" checked class="heuristic-engine-input" />
+                  <span class="heuristic-engine-light" aria-hidden="true"></span>
+                  <span class="heuristic-engine-label">Heuristic Engine</span>
+                </label>
                 <label><input id="continueMode" type="checkbox" /> continue session</label>
               </div>
               <div class="row small" style="margin-top: 8px">
@@ -1084,6 +1144,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           args: effectiveArgs,
           modelPreference: document.getElementById("agentModelPref").value,
           autonomyMode: document.getElementById("autonomyMode").checked,
+          graphSeed: document.getElementById("graphSeedMode").checked,
           sessionId: resumeSessionId || undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
         };
@@ -1266,6 +1327,20 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         }
         openMainGrid();
       });
+      function syncHeuristicEngineIndicator() {
+        const cb = document.getElementById("graphSeedMode");
+        const wrap = document.getElementById("heuristicEngineWrap");
+        if (!cb || !wrap) {
+          return;
+        }
+        wrap.classList.toggle("heuristic-engine--on", cb.checked);
+        wrap.classList.toggle("heuristic-engine--off", !cb.checked);
+      }
+      const graphSeedEl = document.getElementById("graphSeedMode");
+      if (graphSeedEl) {
+        graphSeedEl.addEventListener("change", syncHeuristicEngineIndicator);
+        syncHeuristicEngineIndicator();
+      }
       const sessionSelect = document.getElementById("agentSessionSelect");
       const modeSelect = document.getElementById("agentExecutionMode");
       if (modeSelect) {
