@@ -47,6 +47,19 @@ Winnow closes that gap:
 npm run setup
 ```
 
+On macOS, this now bootstraps system dependencies with Homebrew:
+- `ranger`
+- `htop`
+- `netwatch`
+- `cursor` (desktop app)
+
+On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** to install:
+- Node.js LTS (must stay in the supported `>=20 <23` range for Winnow)
+- Git for Windows (Git Bash, used by the UI terminal panes)
+- Cursor (`Anysphere.Cursor`)
+
+Native modules need a local build toolchain (Visual Studio Build Tools with “Desktop development with C++”, or the standalone MSVC toolchain) if `npm rebuild node-pty` fails.
+
 If you prefer manual setup:
 
 ```bash
@@ -92,12 +105,24 @@ Optional UI flags:
 - `-- --pane4-cmd "netwatch"`
 - `-- --pane5-cmd "$SHELL"`
 
+### Windows installer (.exe)
+
+1. Install [Inno Setup](https://jrsoftware.org/isinfo.php) so `iscc` is on your `PATH`.
+2. From the repo root, compile:
+
+```bat
+iscc scripts\installer\WinnowSetup.iss
+```
+
+3. Run the generated `dist-installer\WinnowSetup-1.0.0.exe`. It copies the app under `%LOCALAPPDATA%\Programs\Winnow` and runs `scripts\setup.ps1` once at the end of setup.
+
 ## Requirements
 
-- `cursor-agent` installed and authenticated
+- Cursor app installed and authenticated (provides `cursor-agent`)
 - `ranger` on `PATH` (pane 1 default)
 - `htop` on `PATH` (pane 3 default)
 - `netwatch` on `PATH` (pane 4 default)
+- **Windows:** Git for Windows (`bash.exe`) so the main terminal grid can spawn PTYs; optional tools like `ranger` / `htop` / `netwatch` are not installed by the Windows script (use WSL, Scoop, or custom pane commands)
 
 ## Storage and project artifacts
 

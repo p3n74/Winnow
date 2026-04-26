@@ -6,6 +6,58 @@ TARGET_NODE_MAJOR=22
 echo "[winnow-setup] Starting setup..."
 unset npm_config_prefix || true
 
+OS="$(uname -s)"
+
+ensure_homebrew() {
+  if command -v brew >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "[winnow-setup] ERROR: Homebrew is required to install system dependencies on macOS."
+  echo "[winnow-setup] Install Homebrew from https://brew.sh then rerun setup."
+  exit 1
+}
+
+ensure_brew_pkg() {
+  local pkg="$1"
+  if brew list --versions "${pkg}" >/dev/null 2>&1; then
+    echo "[winnow-setup] ${pkg} already installed."
+    return 0
+  fi
+  echo "[winnow-setup] Installing ${pkg}..."
+  brew install "${pkg}"
+}
+
+ensure_brew_cask() {
+  local cask="$1"
+  if brew list --cask --versions "${cask}" >/dev/null 2>&1; then
+    echo "[winnow-setup] ${cask} already installed."
+    return 0
+  fi
+  echo "[winnow-setup] Installing ${cask}..."
+  brew install --cask "${cask}"
+}
+
+install_system_dependencies() {
+  echo "[winnow-setup] Installing system dependencies..."
+  case "${OS}" in
+    Darwin)
+      ensure_homebrew
+      ensure_brew_pkg "ranger"
+      ensure_brew_pkg "htop"
+      ensure_brew_pkg "netwatch"
+      ensure_brew_cask "cursor"
+      ;;
+    *)
+      echo "[winnow-setup] WARNING: Auto-install for ${OS} is not configured."
+      echo "[winnow-setup] Please install these manually and rerun setup if needed:"
+      echo "  - ranger"
+      echo "  - htop"
+      echo "  - netwatch"
+      echo "  - cursor"
+      ;;
+  esac
+}
+
 if command -v nvm >/dev/null 2>&1; then
   echo "[winnow-setup] nvm detected. Installing/using Node ${TARGET_NODE_MAJOR}..."
   nvm install "${TARGET_NODE_MAJOR}"
@@ -34,6 +86,7 @@ else
 fi
 
 echo "[winnow-setup] Using node $(node -v)"
+install_system_dependencies
 echo "[winnow-setup] Installing dependencies..."
 npm install
 echo "[winnow-setup] Rebuilding node-pty for local macOS toolchain..."

@@ -14,7 +14,7 @@ export const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
   "2": "",
   "3": "htop",
   "4": "netwatch",
-  "5": process.env.SHELL || "zsh",
+  "5": process.platform === "win32" ? "" : process.env.SHELL || "zsh",
 };
 
 export type ProfileUpdateRequest = {

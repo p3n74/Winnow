@@ -216,7 +216,11 @@ export function buildProgram(): Command {
     )
     .option("--pane3-cmd <cmd>", "pane 3 command", "htop")
     .option("--pane4-cmd <cmd>", "pane 4 command", "netwatch")
-    .option("--pane5-cmd <cmd>", "pane 5 command", process.env.SHELL || "zsh")
+    .option(
+      "--pane5-cmd <cmd>",
+      "pane 5 command",
+      process.platform === "win32" ? "" : process.env.SHELL || "zsh",
+    )
     .option("--no-open", "do not auto-open browser")
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
@@ -234,7 +238,7 @@ export function buildProgram(): Command {
           "2": opts.pane2Cmd ?? "",
           "3": opts.pane3Cmd ?? "htop",
           "4": opts.pane4Cmd ?? "netwatch",
-          "5": opts.pane5Cmd ?? process.env.SHELL ?? "zsh",
+          "5": opts.pane5Cmd ?? (process.platform === "win32" ? "" : (process.env.SHELL ?? "zsh")),
         },
       });
     });

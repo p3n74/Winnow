@@ -4,7 +4,7 @@
   "description": "Cursor CLI wrapper with Chinese translation middleware",
   "main": "dist/cli/index.js",
   "scripts": {
-    "setup": "bash scripts/setup.sh",
+    "setup": "node scripts/run-setup.js",
     "preinstall": "node scripts/check-node-version.js",
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
@@ -12,7 +12,7 @@
     "test:watch": "vitest tests",
     "doctor": "tsx src/cli/index.ts doctor",
     "status": "tsx src/cli/index.ts status",
-    "ui": "bash scripts/ui.sh",
+    "ui": "node scripts/run-ui.js",
     "release:check": "npm run build && npm test"
   },
   "keywords": [],

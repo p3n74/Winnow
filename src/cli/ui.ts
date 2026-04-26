@@ -543,21 +543,37 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     mainPaneSessions.delete(paneId);
   };
 
-  const spawnMainPane = (paneId: PaneId): pty.IPty => {
-    const shellCandidates = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].filter(
+  const listShellCandidates = (): string[] => {
+    if (platform() === "win32") {
+      const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+      const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+      return [join(programFiles, "Git", "bin", "bash.exe"), join(programFilesX86, "Git", "bin", "bash.exe")];
+    }
+    return [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].filter(
       (value): value is string => Boolean(value && value.trim()),
     );
-    const shell = shellCandidates.find((candidate) => {
+  };
+
+  const resolveInteractiveShellForPty = (): string => {
+    const checker = platform() === "win32" ? fsConstants.F_OK : fsConstants.X_OK;
+    for (const candidate of listShellCandidates()) {
       try {
-        accessSync(candidate, fsConstants.X_OK);
-        return true;
+        accessSync(candidate, checker);
+        return candidate;
       } catch {
-        return false;
+        // try next
       }
-    });
-    if (!shell) {
-      throw new Error("no executable shell found for PTY");
     }
+    if (platform() === "win32") {
+      throw new Error(
+        "Git Bash not found for PTY panes. Install Git for Windows (https://git-scm.com/download/win) and retry.",
+      );
+    }
+    throw new Error("no executable shell found for PTY");
+  };
+
+  const spawnMainPane = (paneId: PaneId): pty.IPty => {
+    const shell = resolveInteractiveShellForPty();
     const rawCommand = (paneCommands[paneId] || "").trim();
     const launchScript = rawCommand ? `${rawCommand}; exec ${shell}` : `exec ${shell}`;
     try {
@@ -569,7 +585,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         env: process.env as Record<string, string>,
       });
     } catch {
-      for (const candidate of shellCandidates) {
+      for (const candidate of listShellCandidates()) {
         try {
           return pty.spawn(candidate, [], {
             name: "xterm-256color",
