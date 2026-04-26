@@ -114,3 +114,13 @@ Winnow is intentionally moving beyond “wrapper” territory. It is becoming:
 - and a foundation for advanced AI orchestration experiments.
 
 If you want an environment that reflects how *you* actually build with AI, Winnow is that environment.
+
+## Graph Engine Planning Docs
+
+The project-level AI dependency graph initiative is documented in:
+- `docs/graph/README.md`
+- `docs/graph/spec.md`
+- `docs/graph/schema-v1.md`
+- `docs/graph/lifecycle.md`
+- `docs/graph/ui-integration.md`
+- `docs/graph/rollout-plan.md`

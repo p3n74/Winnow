@@ -1570,11 +1570,16 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       async function refreshWorkspace(){
         const ws = await fetch(withToken('/api/workspace')).then(r=>r.json());
         const files = ws.files || [];
+        const filesEl = document.getElementById('workspaceFiles');
+        const diffEl = document.getElementById('workspaceDiff');
+        if(!filesEl || !diffEl){
+          return;
+        }
         const list = files.map((f, idx) =>
           '<label style="display:block"><input type="checkbox" class="ws-file" data-file="' + f.replace(/"/g,'&quot;') + '"' + (idx === 0 ? ' checked' : '') + '> ' + f + '</label>'
         ).join('');
-        document.getElementById('workspaceFiles').innerHTML = list || '<span class="muted small">No changes.</span>';
-        document.getElementById('workspaceDiff').textContent = ws.diff || ws.status || ws.error || 'No diff.';
+        filesEl.innerHTML = list || '<span class="muted small">No changes.</span>';
+        diffEl.textContent = ws.diff || ws.status || ws.error || 'No diff.';
       }
       async function stageSelected(){
         const nodes = Array.from(document.querySelectorAll('.ws-file')).filter(n => n.checked);

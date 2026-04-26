@@ -65,6 +65,7 @@ import { sendJson, readJsonBody } from "./ui/httpUtil.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
+import { ProjectGraphService } from "../graph/service.js";
 
 function applyMode(config: WinnowConfig, mode: "zh" | "raw" | "dual"): WinnowConfig {
   if (mode === "zh") {
@@ -86,6 +87,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   let config = { ...baseConfig };
   const winnowLaunchRoot = resolve(process.cwd());
   const uiWorkspace = { dir: winnowLaunchRoot };
+  const graphService = new ProjectGraphService();
 
   // Register current directory as a project
   await registerProject(winnowLaunchRoot);
@@ -421,12 +423,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   };
   const mainPaneSessions = new Map<PaneId, { ws: WebSocket; ptyProcess: pty.IPty }>();
   const mainPaneWs = new WebSocketServer({ noServer: true });
+  const logMainPane = (message: string): void => {
+    process.stdout.write(`[winnow-ui][main-pane] ${message}\n`);
+  };
 
   const closeMainPane = (paneId: PaneId): void => {
     const existing = mainPaneSessions.get(paneId);
     if (!existing) {
       return;
     }
+    logMainPane(`closing pane=${paneId}`);
     try {
       existing.ptyProcess.kill();
     } catch {
@@ -492,6 +498,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
     const paneId = url.pathname.split("/").pop() as PaneId;
     if (!paneId || !["1", "2", "3", "4", "5"].includes(paneId)) {
+      logMainPane(`reject invalid pane id path=${url.pathname}`);
       ws.close(1008, "invalid pane id");
       return;
     }
@@ -500,7 +507,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     let ptyProcess: pty.IPty;
     try {
       ptyProcess = spawnMainPane(paneId);
+      logMainPane(`spawned pane=${paneId} cwd=${uiWorkspace.dir}`);
     } catch (error) {
+      logMainPane(`spawn failed pane=${paneId} error=${(error as Error).message}`);
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(`\r\n[failed to start pane ${paneId}: ${(error as Error).message}]\r\n`);
       }
@@ -515,6 +524,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
     });
     ptyProcess.onExit(({ exitCode }) => {
+      logMainPane(`pane exit pane=${paneId} code=${exitCode}`);
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(`\r\n[process exited: ${exitCode}]\r\n`);
       }
@@ -543,6 +553,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
     });
     ws.on("close", () => {
+      logMainPane(`ws closed pane=${paneId}`);
       closeMainPane(paneId);
     });
   });
@@ -957,6 +968,111 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const projects = await listProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (url.pathname === "/api/graph/rebuild" && req.method === "POST") {
+      try {
+        const result = await graphService.rebuild(uiWorkspace.dir);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/summary" && req.method === "GET") {
+      try {
+        const summary = graphService.summary(uiWorkspace.dir);
+        sendJson(res, 200, { ok: true, summary });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/nodes" && req.method === "GET") {
+      try {
+        const limit = Number(url.searchParams.get("limit") ?? "500");
+        const nodes = graphService.listNodes(uiWorkspace.dir, {
+          kind: url.searchParams.get("kind") ?? undefined,
+          detailLevel: url.searchParams.get("detailLevel") ?? undefined,
+          limit: Number.isFinite(limit) ? limit : 500,
+        });
+        sendJson(res, 200, { ok: true, nodes });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/edges" && req.method === "GET") {
+      try {
+        const limit = Number(url.searchParams.get("limit") ?? "1000");
+        const edges = graphService.listEdges(uiWorkspace.dir, {
+          kind: url.searchParams.get("kind") ?? undefined,
+          fromId: url.searchParams.get("fromId") ?? undefined,
+          toId: url.searchParams.get("toId") ?? undefined,
+          limit: Number.isFinite(limit) ? limit : 1000,
+        });
+        sendJson(res, 200, { ok: true, edges });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/graph/node/") && url.pathname.endsWith("/neighbors") && req.method === "GET") {
+      try {
+        const nodeId = decodeURIComponent(
+          url.pathname.slice("/api/graph/node/".length, -"/neighbors".length),
+        ).trim();
+        if (!nodeId) {
+          sendJson(res, 400, { ok: false, error: "node id is required" });
+          return;
+        }
+        const neighborhood = graphService.neighbors(uiWorkspace.dir, nodeId);
+        sendJson(res, 200, { ok: true, ...neighborhood });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/corrections" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { operations?: unknown[] };
+        const operations = Array.isArray(body.operations) ? (body.operations as any[]) : [];
+        if (operations.length === 0) {
+          sendJson(res, 400, { ok: false, error: "operations array is required" });
+          return;
+        }
+        const result = graphService.applyCorrections(uiWorkspace.dir, operations as any);
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/reconcile" && req.method === "POST") {
+      try {
+        const report = graphService.reconcile(uiWorkspace.dir, "manual_reconcile");
+        sendJson(res, 200, { ok: true, report });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/graph/recaps" && req.method === "GET") {
+      try {
+        const limit = Number(url.searchParams.get("limit") ?? "20");
+        const recaps = graphService.latestRecaps(uiWorkspace.dir, Number.isFinite(limit) ? limit : 20);
+        sendJson(res, 200, { ok: true, recaps });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 
