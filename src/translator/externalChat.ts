@@ -11,6 +11,7 @@ export async function runExternalChatCompletion(input: {
   apiKey: string;
   messages: ExternalChatMessage[];
   deepseekBaseUrl?: string;
+  universalBaseUrl?: string;
 }): Promise<string> {
   const provider = input.provider;
   const model = input.model.trim();
@@ -84,9 +85,15 @@ export async function runExternalChatCompletion(input: {
   }
 
   const isDeepseek = provider === "deepseek";
+  const isUniversal = provider === "universal";
   const baseUrl = isDeepseek
     ? (input.deepseekBaseUrl?.trim() || "https://api.deepseek.com")
-    : "https://api.openai.com";
+    : isUniversal
+      ? (input.universalBaseUrl?.trim() || "")
+      : "https://api.openai.com";
+  if (isUniversal && !baseUrl) {
+    throw new Error("Universal adapter is missing base URL. Re-save it in Settings.");
+  }
   const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
     method: "POST",
     headers: {

@@ -36,6 +36,7 @@ type CliOptions = {
   pane3Cmd?: string;
   pane4Cmd?: string;
   pane5Cmd?: string;
+  shell?: boolean;
 };
 
 export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
@@ -222,15 +223,21 @@ export function buildProgram(): Command {
       process.platform === "win32" ? "" : process.env.SHELL || "zsh",
     )
     .option("--no-open", "do not auto-open browser")
+    .option(
+      "--shell",
+      "open the UI in an embedded Electron window (no system browser tab); first run may download Electron via npx",
+    )
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
       let token = opts.token?.trim();
       if (!token && opts.host === "0.0.0.0") {
         token = Math.random().toString(36).slice(2, 8).toUpperCase();
       }
+      const desktopShell = Boolean(opts.shell);
       await runUiServer(config, {
         port: opts.port ?? 3210,
-        openBrowser: opts.open ?? true,
+        openBrowser: desktopShell ? false : (opts.open ?? true),
+        desktopShell,
         host: opts.host ?? "127.0.0.1",
         token,
         paneCommands: {

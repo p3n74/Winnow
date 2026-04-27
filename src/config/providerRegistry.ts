@@ -1,13 +1,15 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export type ExternalProvider = "deepseek" | "openai" | "anthropic" | "gemini";
+export type ExternalProvider = "deepseek" | "openai" | "anthropic" | "gemini" | "universal";
 
 export type ProviderDefinition = {
   id: ExternalProvider;
   label: string;
   envKey: string;
   defaultModels: string[];
+  supportsCustomBaseUrl?: boolean;
+  requiresModelOnSmoke?: boolean;
 };
 
 export const PROVIDERS: ProviderDefinition[] = [
@@ -35,12 +37,21 @@ export const PROVIDERS: ProviderDefinition[] = [
     envKey: "GEMINI_API_KEY",
     defaultModels: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
   },
+  {
+    id: "universal",
+    label: "Universal (OpenAI-compatible)",
+    envKey: "UNIVERSAL_MODEL_API_KEY",
+    defaultModels: [],
+    supportsCustomBaseUrl: true,
+    requiresModelOnSmoke: true,
+  },
 ];
 
 export type ProviderVerification = {
   provider: ExternalProvider;
   verifiedAt: string;
   models: string[];
+  baseUrl?: string;
 };
 
 export type ProviderVerificationStore = Partial<Record<ExternalProvider, ProviderVerification>>;

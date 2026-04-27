@@ -294,6 +294,93 @@ export function buildMainTerminalHtml(token?: string): string {
         font-family: var(--font-mono);
         white-space: pre-wrap;
       }
+      .plansRoot { padding: 8px 10px 10px; gap: 8px; }
+      .plansLayout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 8px; min-height: 0; flex: 1; }
+      .plansList {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        overflow: auto;
+        min-height: 160px;
+        max-height: 360px;
+        padding: 6px;
+      }
+      .planItem {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text);
+        padding: 6px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .planItem:hover { border-color: var(--line-faint); background: rgba(0,0,0,0.35); }
+      .planItem.active { border-color: var(--accent); background: rgba(34,211,238,0.08); }
+      .planMeta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .planEditor {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        height: 100%;
+      }
+      .planMd {
+        width: 100%;
+        min-height: 220px;
+        height: 42vh;
+        resize: vertical;
+        font-family: ui-monospace, Menlo, monospace;
+      }
+      .planBody { display: flex; flex: 1; min-height: 0; }
+      .planPreview {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 8px;
+        margin-top: 0;
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        max-height: none;
+        font-size: 12px;
+      }
+      .planPreview.isHidden { display: none; }
+      .planGraphPane {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 8px;
+        overflow: auto;
+        min-height: 0;
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .planGraphPane.planGraphFullscreenFallback {
+        position: fixed;
+        inset: 14px;
+        z-index: 95;
+        background: rgba(0, 0, 0, 0.97);
+        border-color: var(--line);
+        box-shadow: 0 0 0 1px var(--line-faint);
+      }
+      .planGraphPane.isHidden { display: none; }
+      .planGraphSvg {
+        width: 100%;
+        min-height: 100%;
+      }
+      .planGraphHint {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .planGraphControls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
       .graphRoot {
         padding: 0 10px 10px;
         gap: 8px;
@@ -613,7 +700,7 @@ export function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger</span>
-          <span class="chip">2 agent · shell · docs · graph · processes</span>
+          <span class="chip">2 agent · shell · docs · graph · plans · processes</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -640,6 +727,7 @@ export function buildMainTerminalHtml(token?: string): string {
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="plans" id="pane2TabPlans">Plans</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="processes" id="pane2TabProcesses">Processes</button>
               </div>
               <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
@@ -730,6 +818,44 @@ export function buildMainTerminalHtml(token?: string): string {
               <div class="procHint">Selected process output (tail):</div>
               <pre id="procLogPreview" class="procLog">Select a process to inspect logs.</pre>
             </div>
+            <div id="pane2Plans" class="pane2View isHidden plansRoot" aria-hidden="true">
+              <div class="procToolbar">
+                <input id="planTitleInput" class="procInput procCommand" placeholder="New plan title..." />
+                <button type="button" class="reconnect" id="btnPlanCreate">Create plan</button>
+                <button type="button" class="reconnect" id="btnPlanRefresh">Refresh</button>
+                <span id="planHint" class="procHint">Plans persist as <code>.winnow/plans/*.md</code> and sqlite metadata.</span>
+              </div>
+              <div class="plansLayout">
+                <div id="plansList" class="plansList">Loading plans…</div>
+                <div class="planEditor">
+                  <div class="procToolbar">
+                    <input id="planTitleEdit" class="procInput procMeta" placeholder="Plan title" />
+                    <input id="planStatusEdit" class="procInput procMeta" placeholder="Status" readonly />
+                    <button type="button" class="reconnect" id="btnPlanRename">Rename title</button>
+                    <button type="button" class="reconnect" id="btnPlanGraphView">Graph view</button>
+                    <button type="button" class="reconnect" id="btnPlanGraphRebuild">Rebuild graph</button>
+                    <span class="procHint" title="Plans are agent-managed; update by talking in Agent tab with the selected plan scope.">Agent-managed plan</span>
+                  </div>
+                  <div id="planBody" class="planBody">
+                    <div id="planPreview" class="planPreview muted">Preview will appear here.</div>
+                    <div id="planGraphPane" class="planGraphPane isHidden">
+                      <div class="planGraphControls">
+                        <button type="button" class="reconnect" id="btnPlanGraphZoomIn">Zoom +</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphZoomOut">Zoom -</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphLeft">◀</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphRight">▶</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphUp">▲</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphDown">▼</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphReset">Reset view</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphFullscreen">Fullscreen</button>
+                      </div>
+                      <svg id="planGraphSvg" class="planGraphSvg" viewBox="0 0 920 640" role="img" aria-label="Plan graph"></svg>
+                      <div class="planGraphHint">Timeline view (ordered top-to-bottom) with branch lanes and latest-worked highlight.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -747,8 +873,15 @@ export function buildMainTerminalHtml(token?: string): string {
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let processRefreshTimer = null;
+      let plansRefreshTimer = null;
       let selectedManagedProcessId = null;
       let cachedManagedProcesses = [];
+      let selectedPlanId = "";
+      let cachedPlans = [];
+      let planGraphVisible = true;
+      let selectedPlanMarkdown = "";
+      let planGraphViewBox = { x: 0, y: 0, w: 980, h: 720, baseW: 980, baseH: 720 };
+      let planGraphFullscreenFallback = false;
       let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
       let graphDragState = { active: false, nodeId: null, pinOnRelease: false };
       let graphNodeCache = { nodes: [], edges: [] };
@@ -843,50 +976,61 @@ export function buildMainTerminalHtml(token?: string): string {
         const tsEl = document.getElementById("pane2TerminalWrap");
         const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
+        const plansEl = document.getElementById("pane2Plans");
         const procEl = document.getElementById("pane2Processes");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
         const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
+        const tplans = document.getElementById("pane2TabPlans");
         const tp = document.getElementById("pane2TabProcesses");
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
         const isDoc = mode === "docs";
         const isGraph = mode === "graph";
+        const isPlans = mode === "plans";
         const isProc = mode === "processes";
-        if(wsEl && tsEl && docEl && graphEl && procEl){
+        if(wsEl && tsEl && docEl && graphEl && plansEl && procEl){
           wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
           docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
+          plansEl.classList.toggle("isHidden", !isPlans);
           procEl.classList.toggle("isHidden", !isProc);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
+          plansEl.setAttribute("aria-hidden", isPlans ? "false" : "true");
           procEl.setAttribute("aria-hidden", isProc ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : "managed processes";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : isPlans ? "plan board" : "managed processes";
         }
-        if(tw && tt && td && tg && tp){
+        if(tw && tt && td && tg && tplans && tp){
           tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
           td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
+          tplans.classList.toggle("paneTabActive", isPlans);
           tp.classList.toggle("paneTabActive", isProc);
           tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
+          tplans.setAttribute("aria-selected", isPlans.toString());
           tp.setAttribute("aria-selected", isProc.toString());
         }
         if(recon){ recon.hidden = !isTerm; }
         if(processRefreshTimer){
           clearInterval(processRefreshTimer);
           processRefreshTimer = null;
+        }
+        if(plansRefreshTimer){
+          clearInterval(plansRefreshTimer);
+          plansRefreshTimer = null;
         }
         if(isTerm){
           openPane2Terminal();
@@ -912,6 +1056,457 @@ export function buildMainTerminalHtml(token?: string): string {
               void refreshManagedProcessLog(selectedManagedProcessId);
             }
           }, 4000);
+        }
+        if(isPlans){
+          void refreshPlans();
+          plansRefreshTimer = setInterval(function(){
+            void refreshPlans();
+            if(selectedPlanId){
+              void loadPlan(selectedPlanId);
+            }
+          }, 5000);
+        }
+      }
+      function renderPlanPreview(markdown){
+        const root = document.getElementById("planPreview");
+        if(!root){ return; }
+        const raw = String(markdown || "");
+        if(!raw.trim()){
+          root.textContent = "Preview will appear here.";
+          return;
+        }
+        try {
+          if(typeof marked === "undefined" || typeof DOMPurify === "undefined"){
+            root.textContent = raw;
+            return;
+          }
+          const html = marked.parse(raw, { breaks: true, gfm: true });
+          root.innerHTML = DOMPurify.sanitize(String(html));
+        } catch {
+          root.textContent = raw;
+        }
+      }
+      function parsePlanGraph(markdown){
+        const normalized = String(markdown || "").split("\\r").join("");
+        const lines = normalized.split("\\n");
+        const nodes = [];
+        const edges = [];
+        let idCounter = 0;
+        const stack = [];
+        let latestWorkedId = "";
+        for(const raw of lines){
+          const line = String(raw || "");
+          const heading = line.match(/^(#{1,4})\\s+(.+)$/);
+          if(heading){
+            const depth = heading[1].length;
+            const title = heading[2].trim();
+            const id = "h-" + (++idCounter);
+            nodes.push({ id, label: title, depth, kind: "heading" });
+            while(stack.length > 0 && stack[stack.length - 1].depth >= depth){
+              stack.pop();
+            }
+            if(stack.length > 0){
+              edges.push({ from: stack[stack.length - 1].id, to: id });
+            }
+            stack.push({ id, depth });
+            continue;
+          }
+          const task = line.match(/^\\s*-\\s+\\[( |x|X)\\]\\s+(.+)$/);
+          if(task){
+            const done = task[1].toLowerCase() === "x";
+            const label = task[2].trim();
+            const id = "t-" + (++idCounter);
+            nodes.push({ id, label: (done ? "✓ " : "○ ") + label, depth: (stack[stack.length - 1]?.depth || 1) + 1, kind: "task" });
+            if(stack.length > 0){
+              edges.push({ from: stack[stack.length - 1].id, to: id });
+            }
+            if(done){
+              latestWorkedId = id;
+            }
+          }
+        }
+        if(!latestWorkedId && nodes.length > 0){
+          latestWorkedId = nodes[nodes.length - 1].id;
+        }
+        return { nodes, edges, latestWorkedId };
+      }
+      function escXml(s){
+        return String(s == null ? "" : s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function wrapLabel(label, maxChars){
+        const normalized = String(label || "").trim();
+        const softWords = normalized.split(/\\s+/).filter(Boolean);
+        const words = [];
+        for(const token of softWords){
+          if(token.length <= maxChars){
+            words.push(token);
+            continue;
+          }
+          for(let i = 0; i < token.length; i += maxChars){
+            words.push(token.slice(i, i + maxChars));
+          }
+        }
+        if(words.length === 0){ return [""]; }
+        const lines = [];
+        let cur = "";
+        for(const w of words){
+          if(!cur){
+            cur = w;
+            continue;
+          }
+          if((cur + " " + w).length <= maxChars){
+            cur += " " + w;
+          } else {
+            lines.push(cur);
+            cur = w;
+          }
+        }
+        if(cur){ lines.push(cur); }
+        return lines.slice(0, 4);
+      }
+      function applyPlanGraphViewBox(){
+        const svg = document.getElementById("planGraphSvg");
+        if(!svg){ return; }
+        svg.setAttribute(
+          "viewBox",
+          planGraphViewBox.x + " " + planGraphViewBox.y + " " + planGraphViewBox.w + " " + planGraphViewBox.h
+        );
+      }
+      function zoomPlanGraph(scale){
+        const s = Number(scale) || 1;
+        if(!Number.isFinite(s) || s <= 0){ return; }
+        const cx = planGraphViewBox.x + planGraphViewBox.w / 2;
+        const cy = planGraphViewBox.y + planGraphViewBox.h / 2;
+        planGraphViewBox.w = Math.max(320, Math.min(planGraphViewBox.baseW * 3, planGraphViewBox.w / s));
+        planGraphViewBox.h = Math.max(220, Math.min(planGraphViewBox.baseH * 3, planGraphViewBox.h / s));
+        planGraphViewBox.x = cx - planGraphViewBox.w / 2;
+        planGraphViewBox.y = cy - planGraphViewBox.h / 2;
+        applyPlanGraphViewBox();
+      }
+      function panPlanGraph(dx, dy){
+        planGraphViewBox.x += Number(dx) || 0;
+        planGraphViewBox.y += Number(dy) || 0;
+        applyPlanGraphViewBox();
+      }
+      function updatePlanGraphFullscreenButton(){
+        const btn = document.getElementById("btnPlanGraphFullscreen");
+        if(!btn){ return; }
+        const active = Boolean(document.fullscreenElement) || planGraphFullscreenFallback;
+        btn.textContent = active ? "Exit fullscreen" : "Fullscreen";
+      }
+      async function togglePlanGraphFullscreen(){
+        const pane = document.getElementById("planGraphPane");
+        if(!pane){ return; }
+        try {
+          if(document.fullscreenElement){
+            await document.exitFullscreen();
+            updatePlanGraphFullscreenButton();
+            return;
+          }
+          if(typeof pane.requestFullscreen === "function"){
+            await pane.requestFullscreen();
+            updatePlanGraphFullscreenButton();
+            return;
+          }
+        } catch (_err) {}
+        planGraphFullscreenFallback = !planGraphFullscreenFallback;
+        pane.classList.toggle("planGraphFullscreenFallback", planGraphFullscreenFallback);
+        updatePlanGraphFullscreenButton();
+      }
+      function renderPlanGraph(markdown){
+        const svg = document.getElementById("planGraphSvg");
+        if(!svg){ return; }
+        const parsed = parsePlanGraph(markdown);
+        let nodes = Array.isArray(parsed.nodes) ? [...parsed.nodes] : [];
+        let edges = Array.isArray(parsed.edges) ? [...parsed.edges] : [];
+        const latestWorkedId = String(parsed.latestWorkedId || "");
+        if(nodes.length === 0){
+          svg.innerHTML = '<text x="24" y="40" fill="#67e8f9" font-size="14">No headings/checklist items found in this plan.</text>';
+          return;
+        }
+        const marginX = 28;
+        const marginY = 24;
+        const rowGap = 8;
+        const colGap = 72;
+        const baseNodeW = 290;
+        const minNodeW = 210;
+        const maxNodeW = 380;
+        const maxDepth = nodes.reduce((acc, n)=>Math.max(acc, Number(n.depth || 1)), 1);
+        const paneWidth = Math.max(0, Math.floor(svg.getBoundingClientRect().width || svg.clientWidth || 0));
+        const innerWidth = Math.max(560, paneWidth - 16);
+        const laneCount = Math.max(1, maxDepth);
+        const availableNodeW = Math.floor((innerWidth - (marginX * 2) - ((laneCount - 1) * colGap)) / laneCount);
+        const nodeW = Math.max(minNodeW, Math.min(maxNodeW, availableNodeW > 0 ? availableNodeW : baseNodeW));
+        const colW = nodeW + colGap;
+        const nodeById = new Map(nodes.map((n)=>[String(n.id), n]));
+        const parentById = new Map();
+        const childrenById = new Map();
+        for(const n of nodes){
+          childrenById.set(String(n.id), []);
+        }
+        for(const e of edges){
+          const from = String(e.from || "");
+          const to = String(e.to || "");
+          if(!childrenById.has(from)){ childrenById.set(from, []); }
+          childrenById.get(from).push(to);
+          parentById.set(to, from);
+        }
+        // Hide empty heading leaves (e.g. headings with no task/content descendants).
+        const isHeadingById = new Map(nodes.map((n)=>[String(n.id), String(n.kind) === "heading"]));
+        const removable = new Set();
+        for(const n of nodes){
+          const id = String(n.id || "");
+          const children = childrenById.get(id) || [];
+          if(String(n.kind) === "heading" && children.length === 0){
+            removable.add(id);
+          }
+        }
+        if(removable.size > 0){
+          nodes = nodes.filter((n)=>!removable.has(String(n.id || "")));
+          edges = edges.filter((e)=>!removable.has(String(e.from || "")) && !removable.has(String(e.to || "")));
+          childrenById.clear();
+          parentById.clear();
+          for(const n of nodes){
+            childrenById.set(String(n.id), []);
+          }
+          for(const e of edges){
+            const from = String(e.from || "");
+            const to = String(e.to || "");
+            if(!childrenById.has(from)){ childrenById.set(from, []); }
+            childrenById.get(from).push(to);
+            parentById.set(to, from);
+          }
+        }
+        const roots = nodes.filter((n)=>!parentById.has(String(n.id))).map((n)=>String(n.id));
+        const visitOrder = new Map(nodes.map((n, idx)=>[String(n.id), idx]));
+        for(const arr of childrenById.values()){
+          arr.sort((a,b)=>(visitOrder.get(a) || 0) - (visitOrder.get(b) || 0));
+        }
+        const positions = new Map();
+        function ensureNodeSize(id){
+          const n = nodeById.get(id);
+          if(!n){
+            return { wrapped: [""], h: 30 };
+          }
+          const depth = Math.max(1, Number(n.depth || 1));
+          const width = depth >= maxDepth ? Math.min(maxNodeW + 60, innerWidth - marginX - 20) : nodeW;
+          const wrapped = wrapLabel(n.label, Math.max(26, Math.floor((width - 24) / 7)));
+          const h = Math.max(32, 12 + wrapped.length * 12);
+          return { wrapped, h, width };
+        }
+        let cursorY = marginY;
+        function gapForDepth(depth){
+          const d = Math.max(1, Number(depth || 1));
+          if(d >= maxDepth){ return 4; }
+          if(d >= 3){ return 6; }
+          return rowGap;
+        }
+        function layoutNode(id){
+          const n = nodeById.get(id);
+          if(!n){ return cursorY; }
+          const { wrapped, h, width } = ensureNodeSize(id);
+          const depth = Math.max(1, Number(n.depth || 1));
+          const x = marginX + (depth - 1) * colW;
+          const children = childrenById.get(id) || [];
+          if(children.length === 0){
+            const y = cursorY;
+            positions.set(id, { x, y, w: width, h, wrapped, kind: n.kind });
+            cursorY += h + gapForDepth(depth);
+            return y + h / 2;
+          }
+          const centers = children.map((childId)=>layoutNode(childId));
+          const centerY = centers.length ? (centers[0] + centers[centers.length - 1]) / 2 : (cursorY + h / 2);
+          const y = centerY - h / 2;
+          positions.set(id, { x, y, w: width, h, wrapped, kind: n.kind });
+          return centerY;
+        }
+        for(const root of roots){
+          layoutNode(root);
+          cursorY += 4;
+        }
+        const edgeSvg = edges.map((e, idx)=>{
+          const a = positions.get(String(e.from || ""));
+          const b = positions.get(String(e.to || ""));
+          if(!a || !b){ return ""; }
+          const x1 = a.x + a.w;
+          const y1 = a.y + a.h / 2;
+          const x2 = b.x;
+          const y2 = b.y + b.h / 2;
+          const laneShift = (idx % 3) * 4;
+          const dx = Math.max(32, (x2 - x1) * 0.42 + laneShift);
+          const c1x = x1 + dx;
+          const c2x = x2 - Math.max(18, dx * 0.45);
+          return '<path d="M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + y1 + ', ' + c2x + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" stroke="rgba(34,211,238,0.42)" fill="none" stroke-width="1.2"/>';
+        }).join("");
+        const nodeSvg = nodes.map((n)=>{
+          const p = positions.get(n.id);
+          if(!p){ return ""; }
+          const isLatest = n.id === latestWorkedId;
+          const fill = isLatest
+            ? "rgba(74,222,128,0.16)"
+            : n.kind === "heading" ? "rgba(34,211,238,0.12)" : "rgba(167,139,250,0.10)";
+          const stroke = isLatest
+            ? "rgba(74,222,128,0.85)"
+            : n.kind === "heading" ? "rgba(34,211,238,0.55)" : "rgba(167,139,250,0.45)";
+          const textLines = (p.wrapped || [n.label]).map((line, idx)=>{
+            return '<tspan x="' + (p.x + 10) + '" y="' + (p.y + 16 + idx * 12) + '">' + escXml(line) + '</tspan>';
+          }).join("");
+          return '<g>' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="6" ry="6" width="' + p.w + '" height="' + p.h + '" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + (isLatest ? 1.8 : 1.1) + '"/>' +
+            '<text fill="#67e8f9" font-size="11" xml:space="preserve">' + textLines + '</text>' +
+            (isLatest ? ('<text x="' + (p.x + p.w - 62) + '" y="' + (p.y + p.h - 6) + '" fill="#86efac" font-size="10">latest</text>') : '') +
+          '</g>';
+        }).join("");
+        const contentWidth = Math.max(...[...positions.values()].map((p)=>p.x + p.w + 30), innerWidth);
+        const contentHeight = Math.max(...[...positions.values()].map((p)=>p.y + p.h + 16), 420);
+        const width = Math.max(innerWidth, contentWidth);
+        const height = Math.max(420, contentHeight);
+        planGraphViewBox = { x: 0, y: 0, w: width, h: height, baseW: width, baseH: height };
+        svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+        svg.innerHTML = edgeSvg + nodeSvg;
+        // wheel zoom
+        if(!svg.dataset.planWheelBound){
+          svg.addEventListener("wheel", (evt)=>{
+            evt.preventDefault();
+            const dir = evt.deltaY > 0 ? 0.9 : 1.1;
+            zoomPlanGraph(dir);
+          }, { passive: false });
+          svg.dataset.planWheelBound = "1";
+        }
+      }
+      function setPlanGraphVisibility(visible){
+        planGraphVisible = Boolean(visible);
+        const pane = document.getElementById("planGraphPane");
+        const preview = document.getElementById("planPreview");
+        const btn = document.getElementById("btnPlanGraphView");
+        if(pane){ pane.classList.toggle("isHidden", !planGraphVisible); }
+        if(preview){ preview.classList.toggle("isHidden", planGraphVisible); }
+        if(btn){ btn.textContent = planGraphVisible ? "Rendered view" : "Graph view"; }
+      }
+      async function rebuildPlanGraph(){
+        const hint = document.getElementById("planHint");
+        if(!selectedPlanId){
+          if(hint){ hint.textContent = "Select a plan first."; }
+          return;
+        }
+        try {
+          const d = await fetch(withToken("/api/plans/" + encodeURIComponent(selectedPlanId))).then((r)=>r.json());
+          if(!d || d.ok === false){
+            if(hint){ hint.textContent = "Rebuild failed: " + ((d && d.error) || "unknown error"); }
+            return;
+          }
+          selectedPlanMarkdown = String(d.markdown || "");
+          renderPlanGraph(selectedPlanMarkdown);
+          if(hint){ hint.textContent = "Graph rebuilt from latest plan markdown."; }
+        } catch (err) {
+          if(hint){ hint.textContent = "Rebuild failed: " + ((err && err.message) ? err.message : String(err)); }
+        }
+      }
+      async function loadPlan(id){
+        if(!id){ return; }
+        selectedPlanId = id;
+        const titleEl = document.getElementById("planTitleEdit");
+        const statusEl = document.getElementById("planStatusEdit");
+        try {
+          const meta = cachedPlans.find((p)=>String(p.id) === String(id));
+          if(titleEl && meta){ titleEl.value = String(meta.title || id); }
+          if(statusEl && meta && meta.status){ statusEl.value = String(meta.status); }
+          const d = await fetch(withToken("/api/plans/" + encodeURIComponent(id))).then((r)=>r.json());
+          if(d && d.ok){
+            if(titleEl && d.title){ titleEl.value = String(d.title); }
+            selectedPlanMarkdown = String(d.markdown || "");
+            renderPlanPreview(selectedPlanMarkdown);
+            renderPlanGraph(selectedPlanMarkdown);
+          }
+        } catch (_err) {}
+        const list = document.getElementById("plansList");
+        if(list){
+          list.querySelectorAll(".planItem").forEach((el)=>{
+            el.classList.toggle("active", el.getAttribute("data-plan-id") === selectedPlanId);
+          });
+        }
+      }
+      async function refreshPlans(){
+        const list = document.getElementById("plansList");
+        if(!list){ return; }
+        try {
+          const d = await fetch(withToken("/api/plans")).then((r)=>r.json());
+          cachedPlans = (d && d.ok && Array.isArray(d.plans)) ? d.plans : [];
+          if(cachedPlans.length === 0){
+            list.innerHTML = '<div class="procSub">No plans yet. Create one above.</div>';
+            return;
+          }
+          list.innerHTML = cachedPlans.map((p)=>{
+            const active = selectedPlanId && String(p.id) === selectedPlanId;
+            const ts = p.updatedAt ? new Date(String(p.updatedAt)).toLocaleString() : "";
+            return '<button type="button" class="planItem' + (active ? ' active' : '') + '" data-plan-id="' + String(p.id).replace(/"/g,'&quot;') + '">' +
+              '<div><strong>' + String(p.title || p.id).replace(/</g, "&lt;") + '</strong></div>' +
+              '<div class="planMeta">' + String(p.status || "draft") + (ts ? (" · " + ts) : "") + '</div>' +
+            '</button>';
+          }).join("");
+          list.querySelectorAll(".planItem").forEach((el)=>{
+            el.addEventListener("click", ()=>{ void loadPlan(el.getAttribute("data-plan-id") || ""); });
+          });
+          if(!selectedPlanId){
+            await loadPlan(String(cachedPlans[0].id || ""));
+          }
+        } catch (err) {
+          list.textContent = "Failed to load plans: " + ((err && err.message) ? err.message : String(err));
+        }
+      }
+      async function createPlan(){
+        const titleEl = document.getElementById("planTitleInput");
+        const hint = document.getElementById("planHint");
+        const title = String(titleEl && titleEl.value || "").trim() || "Untitled plan";
+        try {
+          const d = await fetch(withToken("/api/plans"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title }),
+          }).then((r)=>r.json());
+          if(!d || d.ok === false){
+            if(hint){ hint.textContent = "Create failed: " + ((d && d.error) || "unknown error"); }
+            return;
+          }
+          if(titleEl){ titleEl.value = ""; }
+          selectedPlanId = String(d.plan && d.plan.id || "");
+          await refreshPlans();
+          if(selectedPlanId){ await loadPlan(selectedPlanId); }
+          if(hint){ hint.textContent = "Plan created."; }
+        } catch (err) {
+          if(hint){ hint.textContent = "Create failed: " + ((err && err.message) ? err.message : String(err)); }
+        }
+      }
+      async function renamePlanTitle(){
+        const hint = document.getElementById("planHint");
+        if(!selectedPlanId){
+          if(hint){ hint.textContent = "Select a plan first."; }
+          return;
+        }
+        const title = String(document.getElementById("planTitleEdit")?.value || "").trim();
+        if(!title){
+          if(hint){ hint.textContent = "Enter a non-empty title."; }
+          return;
+        }
+        try {
+          const d = await fetch(withToken("/api/plans/" + encodeURIComponent(selectedPlanId)), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title }),
+          }).then((r)=>r.json());
+          if(!d || d.ok === false){
+            if(hint){ hint.textContent = "Rename failed: " + ((d && d.error) || "unknown error"); }
+            return;
+          }
+          if(hint){ hint.textContent = "Title updated."; }
+          await refreshPlans();
+          await loadPlan(selectedPlanId);
+        } catch (err) {
+          if(hint){ hint.textContent = "Rename failed: " + ((err && err.message) ? err.message : String(err)); }
         }
       }
       async function refreshManagedProcessLog(id){
@@ -2234,9 +2829,27 @@ export function buildMainTerminalHtml(token?: string): string {
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
+      document.getElementById("pane2TabPlans")?.addEventListener("click",()=>setPane2Tab("plans"));
       document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
       document.getElementById("btnProcStart")?.addEventListener("click",()=>{ void startManagedProcess(); });
       document.getElementById("btnProcRefresh")?.addEventListener("click",()=>{ void refreshManagedProcesses(); });
+      document.getElementById("btnPlanCreate")?.addEventListener("click",()=>{ void createPlan(); });
+      document.getElementById("btnPlanRefresh")?.addEventListener("click",()=>{ void refreshPlans(); });
+      document.getElementById("btnPlanRename")?.addEventListener("click",()=>{ void renamePlanTitle(); });
+      document.getElementById("btnPlanGraphView")?.addEventListener("click",()=>{ setPlanGraphVisibility(!planGraphVisible); });
+      document.getElementById("btnPlanGraphRebuild")?.addEventListener("click",()=>{ void rebuildPlanGraph(); });
+      document.getElementById("btnPlanGraphZoomIn")?.addEventListener("click",()=>{ zoomPlanGraph(1.2); });
+      document.getElementById("btnPlanGraphZoomOut")?.addEventListener("click",()=>{ zoomPlanGraph(0.84); });
+      document.getElementById("btnPlanGraphLeft")?.addEventListener("click",()=>{ panPlanGraph(-80, 0); });
+      document.getElementById("btnPlanGraphRight")?.addEventListener("click",()=>{ panPlanGraph(80, 0); });
+      document.getElementById("btnPlanGraphUp")?.addEventListener("click",()=>{ panPlanGraph(0, -60); });
+      document.getElementById("btnPlanGraphDown")?.addEventListener("click",()=>{ panPlanGraph(0, 60); });
+      document.getElementById("btnPlanGraphReset")?.addEventListener("click",()=>{
+        planGraphViewBox = { x: 0, y: 0, w: planGraphViewBox.baseW, h: planGraphViewBox.baseH, baseW: planGraphViewBox.baseW, baseH: planGraphViewBox.baseH };
+        applyPlanGraphViewBox();
+      });
+      document.getElementById("btnPlanGraphFullscreen")?.addEventListener("click",()=>{ void togglePlanGraphFullscreen(); });
+      document.addEventListener("fullscreenchange", ()=>{ updatePlanGraphFullscreenButton(); });
       document.getElementById("procFilterInput")?.addEventListener("input",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procStatusFilter")?.addEventListener("change",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procCommandInput")?.addEventListener("keydown",(evt)=>{
@@ -2360,6 +2973,7 @@ export function buildMainTerminalHtml(token?: string): string {
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
       setPane2Tab("workspace");
+      setPlanGraphVisibility(true);
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{
         btn.addEventListener("click",()=>{
           const paneId = btn.getAttribute("data-pane");

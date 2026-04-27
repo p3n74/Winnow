@@ -103,4 +103,26 @@ echo "[winnow-setup] Installing dependencies..."
 npm install
 echo "[winnow-setup] Rebuilding node-pty for local macOS toolchain..."
 npm rebuild node-pty --build-from-source
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+install_winnow_ui_launcher() {
+  local bin_dir="${HOME}/.local/bin"
+  local target_script="${REPO_ROOT}/scripts/winnow-ui.sh"
+  local link_path="${bin_dir}/winnow-ui"
+  mkdir -p "${bin_dir}"
+  chmod +x "${target_script}" 2>/dev/null || true
+  if ln -sf "${target_script}" "${link_path}" 2>/dev/null; then
+    echo "[winnow-setup] Installed UI launcher: ${link_path} -> scripts/winnow-ui.sh"
+    echo "[winnow-setup] Run: winnow-ui   (Electron window; same as: npm run ui -- --shell)"
+  else
+    echo "[winnow-setup] WARNING: could not symlink winnow-ui into ${bin_dir}."
+  fi
+  if [[ ":${PATH}:" != *":${bin_dir}:"* ]]; then
+    echo "[winnow-setup] Add ${bin_dir} to PATH (Cursor CLI uses the same layout), for example in ~/.zprofile:"
+    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+  fi
+}
+
+install_winnow_ui_launcher
+
 echo "[winnow-setup] Setup complete."

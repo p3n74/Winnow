@@ -117,4 +117,23 @@ npm run build
 Write-WinnowSetup "Rebuilding node-pty for this machine..."
 npm rebuild node-pty --build-from-source
 
-Write-WinnowSetup "Setup complete. Next: sign in to the Cursor Agent CLI if prompted (see https://cursor.com/docs/cli/overview), then run npm run doctor or npm run ui."
+function Install-WinnowUiLauncher {
+    $binDir = Join-Path $env:USERPROFILE ".local\bin"
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    $cmdPath = Join-Path $binDir "winnow-ui.cmd"
+    $cmdLines = @(
+        "@echo off",
+        "cd /d `"$ProjectRoot`"",
+        "call npm run ui -- --shell %*"
+    )
+    $cmdBody = ($cmdLines -join "`r`n") + "`r`n"
+    Set-Content -Path $cmdPath -Value $cmdBody -Encoding ascii
+    Write-WinnowSetup "Installed UI launcher: $cmdPath (run: winnow-ui)"
+    if ($env:PATH -notlike "*${binDir}*") {
+        Write-WinnowSetup "Add to your user PATH: $binDir  (Settings > Environment Variables, or `$PROFILE)"
+    }
+}
+
+Install-WinnowUiLauncher
+
+Write-WinnowSetup "Setup complete. Next: sign in to the Cursor Agent CLI if prompted (see https://cursor.com/docs/cli/overview), then run npm run doctor, npm run ui, or winnow-ui."

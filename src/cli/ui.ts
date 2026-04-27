@@ -45,6 +45,7 @@ import { collectSystemLive } from "../data/systemTelemetry.js";
 import { SystemTelemetryStore } from "../data/systemTelemetryStore.js";
 import { ProcessManager } from "../data/processManager.js";
 import { buildEfficiencyAdvisories } from "../data/efficiencyAdvisor.js";
+import { PlanStore } from "../data/planStore.js";
 import {
   ensureCursorWorkspaceLayout,
   ensureCursorWorkspaceLayoutSync,
@@ -156,6 +157,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const graphService = new ProjectGraphService();
   let processManager = new ProcessManager(uiWorkspace.dir);
   let telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
+  let planStore = new PlanStore(uiWorkspace.dir);
 
   // Register current directory as a project
   await registerProject(winnowLaunchRoot);
@@ -194,6 +196,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     await processManager.init();
     telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
     await telemetryStore.init();
+    planStore = new PlanStore(uiWorkspace.dir);
+    planStore.init();
+    await planStore.backfillFromMarkdownFiles();
     await ensureCursorWorkspaceLayout(uiWorkspace.dir);
     if (persist) {
       config = { ...config, uiWorkspaceDir: real };
@@ -212,6 +217,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   await ensureCursorWorkspaceLayout(uiWorkspace.dir);
   await processManager.init();
   await telemetryStore.init();
+  planStore.init();
+  await planStore.backfillFromMarkdownFiles();
 
   const cursorTranscriptDirForUi = (): string =>
     process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim()
@@ -248,6 +255,23 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
   }
 
+  async function listPlans(): Promise<{ id: string; title: string; path: string; updatedAt: string }[]> {
+    return planStore.list().map((p) => ({
+      id: p.id,
+      title: p.title,
+      path: p.mdPath,
+      updatedAt: p.updatedAt,
+    }));
+  }
+
+  async function readPlanMarkdown(planId: string): Promise<{ ok: true; id: string; title: string; markdown: string } | { ok: false; error: string }> {
+    const id = String(planId || "").trim();
+    if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) {
+      return { ok: false, error: "invalid plan id" };
+    }
+    return planStore.readMarkdown(id);
+  }
+
   async function upsertProviderVerification(
     provider: ExternalProvider,
     models: string[],
@@ -265,6 +289,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   async function listSelectableModels(): Promise<string[]> {
     const base = new Set<string>(["default", "auto", "composer"]);
+    const parseModelId = (rawLine: string): string => {
+      const trimmed = rawLine.trim();
+      if (!trimmed) {
+        return "";
+      }
+      // Newer cursor-agent formats lines as "<model-id> - <friendly name>".
+      const dashed = trimmed.match(/^([A-Za-z0-9._-]+)\s+-\s+/);
+      if (dashed?.[1]) {
+        return dashed[1];
+      }
+      // Also tolerate bullet/prefix output like "- model-id".
+      const bullet = trimmed.match(/^(?:[-*]\s+)?([A-Za-z0-9._-]+)$/);
+      return bullet?.[1] ?? "";
+    };
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
     try {
       const out = await new Promise<string>((resolvePromise, rejectPromise) => {
@@ -291,10 +329,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         });
       });
       for (const line of out.split("\n")) {
-        const model = line.trim();
-        if (!model || model.startsWith("-") || model.toLowerCase().includes("available model")) {
+        const lower = line.trim().toLowerCase();
+        if (!lower || lower.includes("available model")) {
           continue;
         }
+        const model = parseModelId(line);
+        if (!model) continue;
         base.add(model);
       }
     } catch {
@@ -906,11 +946,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
     const prompt = payload.prompt;
+    const planId = String(payload.planId || "").trim();
     const graphSeedEnabled = payload.graphSeed !== false;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
+    const planContext = planId ? await readPlanMarkdown(planId) : null;
+    const planPreamble =
+      planContext && planContext.ok
+        ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan id: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
+        : "";
     const effectivePrompt =
-      graphPreamble.trim().length > 0
-        ? `${graphPreamble.trim()}\n\n---\n\n## User request\n\n${prompt}`
+      graphPreamble.trim().length > 0 || planPreamble.trim().length > 0
+        ? `${[graphPreamble.trim(), planPreamble.trim()].filter(Boolean).join("\n\n---\n\n")}\n\n---\n\n## User request\n\n${prompt}`
         : prompt;
 
     const persistRecord = () =>
@@ -968,6 +1014,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     pushEvent("user", prompt);
     if (graphSeedEnabled && graphPreamble.trim().length > 0) {
       pushEvent("status", `Graph seed: prepended ${graphPreamble.length} characters of project-graph context.`);
+    }
+    if (planPreamble.trim().length > 0) {
+      pushEvent("status", `Plan scope: prepended context from plan "${planId}".`);
+    } else if (planId) {
+      pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
     }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
@@ -1342,6 +1393,58 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const projects = await listProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (url.pathname === "/api/plans" && req.method === "GET") {
+      const plans = await listPlans();
+      sendJson(res, 200, { ok: true, plans });
+      return;
+    }
+
+    if (url.pathname === "/api/plans" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as {
+          title?: string;
+          markdown?: string;
+          status?: "draft" | "active" | "blocked" | "done";
+        };
+        const plan = planStore.create({
+          title: String(body.title || "").trim() || "Untitled plan",
+          markdown: body.markdown,
+          status: body.status,
+        });
+        sendJson(res, 200, { ok: true, plan });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/plans/") && req.method === "GET") {
+      const id = decodeURIComponent(url.pathname.slice("/api/plans/".length)).trim();
+      const body = await readPlanMarkdown(id);
+      sendJson(res, body.ok ? 200 : 400, body);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/plans/") && req.method === "POST") {
+      const id = decodeURIComponent(url.pathname.slice("/api/plans/".length)).trim();
+      try {
+        const body = (await readJsonBody(req)) as {
+          title?: string;
+          markdown?: string;
+          status?: "draft" | "active" | "blocked" | "done";
+        };
+        const plan = planStore.save(id, {
+          title: body.title,
+          markdown: body.markdown,
+          status: body.status,
+        });
+        sendJson(res, 200, { ok: true, plan });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 

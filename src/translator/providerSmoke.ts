@@ -24,7 +24,7 @@ function authHeaders(provider: ExternalProvider, key: string): Record<string, st
 export async function smokeTestProvider(
   provider: ExternalProvider,
   apiKey: string,
-  options?: { deepseekBaseUrl?: string },
+  options?: { deepseekBaseUrl?: string; baseUrl?: string; model?: string },
 ): Promise<SmokeTestResult> {
   const key = apiKey.trim();
   if (!key) {
@@ -67,12 +67,28 @@ export async function smokeTestProvider(
     }
 
     const baseUrl =
-      provider === "deepseek" ? (options?.deepseekBaseUrl?.trim() || "https://api.deepseek.com") : "https://api.openai.com";
+      provider === "deepseek"
+        ? (options?.deepseekBaseUrl?.trim() || "https://api.deepseek.com")
+        : provider === "universal"
+          ? (options?.baseUrl?.trim() || "")
+          : "https://api.openai.com";
+    const model =
+      provider === "deepseek"
+        ? "deepseek-v4-flash"
+        : provider === "universal"
+          ? String(options?.model ?? "").trim()
+          : "gpt-4.1-mini";
+    if (provider === "universal" && !baseUrl) {
+      return { ok: false, provider, error: "Universal adapter requires a base URL." };
+    }
+    if (provider === "universal" && !model) {
+      return { ok: false, provider, error: "Universal adapter requires a model." };
+    }
     const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
       method: "POST",
       headers: authHeaders(provider, key),
       body: JSON.stringify({
-        model: provider === "deepseek" ? "deepseek-v4-flash" : "gpt-4.1-mini",
+        model,
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 1,
       }),

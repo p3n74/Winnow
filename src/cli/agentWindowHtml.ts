@@ -486,6 +486,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" class="secondary" onclick="refreshSessions()">Reload</button>
                 <button type="button" class="secondary" onclick="startFreshSession()">New chat</button>
               </div>
+              <div class="row small" style="margin-top: 8px">
+                <label>Plan</label>
+                <select id="agentPlanSelect" style="min-width: 220px; flex: 1">
+                  <option value="">(no plan scope)</option>
+                </select>
+                <button type="button" class="secondary" onclick="refreshPlans()">Reload plans</button>
+              </div>
               <div class="row small" style="margin-top: 8px; align-items: stretch">
                 <label style="align-self: center">Cwd</label>
                 <input id="agentCwdInput" style="flex: 1; min-width: 160px" placeholder="Path or ~/… (same as terminal cd)" />
@@ -601,7 +608,19 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           const data = await fetch(withToken("/api/models/external-selectable")).then((r) => r.json());
           select.innerHTML = "";
           const fallback = [{ value: "", label: "(verify provider key in Settings first)" }];
-          const rows = data.ok && Array.isArray(data.models) && data.models.length > 0 ? data.models.map((m) => ({ value: m, label: m })) : fallback;
+          const rows =
+            data.ok && Array.isArray(data.models) && data.models.length > 0
+              ? data.models.map((m) => {
+                  const raw = String(m || "");
+                  const split = raw.indexOf(":");
+                  if (split > 0) {
+                    const provider = raw.slice(0, split);
+                    const model = raw.slice(split + 1);
+                    return { value: raw, label: model + " (" + provider + ")" };
+                  }
+                  return { value: raw, label: raw };
+                })
+              : fallback;
           rows.forEach((row) => {
             const option = document.createElement("option");
             option.value = String(row.value || "");
@@ -639,6 +658,33 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               "transcripts: " + (d.transcriptDir || "") + " · launched: " + (d.launchRoot || "");
           }
         } catch (_e) {}
+      }
+      async function refreshPlans() {
+        const sel = document.getElementById("agentPlanSelect");
+        if (!sel) {
+          return;
+        }
+        const prev = sel.value || "";
+        try {
+          const data = await fetch(withToken("/api/plans")).then((r) => r.json());
+          if (!data || data.ok === false || !Array.isArray(data.plans)) {
+            sel.innerHTML = '<option value="">(no plans found)</option>';
+            return;
+          }
+          const options = ['<option value="">(no plan scope)</option>'].concat(
+            data.plans.map((p) => {
+              const id = String(p.id || "");
+              const title = String(p.title || id || "(untitled)");
+              return '<option value="' + id.replace(/"/g, "&quot;") + '">' + title.replace(/"/g, "&quot;") + "</option>";
+            }),
+          );
+          sel.innerHTML = options.join("");
+          if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
+            sel.value = prev;
+          }
+        } catch {
+          sel.innerHTML = '<option value="">(failed to load plans)</option>';
+        }
       }
       async function applyAgentCwd() {
         const input = document.getElementById("agentCwdInput");
@@ -1145,6 +1191,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           modelPreference: document.getElementById("agentModelPref").value,
           autonomyMode: document.getElementById("autonomyMode").checked,
           graphSeed: document.getElementById("graphSeedMode").checked,
+          planId: document.getElementById("agentPlanSelect")?.value || undefined,
           sessionId: resumeSessionId || undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
         };
@@ -1379,6 +1426,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       loadSelectableModels();
       updateExecutionModeUi();
       refreshSessions();
+      refreshPlans();
       setInterval(refreshMetrics, 1000);
       if (EMBED_MODE) {
         document.body.classList.add("embed");

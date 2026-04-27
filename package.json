@@ -6,7 +6,7 @@
   "scripts": {
     "setup": "node scripts/run-setup.js",
     "preinstall": "node scripts/check-node-version.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-electron-main.mjs",
     "dev": "tsx src/cli/index.ts",
     "test": "vitest run tests",
     "test:watch": "vitest tests",

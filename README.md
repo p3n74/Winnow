@@ -70,9 +70,11 @@ npm run setup
 
 On macOS, Homebrew installs `ranger` and `htop`. The **Cursor Agent CLI** (`cursor-agent`, from [cursor.com/install](https://cursor.com/install)) is installed next (not the Cursor desktop app).
 
+Setup also installs a **`winnow-ui`** command: a symlink in `~/.local/bin/winnow-ui` → `scripts/winnow-ui.sh`, which runs **`npm run ui -- --shell`** from the repo (embedded Electron window). Ensure `~/.local/bin` is on your `PATH` (the Cursor CLI installer uses the same convention on macOS/Linux).
+
 Pane 4 defaults to a `netwatch` command if present on your `PATH`; that is a separate custom tool and is **not** installed by this script.
 
-On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** for Node.js LTS and Git for Windows, then installs the **Cursor Agent CLI** from [cursor.com/install?win32=true](https://cursor.com/install?win32=true) (not the Cursor desktop app).
+On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** for Node.js LTS and Git for Windows, then installs the **Cursor Agent CLI** from [cursor.com/install?win32=true](https://cursor.com/install?win32=true) (not the Cursor desktop app). It also writes **`%USERPROFILE%\.local\bin\winnow-ui.cmd`** with the same behavior; add that folder to your user `PATH` if it is not already there.
 
 Native modules need a local build toolchain (Visual Studio Build Tools with “Desktop development with C++”, or the standalone MSVC toolchain) if `npm rebuild node-pty` fails.
 
@@ -103,6 +105,12 @@ npm run status
 npm run ui
 ```
 
+After setup, from any directory (with `~/.local/bin` on `PATH`):
+
+```bash
+winnow-ui
+```
+
 Or directly:
 
 ```bash
@@ -114,7 +122,8 @@ Optional UI flags:
 - `-- --port 3210`
 - `-- --host 0.0.0.0`
 - `-- --token ABC123` (access via `?token=ABC123`)
-- `-- --no-open`
+- `-- --no-open` (print the URL only; open it yourself)
+- `-- --shell` (open the same UI in a **standalone Electron window** instead of your default browser; first run may download Electron via `npx`)
 - `-- --pane1-cmd "ranger"`
 - `-- --pane2-cmd "cursor-agent"`
 - `-- --pane3-cmd "htop"`
