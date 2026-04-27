@@ -1,6 +1,8 @@
 export type UiOptions = {
   port: number;
   openBrowser: boolean;
+  /** When true, open the UI in an embedded Electron window instead of the system browser. */
+  desktopShell?: boolean;
   host: string;
   token?: string;
   paneCommands?: Record<"1" | "2" | "3" | "4" | "5", string>;
@@ -62,6 +64,13 @@ export type SessionStreamClient = {
 
 export type StageFilesRequest = {
   files: string[];
+};
+
+export type ManagedProcessStartRequest = {
+  command?: string;
+  label?: string;
+  cwd?: string;
+  tags?: string[];
 };
 
 export type FileListEntry = {

@@ -2,7 +2,8 @@ import { createServer, IncomingMessage } from "node:http";
 import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { accessSync, constants as fsConstants, createReadStream, readFileSync } from "node:fs";
 import { arch, cpus, freemem, homedir, loadavg, networkInterfaces, platform, totalmem, uptime } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import pty from "node-pty";
@@ -40,6 +41,10 @@ import {
   usageDbStatus,
 } from "../data/usageStore.js";
 import { buildDiskDashboard } from "../data/diskSnapshotService.js";
+import { collectSystemLive } from "../data/systemTelemetry.js";
+import { SystemTelemetryStore } from "../data/systemTelemetryStore.js";
+import { ProcessManager } from "../data/processManager.js";
+import { buildEfficiencyAdvisories } from "../data/efficiencyAdvisor.js";
 import {
   ensureCursorWorkspaceLayout,
   ensureCursorWorkspaceLayoutSync,
@@ -66,6 +71,7 @@ import {
   type SessionMessage,
   type SessionStreamClient,
   type StageFilesRequest,
+  type ManagedProcessStartRequest,
   type UiOptions,
 } from "./ui/types.js";
 import { sendJson, readJsonBody } from "./ui/httpUtil.js";
@@ -87,10 +93,60 @@ function applyMode(config: WinnowConfig, mode: "zh" | "raw" | "dual"): WinnowCon
   return { ...config, inputMode: "off", outputMode: "off", showOriginal: false, dualOutput: false };
 }
 
+/** Pinned Electron for `npx` so first-time --shell behavior is reproducible. */
+const ELECTRON_UI_PIN = "33.2.0";
+
 function maybeOpenBrowser(url: string): void {
   if (process.platform === "darwin") {
     spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+    return;
   }
+  if (process.platform === "win32") {
+    spawn("cmd", ["/c", "start", "", url], { stdio: "ignore", detached: true, windowsHide: true }).unref();
+    return;
+  }
+  spawn("xdg-open", [url], { stdio: "ignore", detached: true }).unref();
+}
+
+function resolveElectronAppMainPath(): string {
+  const besideThisModule = join(dirname(fileURLToPath(import.meta.url)), "electronAppMain.cjs");
+  try {
+    accessSync(besideThisModule, fsConstants.R_OK);
+    return besideThisModule;
+  } catch {
+    // e.g. dev from repo root while cwd differs
+  }
+  const fromRepo = resolve(process.cwd(), "src/cli/electronAppMain.cjs");
+  try {
+    accessSync(fromRepo, fsConstants.R_OK);
+    return fromRepo;
+  } catch {
+    return besideThisModule;
+  }
+}
+
+function spawnDesktopShell(loadUrl: string): void {
+  const mainEntry = resolveElectronAppMainPath();
+  try {
+    accessSync(mainEntry, fsConstants.R_OK);
+  } catch {
+    process.stderr.write(`[winnow-ui] Electron shell: missing ${mainEntry}\n`);
+    process.stderr.write(`[winnow-ui] run npm run build, or open manually: ${loadUrl}\n`);
+    return;
+  }
+  const isWin = process.platform === "win32";
+  const runner = isWin ? "npx.cmd" : "npx";
+  const args = ["-y", `electron@${ELECTRON_UI_PIN}`, mainEntry, loadUrl];
+  const child = spawn(runner, args, {
+    stdio: "inherit",
+    env: process.env,
+    shell: isWin,
+  });
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    process.stderr.write(`[winnow-ui] Electron shell failed (${err.code ?? err.message}).\n`);
+    process.stderr.write(`[winnow-ui] ensure npx is on PATH; first --shell may download Electron.\n`);
+    process.stderr.write(`[winnow-ui] UI is still running at: ${loadUrl}\n`);
+  });
 }
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
@@ -98,6 +154,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const winnowLaunchRoot = resolve(process.cwd());
   const uiWorkspace = { dir: winnowLaunchRoot };
   const graphService = new ProjectGraphService();
+  let processManager = new ProcessManager(uiWorkspace.dir);
+  let telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
 
   // Register current directory as a project
   await registerProject(winnowLaunchRoot);
@@ -132,6 +190,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       throw new Error(`Not a directory: ${real}`);
     }
     uiWorkspace.dir = real;
+    processManager = new ProcessManager(uiWorkspace.dir);
+    await processManager.init();
+    telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
+    await telemetryStore.init();
     await ensureCursorWorkspaceLayout(uiWorkspace.dir);
     if (persist) {
       config = { ...config, uiWorkspaceDir: real };
@@ -148,6 +210,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
   }
   await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+  await processManager.init();
+  await telemetryStore.init();
 
   const cursorTranscriptDirForUi = (): string =>
     process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim()
@@ -177,16 +241,24 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         hasKey: key.length > 0,
         verifiedAt: verified[provider.id]?.verifiedAt ?? null,
         models: verified[provider.id]?.models ?? [],
+        baseUrl: verified[provider.id]?.baseUrl ?? "",
+        supportsCustomBaseUrl: Boolean(provider.supportsCustomBaseUrl),
+        requiresModelOnSmoke: Boolean(provider.requiresModelOnSmoke),
       };
     });
   }
 
-  async function upsertProviderVerification(provider: ExternalProvider, models: string[]): Promise<void> {
+  async function upsertProviderVerification(
+    provider: ExternalProvider,
+    models: string[],
+    options?: { baseUrl?: string },
+  ): Promise<void> {
     const store = await readProviderVerificationStore(winnowLaunchRoot);
     store[provider] = {
       provider,
       verifiedAt: new Date().toISOString(),
       models,
+      ...(options?.baseUrl ? { baseUrl: options.baseUrl } : {}),
     };
     await writeProviderVerificationStore(winnowLaunchRoot, store);
   }
@@ -240,10 +312,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (provider.id === "deepseek" && model.trim().toLowerCase() === "deepseek-v3") {
           continue;
         }
-        set.add(model);
+        set.add(`${provider.id}:${model}`);
       }
     }
     return [...set];
+  }
+
+  function parseExternalModelSelection(selection: string): { provider?: ExternalProvider; model: string } {
+    const trimmed = selection.trim();
+    const idx = trimmed.indexOf(":");
+    if (idx > 0) {
+      const maybeProvider = trimmed.slice(0, idx).trim() as ExternalProvider;
+      if (PROVIDERS.some((p) => p.id === maybeProvider)) {
+        return { provider: maybeProvider, model: trimmed.slice(idx + 1).trim() };
+      }
+    }
+    return { provider: undefined, model: trimmed };
   }
 
   function providerForModel(model: string): ExternalProvider | undefined {
@@ -945,15 +1029,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (!model) {
           throw new Error("External mode requires a selected external model.");
         }
-        const provider = providerForModel(model);
+        const parsed = parseExternalModelSelection(model);
+        const selectedModel = parsed.model;
+        const provider = parsed.provider || providerForModel(selectedModel);
         if (!provider) {
           throw new Error(`Cannot infer provider for model "${model}".`);
         }
         const providerDef = getProviderDefinition(provider);
+        const verified = await readProviderVerificationStore(winnowLaunchRoot);
+        const universalBaseUrl = provider === "universal" ? String(verified.universal?.baseUrl ?? "").trim() : "";
         const envFile = readDotenvFile(winnowLaunchRoot);
         const apiKey = String(process.env[providerDef.envKey] ?? envFile[providerDef.envKey] ?? "").trim();
         if (!apiKey) {
           throw new Error(`Missing ${providerDef.envKey}. Add it in Settings and smoke test it first.`);
+        }
+        if (provider === "universal" && !universalBaseUrl) {
+          throw new Error("Universal adapter base URL is missing. Configure it in Settings and run smoke test.");
         }
         const history = session.events
           .filter((e) => e.kind === "user" || e.kind === "assistant")
@@ -992,10 +1083,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         ];
         const output = await runExternalChatCompletion({
           provider,
-          model,
+          model: selectedModel,
           apiKey,
           messages,
           deepseekBaseUrl: config.deepseekBaseUrl,
+          universalBaseUrl,
         });
         session.output += output;
         session.exitCode = 0;
@@ -1174,6 +1266,42 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/system/live" && req.method === "GET") {
+      try {
+        const live = await collectSystemLive();
+        telemetryStore.add({
+          sampledAt: live.sampledAt,
+          cpuPercent: live.cpuPercent,
+          memUsedPercent: live.memUsedPercent,
+          memUsedBytes: live.memUsedBytes,
+          batteryPercent: live.batteryPercent,
+          batteryCharging: live.batteryCharging,
+          thermalState: live.thermalState,
+        });
+        sendJson(res, 200, { ok: true, ...live });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/system/timeseries" && req.method === "GET") {
+      const rawRange = (url.searchParams.get("range") ?? "1h").trim().toLowerCase();
+      const range = (["1h", "6h", "24h", "all"].includes(rawRange) ? rawRange : "1h") as "1h" | "6h" | "24h" | "all";
+      sendJson(res, 200, { ok: true, samples: telemetryStore.list(range) });
+      return;
+    }
+
+    if (url.pathname === "/api/system/advisories" && req.method === "GET") {
+      const samples = telemetryStore.list("1h");
+      sendJson(res, 200, {
+        ok: true,
+        advisories: buildEfficiencyAdvisories(samples, processManager.list()),
+        sampleCount: samples.length,
+      });
+      return;
+    }
+
     if (url.pathname === "/favicon.ico" && req.method === "GET") {
       res.statusCode = 204;
       res.end();
@@ -1214,6 +1342,50 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const projects = await listProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (url.pathname === "/api/processes" && req.method === "GET") {
+      sendJson(res, 200, { ok: true, processes: processManager.list() });
+      return;
+    }
+
+    if (url.pathname === "/api/processes/start" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as ManagedProcessStartRequest;
+        const started = await processManager.start({
+          command: payload.command || "",
+          label: payload.label,
+          cwd: payload.cwd,
+          tags: payload.tags,
+        });
+        sendJson(res, started.ok ? 200 : 400, started);
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/processes/") && url.pathname.endsWith("/stop") && req.method === "POST") {
+      const id = decodeURIComponent(url.pathname.slice("/api/processes/".length, -"/stop".length)).trim();
+      if (!id) {
+        sendJson(res, 400, { ok: false, error: "process id is required" });
+        return;
+      }
+      const body = processManager.stop(id);
+      sendJson(res, body.ok ? 200 : 400, body);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/processes/") && url.pathname.endsWith("/log") && req.method === "GET") {
+      const id = decodeURIComponent(url.pathname.slice("/api/processes/".length, -"/log".length)).trim();
+      if (!id) {
+        sendJson(res, 400, { ok: false, error: "process id is required" });
+        return;
+      }
+      const tail = Number(url.searchParams.get("tail") ?? "200");
+      const body = await processManager.readLog(id, Number.isFinite(tail) ? tail : 200);
+      sendJson(res, body.ok ? 200 : 400, body);
       return;
     }
 
@@ -1562,7 +1734,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     if (url.pathname === "/api/providers/smoke" && req.method === "POST") {
       try {
-        const payload = (await readJsonBody(req)) as { provider?: ExternalProvider; apiKey?: string; persist?: boolean };
+        const payload = (await readJsonBody(req)) as {
+          provider?: ExternalProvider;
+          apiKey?: string;
+          persist?: boolean;
+          baseUrl?: string;
+          model?: string;
+        };
         const provider = payload.provider;
         if (!provider || !PROVIDERS.some((p) => p.id === provider)) {
           sendJson(res, 400, { ok: false, error: "provider is required" });
@@ -1572,8 +1750,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const envFile = readDotenvFile(winnowLaunchRoot);
         const incoming = String(payload.apiKey ?? "").trim();
         const effectiveKey = incoming || String(process.env[definition.envKey] ?? envFile[definition.envKey] ?? "").trim();
+        const baseUrl = String(payload.baseUrl ?? "").trim();
+        const model = String(payload.model ?? "").trim();
         if (!effectiveKey) {
           sendJson(res, 400, { ok: false, error: `Missing API key for ${provider}` });
+          return;
+        }
+        if (provider === "universal" && !baseUrl) {
+          sendJson(res, 400, { ok: false, error: "Universal adapter base URL is required" });
+          return;
+        }
+        if (provider === "universal" && !model) {
+          sendJson(res, 400, { ok: false, error: "Universal adapter model is required" });
           return;
         }
         if (payload.persist && incoming) {
@@ -1581,13 +1769,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           writeDotenvFileFull(winnowLaunchRoot, merged);
           loadDotenvFromDisk(winnowLaunchRoot, { override: true });
         }
-        const smoke = await smokeTestProvider(provider, effectiveKey, { deepseekBaseUrl: config.deepseekBaseUrl });
+        const smoke = await smokeTestProvider(provider, effectiveKey, {
+          deepseekBaseUrl: config.deepseekBaseUrl,
+          baseUrl,
+          model,
+        });
         if (!smoke.ok) {
           sendJson(res, 200, smoke);
           return;
         }
-        await upsertProviderVerification(provider, definition.defaultModels);
-        sendJson(res, 200, { ...smoke, models: definition.defaultModels });
+        const models = provider === "universal" ? [model] : definition.defaultModels;
+        await upsertProviderVerification(provider, models, { baseUrl });
+        sendJson(res, 200, { ...smoke, models, baseUrl });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
@@ -1979,7 +2172,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     process.stdout.write(`[winnow-ui] local URL: ${localUrl}\n`);
   }
   process.stdout.write("[winnow-ui] press Ctrl+C to stop\n");
-  if (options.openBrowser) {
-    maybeOpenBrowser(options.host === "0.0.0.0" ? localUrl : boundUrl);
+  const launchUrl = options.host === "0.0.0.0" ? localUrl : boundUrl;
+  if (options.desktopShell) {
+    process.stdout.write("[winnow-ui] opening embedded Electron window (--shell)\n");
+    spawnDesktopShell(launchUrl);
+  } else if (options.openBrowser) {
+    maybeOpenBrowser(launchUrl);
   }
 }

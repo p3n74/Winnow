@@ -731,15 +731,34 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             <div class="metrics dashboardMetrics">
               <div class="metric"><div class="metricLabel">Platform</div><div class="metricValue" id="sysPlatform">...</div></div>
               <div class="metric"><div class="metricLabel">CPU</div><div class="metricValue" id="sysCpus">...</div></div>
+              <div class="metric"><div class="metricLabel">CPU Usage</div><div class="metricValue" id="sysCpuPct">...</div></div>
               <div class="metric"><div class="metricLabel">Mem Free</div><div class="metricValue" id="sysMemFree">...</div></div>
+              <div class="metric"><div class="metricLabel">Mem Used</div><div class="metricValue" id="sysMemUsedPct">...</div></div>
               <div class="metric"><div class="metricLabel">Uptime</div><div class="metricValue" id="sysUptime">...</div></div>
               <div class="metric"><div class="metricLabel">Node</div><div class="metricValue" id="sysNode">...</div></div>
               <div class="metric"><div class="metricLabel">Load Avg</div><div class="metricValue" id="sysLoadAvg">...</div></div>
+              <div class="metric"><div class="metricLabel">Battery</div><div class="metricValue" id="sysBattery">...</div></div>
+              <div class="metric"><div class="metricLabel">Thermal</div><div class="metricValue" id="sysThermal">...</div></div>
             </div>
             <div class="dashboardSubline">
               <span id="sysCpuModel"></span>
               <span id="sysRefreshedAt">Updated just now</span>
             </div>
+            <div class="row small" style="margin-top:8px;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <div class="row small" style="gap:8px">
+                <label for="sysTrendRange">Trend</label>
+                <select id="sysTrendRange">
+                  <option value="1h" selected>1h</option>
+                  <option value="6h">6h</option>
+                  <option value="24h">24h</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
+            </div>
+            <div class="usageChartWrap" style="height:170px;min-height:150px;max-height:190px;margin-top:8px">
+              <canvas id="sysTrendChartCanvas"></canvas>
+            </div>
+            <div id="sysAdvisories" class="small" style="margin-top:8px"></div>
           </div>
 
           <div class="panel dashboard-only dashboard-panel dashboard-lastrun">
@@ -917,7 +936,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           </div>
           <div class="panel settings-only flex-panel" style="display:none">
             <div class="title">External model providers</div>
-            <p class="hint">Smoke-test each provider key first; verified providers unlock model options in Agent/Main Grid.</p>
+            <p class="hint">Smoke-test each provider key first; verified providers unlock model options in Agent/Main Grid. Use Universal for any OpenAI-compatible external API.</p>
             <div id="providerSettingsRows"></div>
             <pre id="providerSettingsHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
           </div>
@@ -1069,11 +1088,20 @@ export function buildDashboardPageHtml(token: string | undefined): string {
 
       let usageChartInstance = null;
       let usageRefreshTimer = null;
+      let systemChartInstance = null;
+      let systemRefreshTimer = null;
 
       function destroyUsageChart(){
         if(usageChartInstance){
           usageChartInstance.destroy();
           usageChartInstance = null;
+        }
+      }
+
+      function destroySystemChart(){
+        if(systemChartInstance){
+          systemChartInstance.destroy();
+          systemChartInstance = null;
         }
       }
 
@@ -1358,7 +1386,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
 
       async function refreshSystemInfo() {
         try {
-          const sys = await fetch(withToken('/api/system')).then(r => r.json());
+          const [sys, liveRes] = await Promise.all([
+            fetch(withToken('/api/system')).then(r => r.json()),
+            fetch(withToken('/api/system/live')).then(r => r.json()).catch(() => ({ ok: false })),
+          ]);
           document.getElementById('sysPlatform').textContent = sys.platform + ' (' + sys.arch + ')';
           document.getElementById('sysCpus').textContent = String(sys.cpus);
           document.getElementById('sysMemFree').textContent = Math.round(sys.freeMem / 1024 / 1024 / 1024) + ' / ' + Math.round(sys.totalMem / 1024 / 1024 / 1024) + ' GB';
@@ -1370,9 +1401,106 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           document.getElementById('sysCpuModel').textContent = sys.cpuModel;
           document.getElementById('sysNode').textContent = sys.nodeVersion || '-';
           document.getElementById('sysLoadAvg').textContent = Array.isArray(sys.loadAvg) ? sys.loadAvg.map(v => Number(v).toFixed(2)).join(' / ') : '-';
+          if(liveRes && liveRes.ok){
+            document.getElementById('sysCpuPct').textContent = Number.isFinite(liveRes.cpuPercent) ? (Number(liveRes.cpuPercent).toFixed(1) + '%') : 'sampling…';
+            document.getElementById('sysMemUsedPct').textContent = Number.isFinite(liveRes.memUsedPercent) ? (Number(liveRes.memUsedPercent).toFixed(1) + '%') : '-';
+            const battPct = Number.isFinite(liveRes.batteryPercent) ? (String(Math.round(Number(liveRes.batteryPercent))) + '%') : null;
+            const battState = liveRes.batteryCharging === true ? 'charging' : liveRes.batteryCharging === false ? 'battery' : null;
+            document.getElementById('sysBattery').textContent = [battPct, battState].filter(Boolean).join(' · ') || 'unavailable';
+            document.getElementById('sysThermal').textContent = liveRes.thermalState || 'unknown';
+          } else {
+            document.getElementById('sysCpuPct').textContent = 'unavailable';
+            document.getElementById('sysMemUsedPct').textContent = '-';
+            document.getElementById('sysBattery').textContent = 'unavailable';
+            document.getElementById('sysThermal').textContent = 'unknown';
+          }
           document.getElementById('sysRefreshedAt').textContent = 'Updated ' + new Date().toLocaleTimeString();
+          await refreshSystemTrend();
+          await refreshSystemAdvisories();
         } catch (e) {
           console.error('Failed to fetch system info', e);
+        }
+      }
+
+      async function refreshSystemTrend(){
+        const range = (document.getElementById('sysTrendRange')?.value || '1h');
+        try {
+          const data = await fetch(withToken('/api/system/timeseries?range=' + encodeURIComponent(range))).then((r) => r.json());
+          if(!data || data.ok === false || !Array.isArray(data.samples)){
+            destroySystemChart();
+            return;
+          }
+          const labels = data.samples.map((s) => formatLocalDateTime(s.sampledAt || '', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+          const cpu = data.samples.map((s) => Number.isFinite(Number(s.cpuPercent)) ? Number(s.cpuPercent) : null);
+          const mem = data.samples.map((s) => Number.isFinite(Number(s.memUsedPercent)) ? Number(s.memUsedPercent) : null);
+          const ctx = document.getElementById('sysTrendChartCanvas');
+          if(!ctx || typeof Chart === 'undefined'){
+            return;
+          }
+          if(systemChartInstance){
+            systemChartInstance.data.labels = labels;
+            systemChartInstance.data.datasets[0].data = cpu;
+            systemChartInstance.data.datasets[1].data = mem;
+            systemChartInstance.update('none');
+            return;
+          }
+          systemChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: labels,
+              datasets: [
+                { label: 'CPU %', data: cpu, borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.12)', tension: 0.25, pointRadius: 0, borderWidth: 2 },
+                { label: 'Mem used %', data: mem, borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,0.10)', tension: 0.25, pointRadius: 0, borderWidth: 2 },
+              ],
+            },
+            options: {
+              maintainAspectRatio: false,
+              interaction: { mode: 'index', intersect: false },
+              scales: {
+                y: {
+                  beginAtZero: true,
+                  max: 100,
+                  ticks: { color: 'rgba(125, 211, 252, 0.75)' },
+                  grid: { color: 'rgba(34, 211, 238, 0.08)' },
+                },
+                x: {
+                  ticks: { color: 'rgba(125, 211, 252, 0.75)', maxTicksLimit: 8, maxRotation: 0, minRotation: 0 },
+                  grid: { color: 'rgba(34, 211, 238, 0.08)' },
+                },
+              },
+              plugins: {
+                legend: { labels: { color: '#22d3ee', boxWidth: 12, boxHeight: 12 } },
+              },
+            },
+          });
+        } catch (_err) {
+          destroySystemChart();
+        }
+      }
+
+      function severityBadge(sev){
+        if(sev === 'critical') return 'style="color:#fca5a5"';
+        if(sev === 'warn') return 'style="color:#fbbf24"';
+        return 'style="color:#86efac"';
+      }
+
+      async function refreshSystemAdvisories(){
+        const root = document.getElementById('sysAdvisories');
+        if(!root){ return; }
+        try {
+          const data = await fetch(withToken('/api/system/advisories')).then((r) => r.json());
+          if(!data || data.ok === false || !Array.isArray(data.advisories)){
+            root.innerHTML = '<div class="muted">Advisories unavailable.</div>';
+            return;
+          }
+          root.innerHTML = data.advisories.map(function(a){
+            return '<div style="border:1px solid var(--line-faint);border-radius:6px;padding:6px 8px;margin-bottom:6px;background:rgba(0,0,0,0.45)">' +
+              '<div class="small"><strong ' + severityBadge(String(a.severity || 'info')) + '>' + escAttr(String(a.severity || 'info').toUpperCase()) + '</strong> · ' + escAttr(a.title || '') + '</div>' +
+              '<div class="small muted" style="margin-top:2px">' + escAttr(a.detail || '') + '</div>' +
+            '</div>';
+          }).join('');
+        } catch (_err) {
+          root.innerHTML = '<div class="muted">Could not load advisories.</div>';
         }
       }
 
@@ -1991,6 +2119,14 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           }
           const rows = (data.providers || []).map((provider) => {
             const stamp = provider.verifiedAt ? ('verified ' + formatLocalDateTime(provider.verifiedAt)) : 'not verified yet';
+            const universalExtras = provider.provider === 'universal'
+              ? (
+                '<div class="row small" style="align-items:center;margin-top:6px">' +
+                  '<input id="provider_base_' + provider.provider + '" type="text" placeholder="https://your-host.com (OpenAI-compatible base URL)" value="' + String(provider.baseUrl || '').replace(/"/g, '&quot;') + '" style="flex:1;min-width:260px" />' +
+                  '<input id="provider_model_' + provider.provider + '" type="text" placeholder="Model id (e.g. gpt-4.1-mini)" style="flex:1;min-width:220px" />' +
+                '</div>'
+              )
+              : '';
             return (
               '<div class="env-row">' +
                 '<label for="provider_' + provider.provider + '">' + provider.label + ' (' + provider.envKey + ')</label>' +
@@ -1998,6 +2134,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
                   '<input id="provider_' + provider.provider + '" type="password" placeholder="' + (provider.hasKey ? 'Key already set; paste to replace' : 'Paste API key') + '" style="flex:1;min-width:260px" />' +
                   '<button type="button" data-provider-smoke="' + provider.provider + '">Save + smoke test</button>' +
                 '</div>' +
+                universalExtras +
                 '<div class="small muted">Status: ' + stamp + '</div>' +
               '</div>'
             );
@@ -2016,11 +2153,15 @@ export function buildDashboardPageHtml(token: string | undefined): string {
 
       async function smokeProvider(provider){
         const inp = document.getElementById('provider_' + provider);
+        const baseUrlInput = document.getElementById('provider_base_' + provider);
+        const modelInput = document.getElementById('provider_model_' + provider);
         const hint = document.getElementById('providerSettingsHint');
         const apiKey = inp ? String(inp.value || '').trim() : '';
+        const baseUrl = baseUrlInput ? String(baseUrlInput.value || '').trim() : '';
+        const model = modelInput ? String(modelInput.value || '').trim() : '';
         if(hint){ hint.textContent = 'Testing ' + provider + '…'; }
         try {
-          const payload = { provider: provider, apiKey: apiKey, persist: true };
+          const payload = { provider: provider, apiKey: apiKey, baseUrl: baseUrl, model: model, persist: true };
           const res = await fetch(withToken('/api/providers/smoke'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2051,6 +2192,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         if(usageRefreshTimer){
           clearInterval(usageRefreshTimer);
           usageRefreshTimer = null;
+        }
+        if(systemRefreshTimer){
+          clearInterval(systemRefreshTimer);
+          systemRefreshTimer = null;
         }
         document.querySelectorAll('.tab').forEach((tab) => {
           tab.classList.toggle('active', tab.getAttribute('data-view') === view);
@@ -2085,6 +2230,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           refreshProjects();
           refreshUsageDashboard();
           usageRefreshTimer = setInterval(refreshUsageDashboard, 15000);
+          systemRefreshTimer = setInterval(function(){ void refreshSystemInfo(); }, 15000);
         } else if (view === 'agent') {
           dashboardOnly.forEach(el => el.style.display = 'none');
           agentOnly.forEach(el => el.style.display = '');
@@ -2472,10 +2618,6 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       if(mainGridBtn){
         mainGridBtn.addEventListener('click', (evt) => {
           evt.preventDefault();
-          if(agentNavLockActive()){
-            appendChat('system', 'Finish or cancel the agent run before opening Main Grid — navigation would lose live state.');
-            return;
-          }
           openMainGrid();
         });
       }
@@ -2526,6 +2668,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           el.addEventListener('change', function(){ void refreshUsageChartAndRuns(); });
         }
       });
+      document.getElementById('sysTrendRange')?.addEventListener('change', function(){ void refreshSystemTrend(); });
       setView(INITIAL_VIEW);
       setInterval(refreshMetrics, 1000);
       setInterval(refresh, 3000);

@@ -234,6 +234,66 @@ export function buildMainTerminalHtml(token?: string): string {
       .docsPdfViewer.isHidden {
         display: none !important;
       }
+      .procRoot {
+        padding: 8px 10px 10px;
+        gap: 8px;
+      }
+      .procToolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .procInput {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: var(--radius-sm);
+        padding: 6px 8px;
+        font-size: 12px;
+        min-width: 140px;
+      }
+      .procInput.procCommand { flex: 2; min-width: 220px; }
+      .procInput.procMeta { flex: 1; }
+      .procHint {
+        margin: 0;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .procList {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        padding: 6px;
+        overflow: auto;
+        min-height: 90px;
+        max-height: 240px;
+      }
+      .procCard {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin-bottom: 6px;
+        background: rgba(0,0,0,0.5);
+      }
+      .procCard:last-child { margin-bottom: 0; }
+      .procCard.selected { border-color: var(--accent); }
+      .procTitle { font-size: 12px; color: var(--text-neon); }
+      .procSub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .procLog {
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        padding: 8px;
+        min-height: 120px;
+        max-height: 220px;
+        overflow: auto;
+        font-size: 11px;
+        line-height: 1.45;
+        font-family: var(--font-mono);
+        white-space: pre-wrap;
+      }
       .graphRoot {
         padding: 0 10px 10px;
         gap: 8px;
@@ -553,7 +613,7 @@ export function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger</span>
-          <span class="chip">2 agent · shell · docs · graph</span>
+          <span class="chip">2 agent · shell · docs · graph · processes</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -580,6 +640,7 @@ export function buildMainTerminalHtml(token?: string): string {
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="processes" id="pane2TabProcesses">Processes</button>
               </div>
               <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
             </div>
@@ -646,6 +707,29 @@ export function buildMainTerminalHtml(token?: string): string {
                 </div>
               </div>
             </div>
+            <div id="pane2Processes" class="pane2View isHidden procRoot" aria-hidden="true">
+              <div class="procToolbar">
+                <input id="procCommandInput" class="procInput procCommand" placeholder="npm run dev" />
+                <input id="procLabelInput" class="procInput procMeta" placeholder="Label (optional)" />
+                <input id="procTagsInput" class="procInput procMeta" placeholder="Tags (comma-separated)" />
+                <button type="button" class="reconnect" id="btnProcStart">Start</button>
+                <button type="button" class="reconnect" id="btnProcRefresh">Refresh</button>
+              </div>
+              <div class="procToolbar">
+                <input id="procFilterInput" class="procInput procMeta" placeholder="Filter by name/command/tag..." />
+                <select id="procStatusFilter" class="procInput procMeta">
+                  <option value="all">all status</option>
+                  <option value="running">running</option>
+                  <option value="done">done</option>
+                  <option value="error">error</option>
+                  <option value="stopped">stopped</option>
+                </select>
+              </div>
+              <p id="procHint" class="procHint">Project-scoped managed process list. Start relevant dev commands here.</p>
+              <div id="procList" class="procList">Loading…</div>
+              <div class="procHint">Selected process output (tail):</div>
+              <pre id="procLogPreview" class="procLog">Select a process to inspect logs.</pre>
+            </div>
           </div>
         </div>
       </div>
@@ -662,6 +746,9 @@ export function buildMainTerminalHtml(token?: string): string {
       let pane2Mode = "workspace";
       let graphOverlayOpen = false;
       let graphSimulation = null;
+      let processRefreshTimer = null;
+      let selectedManagedProcessId = null;
+      let cachedManagedProcesses = [];
       let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
       let graphDragState = { active: false, nodeId: null, pinOnRelease: false };
       let graphNodeCache = { nodes: [], edges: [] };
@@ -756,40 +843,51 @@ export function buildMainTerminalHtml(token?: string): string {
         const tsEl = document.getElementById("pane2TerminalWrap");
         const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
+        const procEl = document.getElementById("pane2Processes");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
         const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
+        const tp = document.getElementById("pane2TabProcesses");
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
         const isDoc = mode === "docs";
         const isGraph = mode === "graph";
-        if(wsEl && tsEl && docEl && graphEl){
+        const isProc = mode === "processes";
+        if(wsEl && tsEl && docEl && graphEl && procEl){
           wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
           docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
+          procEl.classList.toggle("isHidden", !isProc);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
+          procEl.setAttribute("aria-hidden", isProc ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : "project graph";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : "managed processes";
         }
-        if(tw && tt && td && tg){
+        if(tw && tt && td && tg && tp){
           tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
           td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
+          tp.classList.toggle("paneTabActive", isProc);
           tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
+          tp.setAttribute("aria-selected", isProc.toString());
         }
         if(recon){ recon.hidden = !isTerm; }
+        if(processRefreshTimer){
+          clearInterval(processRefreshTimer);
+          processRefreshTimer = null;
+        }
         if(isTerm){
           openPane2Terminal();
           requestAnimationFrame(()=>{
@@ -805,6 +903,167 @@ export function buildMainTerminalHtml(token?: string): string {
           void refreshGraphSummary();
           void refreshGraphRecaps();
           void refreshGraphErd();
+        }
+        if(isProc){
+          void refreshManagedProcesses();
+          processRefreshTimer = setInterval(function(){
+            void refreshManagedProcesses();
+            if(selectedManagedProcessId){
+              void refreshManagedProcessLog(selectedManagedProcessId);
+            }
+          }, 4000);
+        }
+      }
+      async function refreshManagedProcessLog(id){
+        const pre = document.getElementById("procLogPreview");
+        if(!pre || !id){ return; }
+        pre.textContent = "Loading log…";
+        try {
+          const data = await fetch(withToken("/api/processes/" + encodeURIComponent(id) + "/log?tail=220")).then((r)=>r.json());
+          if(!data || data.ok === false){
+            pre.textContent = "Log unavailable: " + ((data && data.error) || "unknown error");
+            return;
+          }
+          pre.textContent = String(data.content || "").trim() || "(no output yet)";
+        } catch (err) {
+          pre.textContent = "Failed to load logs: " + ((err && err.message) ? err.message : String(err));
+        }
+      }
+      async function stopManagedProcess(id){
+        const hint = document.getElementById("procHint");
+        try {
+          const data = await fetch(withToken("/api/processes/" + encodeURIComponent(id) + "/stop"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          }).then((r)=>r.json());
+          if(hint){
+            hint.textContent = data && data.ok
+              ? (data.stopped ? "Process stopped." : (data.message || "Process already not running."))
+              : ("Stop failed: " + ((data && data.error) || "unknown error"));
+          }
+        } catch (err) {
+          if(hint){ hint.textContent = "Stop failed: " + ((err && err.message) ? err.message : String(err)); }
+        }
+        await refreshManagedProcesses();
+      }
+      async function viewManagedProcessLog(id){
+        selectedManagedProcessId = id;
+        await refreshManagedProcesses();
+        await refreshManagedProcessLog(id);
+      }
+      async function refreshManagedProcesses(){
+        const list = document.getElementById("procList");
+        const pre = document.getElementById("procLogPreview");
+        if(!list){ return; }
+        try {
+          const data = await fetch(withToken("/api/processes")).then((r)=>r.json());
+          const rows = (data && data.processes) || [];
+          cachedManagedProcesses = Array.isArray(rows) ? rows : [];
+          const q = String(document.getElementById("procFilterInput")?.value || "").trim().toLowerCase();
+          const statusFilter = String(document.getElementById("procStatusFilter")?.value || "all").trim().toLowerCase();
+          const filtered = cachedManagedProcesses.filter((p)=>{
+            const statusOk = statusFilter === "all" ? true : String(p.status || "").toLowerCase() === statusFilter;
+            if(!statusOk){ return false; }
+            if(!q){ return true; }
+            const hay = [
+              String(p.label || ""),
+              String(p.command || ""),
+              String(p.cwd || ""),
+              ...(Array.isArray(p.tags) ? p.tags.map((x)=>String(x)) : []),
+            ].join(" ").toLowerCase();
+            return hay.includes(q);
+          });
+          const tagCounts = new Map();
+          for(const p of filtered){
+            for(const t of (Array.isArray(p.tags) ? p.tags : [])){
+              const key = String(t || "").trim();
+              if(!key){ continue; }
+              tagCounts.set(key, (tagCounts.get(key) || 0) + 1);
+            }
+          }
+          const topTags = [...tagCounts.entries()]
+            .sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]))
+            .slice(0, 8)
+            .map(([k,v])=>k + "×" + v)
+            .join(", ");
+          if(rows.length === 0){
+            list.innerHTML = '<div class="procSub">No managed processes yet. Start one above (e.g., <code>npm run dev</code>).</div>';
+            if(pre && !selectedManagedProcessId){ pre.textContent = "Select a process to inspect logs."; }
+            return;
+          }
+          if(filtered.length === 0){
+            list.innerHTML = '<div class="procSub">No processes match the current filters.</div>';
+            return;
+          }
+          list.innerHTML = (topTags ? ('<div class="procSub" style="margin:2px 2px 6px 2px">Top tags: ' + escHtml(topTags) + "</div>") : "") + filtered.map(function(p){
+            const running = p.status === "running";
+            const selected = selectedManagedProcessId === p.id;
+            const tags = Array.isArray(p.tags) && p.tags.length ? (" [" + p.tags.join(", ") + "]") : "";
+            const ended = p.endedAt ? (" · ended " + escHtml(String(p.endedAt))) : "";
+            const last = p.lastOutput ? ('<div class="procSub">↳ ' + escHtml(String(p.lastOutput).slice(0, 120)) + "</div>") : "";
+            return '<div class="procCard' + (selected ? ' selected' : '') + '">' +
+              '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap">' +
+                '<div style="min-width:220px;flex:1">' +
+                  '<div class="procTitle">' + escHtml(p.label || "(unnamed)") + ' <span class="procSub">(' + escHtml(p.status) + ')</span></div>' +
+                  '<div class="procSub">' + escHtml(p.command || "") + tags + '</div>' +
+                  '<div class="procSub">cwd: ' + escHtml(p.cwd || "") + ' · started ' + escHtml(String(p.startedAt || "")) + ended + '</div>' +
+                  last +
+                "</div>" +
+                '<div style="display:flex;gap:6px;align-items:center">' +
+                  '<button type="button" class="reconnect" onclick="viewManagedProcessLog(&quot;' + escHtml(p.id) + '&quot;)">Logs</button>' +
+                  (running ? ('<button type="button" class="reconnect" onclick="stopManagedProcess(&quot;' + escHtml(p.id) + '&quot;)">Stop</button>') : "") +
+                "</div>" +
+              "</div>" +
+            "</div>";
+          }).join("");
+        } catch (err) {
+          list.textContent = "Failed to load managed processes: " + ((err && err.message) ? err.message : String(err));
+        }
+      }
+      async function startManagedProcess(){
+        const cmdEl = document.getElementById("procCommandInput");
+        const labelEl = document.getElementById("procLabelInput");
+        const tagsEl = document.getElementById("procTagsInput");
+        const hint = document.getElementById("procHint");
+        const btn = document.getElementById("btnProcStart");
+        const command = (cmdEl && cmdEl.value || "").trim();
+        if(!command){
+          if(hint){ hint.textContent = "Enter a command first (example: npm run dev)."; }
+          return;
+        }
+        if(btn){ btn.disabled = true; }
+        try {
+          const tags = String(tagsEl && tagsEl.value || "")
+            .split(",")
+            .map((x)=>x.trim())
+            .filter(Boolean);
+          const payload = {
+            command: command,
+            label: String(labelEl && labelEl.value || "").trim(),
+            tags: tags,
+          };
+          const data = await fetch(withToken("/api/processes/start"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }).then((r)=>r.json());
+          if(!data || data.ok === false){
+            if(hint){ hint.textContent = "Start failed: " + ((data && data.error) || "unknown error"); }
+            return;
+          }
+          if(hint){ hint.textContent = "Started: " + (data.process && data.process.label ? data.process.label : command); }
+          if(labelEl){ labelEl.value = ""; }
+          if(tagsEl){ tagsEl.value = ""; }
+          selectedManagedProcessId = data.process && data.process.id ? data.process.id : null;
+          await refreshManagedProcesses();
+          if(selectedManagedProcessId){
+            await refreshManagedProcessLog(selectedManagedProcessId);
+          }
+        } catch (err) {
+          if(hint){ hint.textContent = "Start failed: " + ((err && err.message) ? err.message : String(err)); }
+        } finally {
+          if(btn){ btn.disabled = false; }
         }
       }
       function openGraphOverlay(){
@@ -1975,6 +2234,17 @@ export function buildMainTerminalHtml(token?: string): string {
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
+      document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
+      document.getElementById("btnProcStart")?.addEventListener("click",()=>{ void startManagedProcess(); });
+      document.getElementById("btnProcRefresh")?.addEventListener("click",()=>{ void refreshManagedProcesses(); });
+      document.getElementById("procFilterInput")?.addEventListener("input",()=>{ void refreshManagedProcesses(); });
+      document.getElementById("procStatusFilter")?.addEventListener("change",()=>{ void refreshManagedProcesses(); });
+      document.getElementById("procCommandInput")?.addEventListener("keydown",(evt)=>{
+        if((evt.metaKey || evt.ctrlKey) && evt.key === "Enter"){
+          evt.preventDefault();
+          void startManagedProcess();
+        }
+      });
       document.getElementById("btnDocsReindex")?.addEventListener("click",()=>{ void refreshDocsIndex(true); });
       document.getElementById("btnGraphRebuild")?.addEventListener("click",()=>{ void triggerGraphRebuild(); });
       document.getElementById("btnGraphReconcile")?.addEventListener("click",()=>{ void triggerGraphReconcile(); });
