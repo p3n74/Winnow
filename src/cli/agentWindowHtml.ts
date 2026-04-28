@@ -547,6 +547,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const AUTH_TOKEN = ${tokenJson};
       const PAGE_PARAMS = new URLSearchParams(window.location.search);
       const EMBED_MODE = PAGE_PARAMS.get("embed") === "1";
+      const PLAN_SELECTION_KEY = "winnow-active-plan-id";
       function withToken(path) {
         if (!AUTH_TOKEN) {
           return path;
@@ -665,6 +666,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           return;
         }
         const prev = sel.value || "";
+        let preferred = "";
+        try {
+          preferred = localStorage.getItem(PLAN_SELECTION_KEY) || "";
+        } catch (_err) {}
         try {
           const data = await fetch(withToken("/api/plans")).then((r) => r.json());
           if (!data || data.ok === false || !Array.isArray(data.plans)) {
@@ -679,7 +684,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             }),
           );
           sel.innerHTML = options.join("");
-          if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
+          const hasPreferred = preferred && Array.from(sel.options).some((o) => o.value === preferred);
+          if (hasPreferred) {
+            sel.value = preferred;
+          } else if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
             sel.value = prev;
           }
         } catch {
@@ -1177,7 +1185,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         const continueMode = document.getElementById("continueMode").checked;
         const select = document.getElementById("agentSessionSelect");
         const pickedSession = (select?.value || selectedResumeSessionId || "").trim();
-        const resumeSessionId = continueMode ? pickedSession || selectedResumeSessionId || activeSessionId || "" : "";
+        const candidateResume = continueMode ? pickedSession || selectedResumeSessionId || activeSessionId || "" : "";
+        // Only forward UUID-style Cursor chat ids; other ids (Winnow-generated, etc.)
+        // make cursor-agent silently downgrade to the Auto model.
+        const isCursorChatId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateResume);
+        const resumeSessionId = isCursorChatId ? candidateResume : "";
         const baseArgs = (document.getElementById("agentArgs").value || "").trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\\s)--resume\\s+\\S+/g, "").trim();
         const effectiveArgs = resumeSessionId
@@ -1409,6 +1421,19 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           if (value) {
             loadSession(value);
           }
+        });
+      }
+      const agentPlanSelect = document.getElementById("agentPlanSelect");
+      if (agentPlanSelect) {
+        agentPlanSelect.addEventListener("change", () => {
+          try {
+            const value = agentPlanSelect.value || "";
+            if (value) {
+              localStorage.setItem(PLAN_SELECTION_KEY, value);
+            } else {
+              localStorage.removeItem(PLAN_SELECTION_KEY);
+            }
+          } catch (_err) {}
         });
       }
       document.getElementById("agentPrompt").addEventListener("keydown", (evt) => {

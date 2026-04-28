@@ -287,60 +287,91 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     await writeProviderVerificationStore(winnowLaunchRoot, store);
   }
 
-  async function listSelectableModels(): Promise<string[]> {
-    const base = new Set<string>(["default", "auto", "composer"]);
-    const parseModelId = (rawLine: string): string => {
-      const trimmed = rawLine.trim();
-      if (!trimmed) {
-        return "";
-      }
-      // Newer cursor-agent formats lines as "<model-id> - <friendly name>".
-      const dashed = trimmed.match(/^([A-Za-z0-9._-]+)\s+-\s+/);
-      if (dashed?.[1]) {
-        return dashed[1];
-      }
-      // Also tolerate bullet/prefix output like "- model-id".
-      const bullet = trimmed.match(/^(?:[-*]\s+)?([A-Za-z0-9._-]+)$/);
-      return bullet?.[1] ?? "";
-    };
+  /**
+   * Cache of cursor-agent's `models` listing.
+   * Keys are normalized model ids (e.g. `gpt-5.5-medium`).
+   * Values are the friendly labels that cursor-agent reports back in `system.init`
+   * (e.g. `GPT-5.5 1M`). Used to detect a model mismatch between the requested
+   * `--model` and the model cursor-agent actually resolved.
+   */
+  let cursorModelLabelCache: Map<string, string> | undefined;
+
+  async function readCursorModelsRaw(): Promise<string> {
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
-    try {
-      const out = await new Promise<string>((resolvePromise, rejectPromise) => {
-        const child = spawn(cursorExe, ["models"], {
-          stdio: ["ignore", "pipe", "pipe"],
-          cwd: uiWorkspace.dir,
-          env: process.env,
-        });
-        let stdout = "";
-        let stderr = "";
-        child.stdout?.on("data", (buf: Buffer) => {
-          stdout += buf.toString("utf8");
-        });
-        child.stderr?.on("data", (buf: Buffer) => {
-          stderr += buf.toString("utf8");
-        });
-        child.on("error", (error) => rejectPromise(error));
-        child.on("close", (code) => {
-          if (code === 0) {
-            resolvePromise(stdout);
-            return;
-          }
-          rejectPromise(new Error(stderr || `cursor-agent models failed with code ${code ?? "unknown"}`));
-        });
+    return new Promise<string>((resolvePromise, rejectPromise) => {
+      const child = spawn(cursorExe, ["models"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: uiWorkspace.dir,
+        env: process.env,
       });
-      for (const line of out.split("\n")) {
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (buf: Buffer) => {
+        stdout += buf.toString("utf8");
+      });
+      child.stderr?.on("data", (buf: Buffer) => {
+        stderr += buf.toString("utf8");
+      });
+      child.on("error", (error) => rejectPromise(error));
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolvePromise(stdout);
+          return;
+        }
+        rejectPromise(new Error(stderr || `cursor-agent models failed with code ${code ?? "unknown"}`));
+      });
+    });
+  }
+
+  function parseCursorModelLine(rawLine: string): { id: string; label: string } | null {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // cursor-agent formats lines as `<model-id> - <friendly label>`.
+    const dashed = trimmed.match(/^([A-Za-z0-9._-]+)\s+-\s+(.+?)\s*$/);
+    if (dashed?.[1]) {
+      let label = dashed[2] || dashed[1];
+      // Strip trailing parenthetical hints like `(current)` / `(default)`.
+      label = label.replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
+      return { id: dashed[1], label };
+    }
+    const bullet = trimmed.match(/^(?:[-*]\s+)?([A-Za-z0-9._-]+)$/);
+    if (bullet?.[1]) {
+      return { id: bullet[1], label: bullet[1] };
+    }
+    return null;
+  }
+
+  async function loadCursorModelLabels(refresh = false): Promise<Map<string, string>> {
+    if (cursorModelLabelCache && !refresh) {
+      return cursorModelLabelCache;
+    }
+    const map = new Map<string, string>();
+    map.set("default", "Default");
+    map.set("auto", "Auto");
+    map.set("composer", "Composer");
+    try {
+      const raw = await readCursorModelsRaw();
+      for (const line of raw.split("\n")) {
         const lower = line.trim().toLowerCase();
-        if (!lower || lower.includes("available model")) {
+        if (!lower || lower.includes("available model") || lower.startsWith("tip:")) {
           continue;
         }
-        const model = parseModelId(line);
-        if (!model) continue;
-        base.add(model);
+        const parsed = parseCursorModelLine(line);
+        if (!parsed) continue;
+        map.set(parsed.id.toLowerCase(), parsed.label);
       }
     } catch {
-      // Keep fallback defaults only if model discovery fails.
+      // Keep the small fallback set if discovery fails.
     }
-    return [...base];
+    cursorModelLabelCache = map;
+    return map;
+  }
+
+  async function listSelectableModels(): Promise<string[]> {
+    const labels = await loadCursorModelLabels(true);
+    return [...labels.keys()];
   }
 
   async function listExternalSelectableModels(): Promise<string[]> {
@@ -837,16 +868,65 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   });
 
   const parseArgs = (raw: string): string[] => raw.split(/\s+/).map((x) => x.trim()).filter(Boolean);
+  const isGenericCursorModel = (model: string | undefined): boolean => {
+    const normalized = (model || "").trim().toLowerCase();
+    return !normalized || normalized === "default" || normalized === "auto" || normalized === "composer";
+  };
+  const isExplicitGenericCursorModel = (model: string | undefined): boolean => {
+    const normalized = (model || "").trim().toLowerCase();
+    return normalized === "default" || normalized === "auto" || normalized === "composer";
+  };
+  const stripModelArgs = (args: string[]): string[] => {
+    const next: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg === "--model") {
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith("--model=")) {
+        continue;
+      }
+      next.push(arg);
+    }
+    return next;
+  };
+  /**
+   * Looks like a Cursor chat session id (UUID-style) reported by `cursor-agent`.
+   * Anything else (e.g. Winnow's internal `<timestamp>-<rand>` ids) must not be
+   * passed to `--resume`, since cursor-agent silently falls back to the `Auto`
+   * model when given an unknown id, which produces false-positive runs.
+   */
+  const isLikelyCursorSessionId = (value: string): boolean =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+  const stripResumeArgs = (args: string[]): { stripped: string[]; removed: string[] } => {
+    const stripped: string[] = [];
+    const removed: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg === "--resume") {
+        const value = args[i + 1];
+        if (value !== undefined) {
+          removed.push(value);
+          i += 1;
+        }
+        continue;
+      }
+      if (arg.startsWith("--resume=")) {
+        removed.push(arg.slice("--resume=".length));
+        continue;
+      }
+      stripped.push(arg);
+    }
+    return { stripped, removed };
+  };
   const ensureModelArg = (args: string[], preference: string): string[] => {
     const selected = (preference || "default").trim();
     if (!selected || selected === "default") {
       return args;
     }
-    if (args.includes("--model")) {
-      return args;
-    }
     const value = selected;
-    return [...args, "--model", value];
+    return [...stripModelArgs(args), "--model", value];
   };
   const ensureExecutionArgs = (args: string[], autonomyEnabled: boolean, sessionId?: string): string[] => {
     const next = [...args];
@@ -891,11 +971,19 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const executionMode = payload.executionMode === "external" ? "external" : "cursor";
     const cursorExe = (nativeConfig.cursorCommand || "").trim() || "cursor-agent";
     const id = (payload.sessionId || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const baseArgs = parseArgs(payload.args ?? "");
+    const rawArgs = parseArgs(payload.args ?? "");
+    const { stripped: baseArgsNoResume, removed: removedResumeIds } = stripResumeArgs(rawArgs);
+    const baseArgs = baseArgsNoResume;
     const autonomyEnabled = payload.autonomyMode !== false;
+    const requestedResumeId = (payload.sessionId || "").trim();
+    const resumeSessionId = isLikelyCursorSessionId(requestedResumeId) ? requestedResumeId : "";
+    const droppedResumeIds = [
+      ...removedResumeIds.filter((value) => !isLikelyCursorSessionId(value)),
+      ...(requestedResumeId && !resumeSessionId ? [requestedResumeId] : []),
+    ];
     const args =
       executionMode === "cursor"
-        ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, id)
+        ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, resumeSessionId)
         : [];
     const existing = sessions.get(id);
     let session: AgentSession;
@@ -950,6 +1038,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const graphSeedEnabled = payload.graphSeed !== false;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
     const planContext = planId ? await readPlanMarkdown(planId) : null;
+    let selectedModelError: string | undefined;
+    let initModelVerified = false;
+    // Preload the id→label map so we can validate `system.init` synchronously below.
+    const cursorModelLabels =
+      executionMode === "cursor" && !isGenericCursorModel(modelPreference)
+        ? await loadCursorModelLabels()
+        : undefined;
+    const expectedCursorLabel = cursorModelLabels?.get(modelPreference.trim().toLowerCase());
     const planPreamble =
       planContext && planContext.ok
         ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan id: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
@@ -1019,6 +1115,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       pushEvent("status", `Plan scope: prepended context from plan "${planId}".`);
     } else if (planId) {
       pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
+    }
+    if (droppedResumeIds.length > 0) {
+      pushEvent(
+        "status",
+        `Dropped invalid --resume id(s): ${droppedResumeIds.join(", ")}. ` +
+          "These are not Cursor chat ids; cursor-agent would silently fall back to the Auto model.",
+      );
     }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
@@ -1163,6 +1266,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return session;
     }
 
+    pushEvent(
+      "status",
+      `Spawn: ${cursorExe} ${args.join(" ")} | modelPreference=${modelPreference || "(empty)"}`,
+    );
     const child = spawn(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: uiWorkspace.dir,
@@ -1190,7 +1297,31 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
-          if (data.type === "assistant" && data.message?.content) {
+          if (data.type === "system" && data.subtype === "init") {
+            const reportedLabel = typeof data.model === "string" ? data.model.trim() : "";
+            if (!isGenericCursorModel(modelPreference) && expectedCursorLabel) {
+              const expected = expectedCursorLabel.trim().toLowerCase();
+              const reported = reportedLabel.toLowerCase();
+              if (!reported) {
+                // No label reported (older cursor-agent); skip strict check, fall through to result.
+              } else if (reported === expected) {
+                initModelVerified = true;
+                pushEvent("status", `Model verified: ${reportedLabel} (${modelPreference}).`);
+              } else {
+                selectedModelError =
+                  `Selected model error: requested "${modelPreference}" (${expectedCursorLabel}) but cursor-agent ` +
+                  `started with "${reportedLabel}". Stopping run to avoid false-positive model reporting.`;
+                session.error = selectedModelError;
+                session.errorOutput += `${selectedModelError}\n`;
+                pushEvent("stderr", `${selectedModelError}\n`);
+                pushEvent("status", `❌ ${selectedModelError}`);
+                if (!child.killed) {
+                  child.kill("SIGTERM");
+                }
+                continue;
+              }
+            }
+          } else if (data.type === "assistant" && data.message?.content) {
             // Only process partial stream chunks to avoid double-printing full collapsed blocks
             if (!data.model_call_id) {
               const text = data.message.content.map((c: any) => c.text).join("");
@@ -1222,11 +1353,36 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             }
           } else if (data.type === "result") {
             if (data.subtype === "success") {
+              const reportedModel = typeof data.model === "string" ? data.model.trim() : "";
+              // Only the `system.init` event reliably contains the resolved model.
+              // Here we only act on an explicit downgrade (auto/default/composer)
+              // when init never confirmed our specific selection.
+              if (
+                !isGenericCursorModel(modelPreference) &&
+                !initModelVerified &&
+                isExplicitGenericCursorModel(reportedModel)
+              ) {
+                selectedModelError =
+                  `Selected model error: requested "${modelPreference}" but cursor-agent ` +
+                  `result reported "${reportedModel}". Stopping run to avoid false-positive model reporting.`;
+                session.error = selectedModelError;
+                session.errorOutput += `${selectedModelError}\n`;
+                pushEvent("stderr", `${selectedModelError}\n`);
+                pushEvent("status", `❌ ${selectedModelError}`);
+                if (!child.killed) {
+                  child.kill("SIGTERM");
+                }
+                continue;
+              }
               if (data.usage) {
                 recordRunUsage(id, {
                   inputTokens: Number(data.usage.inputTokens) || 0,
                   outputTokens: Number(data.usage.outputTokens) || 0,
-                  model: typeof data.model === "string" ? data.model : undefined,
+                  // Prefer the verified model id over the friendly label cursor reports.
+                  model:
+                    initModelVerified && !isGenericCursorModel(modelPreference)
+                      ? modelPreference
+                      : reportedModel || undefined,
                 });
               }
               const usage = data.usage ? ` (Tokens: ${data.usage.inputTokens} IN / ${data.usage.outputTokens} OUT)` : "";
@@ -1255,11 +1411,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     child.on("close", (code: number | null) => {
       agentRunChildProcesses.delete(id);
       void (async () => {
-        session.exitCode = code ?? 1;
-        session.status = session.exitCode === 0 ? "done" : "error";
+        session.exitCode = selectedModelError ? 1 : code ?? 1;
+        session.status = selectedModelError ? "error" : session.exitCode === 0 ? "done" : "error";
         session.endedAt = new Date().toISOString();
         const msg =
-          session.exitCode === 0
+          selectedModelError
+            ? `❌ ${selectedModelError}`
+            : session.exitCode === 0
             ? "✨ Session closed successfully."
             : `❌ Session ended with error (exit code: ${session.exitCode})`;
         pushEvent("status", msg);
@@ -1428,7 +1586,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
-    if (url.pathname.startsWith("/api/plans/") && req.method === "POST") {
+    if (url.pathname.startsWith("/api/plans/") && !url.pathname.endsWith("/normalize") && req.method === "POST") {
       const id = decodeURIComponent(url.pathname.slice("/api/plans/".length)).trim();
       try {
         const body = (await readJsonBody(req)) as {
@@ -1441,6 +1599,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           markdown: body.markdown,
           status: body.status,
         });
+        sendJson(res, 200, { ok: true, plan });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/plans/") && url.pathname.endsWith("/normalize") && req.method === "POST") {
+      const id = decodeURIComponent(url.pathname.slice("/api/plans/".length, -"/normalize".length)).trim();
+      try {
+        const plan = planStore.normalize(id);
         sendJson(res, 200, { ok: true, plan });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });

@@ -131,8 +131,8 @@ export function recordRunUsage(runId: string, usage: RecordRunUsageInput): void 
     return;
   }
   const row = db
-    .prepare("SELECT input_tokens, output_tokens, model FROM runs WHERE id = ?")
-    .get(runId) as { input_tokens: number; output_tokens: number; model: string | null } | undefined;
+    .prepare("SELECT input_tokens, output_tokens, model, model_pref FROM runs WHERE id = ?")
+    .get(runId) as { input_tokens: number; output_tokens: number; model: string | null; model_pref: string | null } | undefined;
   if (!row) {
     return;
   }
@@ -140,7 +140,23 @@ export function recordRunUsage(runId: string, usage: RecordRunUsageInput): void 
   const addOut = Math.max(0, Math.floor(Number(usage.outputTokens) || 0));
   const newIn = row.input_tokens + addIn;
   const newOut = row.output_tokens + addOut;
-  const model = usage.model?.trim() ? usage.model.trim() : row.model;
+
+  // Don't overwrite with generic/auto/default model names if we have a meaningful model already
+  const incomingModel = usage.model?.trim();
+  const isGenericModel = !incomingModel ||
+    incomingModel === "auto" ||
+    incomingModel === "default" ||
+    incomingModel === "composer";
+  const existingMeaningfulModel = row.model &&
+    row.model !== "auto" &&
+    row.model !== "default" &&
+    row.model !== "composer"
+    ? row.model
+    : row.model_pref;
+  const model = isGenericModel && existingMeaningfulModel
+    ? existingMeaningfulModel
+    : (incomingModel || row.model);
+
   const cost = estimateCostUsd(model, newIn, newOut);
   db.prepare(
     `UPDATE runs SET input_tokens = ?, output_tokens = ?, model = COALESCE(?, model), cost_usd = ? WHERE id = ?`,
