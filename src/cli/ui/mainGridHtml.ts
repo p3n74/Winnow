@@ -856,6 +856,49 @@ export function buildMainTerminalHtml(token?: string): string {
         align-items: center;
         gap: 8px;
       }
+      .graphIndexTree {
+        border: 1px solid rgba(34,211,238,0.18);
+        border-radius: 8px;
+        background: rgba(255,255,255,0.025);
+        padding: 8px;
+        margin-bottom: 8px;
+        max-height: 34vh;
+        overflow: auto;
+      }
+      .graphIndexTree details {
+        margin-left: 12px;
+      }
+      .graphIndexTree > details {
+        margin-left: 0;
+      }
+      .graphIndexTree summary {
+        cursor: pointer;
+        color: var(--text);
+        padding: 3px 0;
+        list-style-position: outside;
+      }
+      .graphIndexItem {
+        display: inline-block;
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        text-align: left;
+        font: inherit;
+        padding: 3px 4px;
+        border-radius: 6px;
+      }
+      .graphIndexItem:hover,
+      .graphIndexItem:focus {
+        outline: none;
+        background: rgba(34,211,238,0.1);
+      }
+      .graphIndexKind {
+        color: var(--muted);
+        font-size: 10px;
+        margin-right: 4px;
+      }
       .graphJumpBtn {
         border: 1px solid rgba(34,211,238,0.35);
         border-radius: 6px;
@@ -881,14 +924,24 @@ export function buildMainTerminalHtml(token?: string): string {
         background: rgba(0, 0, 0, 0.55);
       }
       .graphNodeDimmed {
-        opacity: 0.28;
+        opacity: 0.18;
+        transition: opacity 160ms ease;
       }
-      .graphNodePulse {
-        animation: graphPulse 900ms ease-in-out infinite;
+      .graphNodeFocus > rect:first-child {
+        filter: drop-shadow(0 0 6px rgba(34,211,238,0.75));
+        stroke-width: 2.4 !important;
       }
-      @keyframes graphPulse {
-        0%,100% { filter: drop-shadow(0 0 0 rgba(34,211,238,0)); }
-        50% { filter: drop-shadow(0 0 8px rgba(34,211,238,0.45)); }
+      .graphEdgeFocus {
+        stroke-opacity: 1 !important;
+        stroke-width: 2.4 !important;
+        filter: drop-shadow(0 0 4px rgba(34,211,238,0.55));
+      }
+      .graphNodeCard {
+        cursor: pointer;
+        transition: opacity 160ms ease, transform 120ms ease;
+      }
+      .graphEdgePath {
+        transition: opacity 160ms ease, stroke-width 160ms ease;
       }
       .graphLegendItem {
         display: inline-flex;
@@ -917,6 +970,54 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .graphRecapList li { margin: 4px 0; }
       .graphTextBlock { margin: 0; line-height: 1.55; color: var(--text); white-space: pre-wrap; font-size: 12px; }
+      .graphFocusModal {
+        position: fixed;
+        inset: 0;
+        z-index: 110;
+        background: rgba(0, 0, 0, 0.78);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .graphFocusModal.isHidden {
+        display: none;
+      }
+      .graphFocusDialog {
+        width: min(1100px, 94vw);
+        height: min(760px, 88vh);
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(0, 0, 0, 0.97);
+        padding: 12px;
+        box-shadow: 0 18px 70px rgba(0,0,0,0.65);
+      }
+      .graphFocusHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .graphFocusTitle {
+        margin: 0;
+        color: var(--text-neon);
+        font-size: 14px;
+      }
+      .graphFocusCanvasWrap {
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        background: var(--bg);
+      }
+      .graphFocusCanvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
       @media (max-width: 1200px) {
         .root { grid-template-columns: 1fr; grid-template-rows: 56% 44%; }
       }
@@ -997,6 +1098,7 @@ export function buildMainTerminalHtml(token?: string): string {
                 <button type="button" class="reconnect" id="btnGraphViewBusiness">Business Logic View</button>
                 <button type="button" class="reconnect" id="btnGraphViewBusinessGoal">Business Goal Layer</button>
                 <button type="button" class="reconnect" id="btnGraphFitView">Fit View</button>
+                <button type="button" class="reconnect" id="btnGraphClearFocus" disabled>Clear Focus</button>
                 <button type="button" class="reconnect" id="btnGraphOverlayClose">Close Graph</button>
               </div>
               <p id="graphHint" class="graphHint muted">Graph overlay provides a high-level project map plus a heuristic lookup index for targeted concept/file navigation.</p>
@@ -1020,9 +1122,22 @@ export function buildMainTerminalHtml(token?: string): string {
                     </div>
                   </div>
                   <p id="graphExplorerHint" class="graphExplorerMuted">Click a file node in Technical View to list functions.</p>
+                  <div id="graphIndexTree" class="graphIndexTree"><p class="graphExplorerMuted">Technical index loads with the graph.</p></div>
                   <div id="graphSelectedFile" class="graphBreadcrumb" style="display:none"></div>
                   <input id="graphFunctionFilter" class="graphFilterInput" type="text" placeholder="Filter functions..." />
                   <ul id="graphFunctionList" class="graphFnList"></ul>
+                </div>
+              </div>
+              <div id="graphFocusModal" class="graphFocusModal isHidden" role="dialog" aria-modal="true" aria-labelledby="graphFocusTitle">
+                <div class="graphFocusDialog">
+                  <div class="graphFocusHeader">
+                    <h4 id="graphFocusTitle" class="graphFocusTitle">Focused connections</h4>
+                    <button type="button" class="graphJumpBtn" id="btnGraphFocusModalClose">Close</button>
+                  </div>
+                  <div class="graphFocusCanvasWrap">
+                    <svg id="graphFocusModalCanvas" class="graphFocusCanvas" viewBox="0 0 900 520" role="img" aria-label="Focused graph connections"></svg>
+                  </div>
+                  <p id="graphFocusModalHint" class="graphExplorerMuted">Double-click a file or symbol to isolate its immediate connections.</p>
                 </div>
               </div>
             </div>
@@ -1173,8 +1288,6 @@ export function buildMainTerminalHtml(token?: string): string {
       let planGraphMode = (function(){
         try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
       })();
-      let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
-      let graphDragState = { active: false, nodeId: null, pinOnRelease: false };
       let graphNodeCache = { nodes: [], edges: [] };
       let graphViewBox = { x: 0, y: 0, w: 1200, h: 600, baseW: 1200, baseH: 600 };
       let graphDrag = { active: false, startX: 0, startY: 0, initX: 0, initY: 0 };
@@ -1185,7 +1298,6 @@ export function buildMainTerminalHtml(token?: string): string {
         functionNodeId: null,
         localDeps: false,
         externalSeedIds: [],
-        hoveredFunctionNodeId: null,
         functions: [],
         displayNodes: [],
         displayEdges: [],
@@ -2188,6 +2300,8 @@ export function buildMainTerminalHtml(token?: string): string {
         const hint = document.getElementById("graphHint");
         if(!graphEl){ return; }
         graphOverlayOpen = true;
+        closeGraphFocusModal();
+        resetGraphExplorerState();
         graphEl.classList.remove("isHidden");
         graphEl.classList.add("graphOverlayOpen");
         graphEl.setAttribute("aria-hidden", "false");
@@ -2199,6 +2313,8 @@ export function buildMainTerminalHtml(token?: string): string {
         const graphEl = document.getElementById("pane2Graph");
         if(!graphEl){ return; }
         graphOverlayOpen = false;
+        closeGraphFocusModal();
+        resetGraphExplorerState();
         graphEl.classList.remove("graphOverlayOpen");
         document.body.classList.remove("graphOverlayActive");
         if(pane2Mode !== "graph"){
@@ -2311,7 +2427,6 @@ export function buildMainTerminalHtml(token?: string): string {
           functionNodeId: null,
           localDeps: false,
           externalSeedIds: [],
-          hoveredFunctionNodeId: null,
           functions: [],
           displayNodes: [],
           displayEdges: [],
@@ -2321,20 +2436,24 @@ export function buildMainTerminalHtml(token?: string): string {
         const list = document.getElementById("graphFunctionList");
         const filter = document.getElementById("graphFunctionFilter");
         const panel = document.getElementById("graphExplorerPanel");
+        const index = document.getElementById("graphIndexTree");
         const depsBtn = document.getElementById("btnGraphLocalDeps");
         const extBtn = document.getElementById("btnGraphExternalDeps");
         const resetBtn = document.getElementById("btnGraphFocusReset");
         const backBtn = document.getElementById("btnGraphBack");
-        if(hint){ hint.textContent = "Click a file node in Technical View to list functions."; }
+        const clearFocusBtn = document.getElementById("btnGraphClearFocus");
+        if(hint){ hint.textContent = "Use the technical index or click a file node to list functions. Double-click to isolate connections."; }
         if(file){ file.textContent = ""; file.style.display = "none"; }
         if(list){ list.innerHTML = ""; }
         if(filter){ filter.value = ""; }
+        if(index){ index.innerHTML = '<p class="graphExplorerMuted">Technical index loads with the graph.</p>'; }
         if(depsBtn){
           depsBtn.textContent = "Show local dependencies";
           depsBtn.disabled = true;
         }
         if(extBtn){ extBtn.disabled = true; }
         if(resetBtn){ resetBtn.disabled = true; }
+        if(clearFocusBtn){ clearFocusBtn.disabled = true; }
         if(backBtn){ backBtn.style.display = "none"; }
         if(panel){ panel.classList.remove("open"); }
       }
@@ -2376,7 +2495,7 @@ export function buildMainTerminalHtml(token?: string): string {
                 '</div>' +
               '</button>' +
               '<div style="display:flex;justify-content:flex-end;margin-top:4px">' +
-                '<button type="button" class="graphJumpBtn" data-jump-id="' + escHtml(fn.id) + '">Jump to Code</button>' +
+                '<button type="button" class="graphJumpBtn" data-copy-path-id="' + escHtml(fn.id) + '">Copy Path</button>' +
               '</div>' +
             '</li>'
           );
@@ -2394,42 +2513,59 @@ export function buildMainTerminalHtml(token?: string): string {
             const depsBtn = document.getElementById("btnGraphLocalDeps");
             const extBtn = document.getElementById("btnGraphExternalDeps");
             const resetBtn = document.getElementById("btnGraphFocusReset");
+            const clearFocusBtn = document.getElementById("btnGraphClearFocus");
             if(depsBtn){ depsBtn.textContent = "Hide local dependencies"; depsBtn.disabled = false; }
             if(extBtn){ extBtn.disabled = false; }
             if(resetBtn){ resetBtn.disabled = false; }
+            if(clearFocusBtn){ clearFocusBtn.disabled = false; }
             renderFunctionList();
             rebuildFocusedGraphAndRender();
           });
-          btn.addEventListener("mouseenter",()=>{
-            const fileId = graphFocusState.fileNodeId;
-            if(!fileId){ return; }
-            graphFocusState.hoveredFunctionNodeId = btn.getAttribute("data-fn-id");
-            const svgNode = document.querySelector('[data-node-id="' + CSS.escape(fileId) + '"]');
-            if(svgNode){ svgNode.classList.add("graphNodePulse"); }
-          });
-          btn.addEventListener("mouseleave",()=>{
-            graphFocusState.hoveredFunctionNodeId = null;
-            const fileId = graphFocusState.fileNodeId;
-            if(!fileId){ return; }
-            const svgNode = document.querySelector('[data-node-id="' + CSS.escape(fileId) + '"]');
-            if(svgNode){ svgNode.classList.remove("graphNodePulse"); }
+          btn.addEventListener("dblclick",(event)=>{
+            event.preventDefault();
+            const fnId = btn.getAttribute("data-fn-id");
+            if(fnId){ void openGraphFocusModalForNode(fnId); }
           });
         });
-        list.querySelectorAll(".graphJumpBtn").forEach((btn)=>{
-          btn.addEventListener("click",(event)=>{
+        list.querySelectorAll("[data-copy-path-id]").forEach((btn)=>{
+          btn.addEventListener("click", async (event)=>{
             event.stopPropagation();
-            const fnId = btn.getAttribute("data-jump-id");
-            const fn = (graphFocusState.functions || []).find((x)=>x.id === fnId);
             const path = graphFocusState.fileNodePath || "";
             if(path){
-              fetch(withToken("/api/fs/open"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path })
-              }).catch((err)=>console.error("[graph-jump] failed", err));
+              const hint = document.getElementById("graphExplorerHint");
+              try{
+                await copyTextToClipboard(path);
+                if(hint){ hint.textContent = "Copied path: " + path; }
+                const prev = btn.textContent;
+                btn.textContent = "Copied";
+                setTimeout(()=>{ btn.textContent = prev || "Copy Path"; }, 1200);
+              } catch(err){
+                if(hint){ hint.textContent = "Failed to copy path: " + ((err && err.message) ? err.message : String(err)); }
+                console.error("[graph-copy-path] failed", err);
+              }
             }
           });
         });
+      }
+      async function copyTextToClipboard(text){
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        const el = document.createElement("textarea");
+        el.value = text;
+        el.setAttribute("readonly", "readonly");
+        el.style.position = "fixed";
+        el.style.left = "-9999px";
+        document.body.appendChild(el);
+        el.select();
+        try{
+          if(!document.execCommand("copy")){
+            throw new Error("clipboard API unavailable");
+          }
+        } finally {
+          document.body.removeChild(el);
+        }
       }
       function buildFileBreadcrumb(absPath){
         if(!absPath){ return ""; }
@@ -2458,6 +2594,225 @@ export function buildMainTerminalHtml(token?: string): string {
           if(!edgeById.has(key)){ edgeById.set(key, { ...e, id: key }); }
         });
         return { nodes: Array.from(nodeById.values()), edges: Array.from(edgeById.values()) };
+      }
+      function selectGraphSymbol(symbolId){
+        const byId = new Map((graphNodeCache.nodes || []).map((n)=>[n.id, n]));
+        const symbol = byId.get(symbolId);
+        if(!symbol || symbol.kind !== "Symbol"){ return; }
+        const fileId = symbolFileNodeId(symbolId);
+        const fileNode = byId.get(fileId);
+        if(fileId && fileNode){
+          graphFocusState.fileNodeId = fileId;
+          graphFocusState.fileNodeName = fileNode.name || fileId;
+          graphFocusState.fileNodePath = fileNode.path ? String(fileNode.path) : "";
+          graphFocusState.functions = (graphFocusState.functions || []).some((fn)=>fn.id === symbolId)
+            ? graphFocusState.functions
+            : graphFocusState.functions.concat([symbol]);
+        }
+        graphFocusState.functionNodeId = symbolId;
+        window.__graphSelectedFnId = symbolId;
+        graphFocusState.localDeps = true;
+        if(!graphFocusState.externalSeedIds.includes(symbolId)){
+          graphFocusState.externalSeedIds.push(symbolId);
+        }
+        const depsBtn = document.getElementById("btnGraphLocalDeps");
+        const extBtn = document.getElementById("btnGraphExternalDeps");
+        const resetBtn = document.getElementById("btnGraphFocusReset");
+        const clearFocusBtn = document.getElementById("btnGraphClearFocus");
+        if(depsBtn){ depsBtn.textContent = "Hide local dependencies"; depsBtn.disabled = false; }
+        if(extBtn){ extBtn.disabled = false; }
+        if(resetBtn){ resetBtn.disabled = false; }
+        if(clearFocusBtn){ clearFocusBtn.disabled = false; }
+        renderFunctionList();
+        rebuildFocusedGraphAndRender();
+      }
+      function renderTechnicalIndexTree(nodes, edges){
+        const rootEl = document.getElementById("graphIndexTree");
+        if(!rootEl){ return; }
+        if(graphViewMode !== "technical"){
+          rootEl.innerHTML = '<p class="graphExplorerMuted">Switch to Technical View to browse files and symbols.</p>';
+          return;
+        }
+        const technicalNodes = (nodes || []).filter((n)=>n && (n.kind === "Project" || n.kind === "Module" || n.kind === "File" || n.kind === "Symbol"));
+        const byId = new Map(technicalNodes.map((n)=>[n.id, n]));
+        const childMap = new Map();
+        const parentByChild = new Map();
+        technicalNodes.forEach((n)=>childMap.set(n.id, []));
+        (edges || []).forEach((e)=>{
+          if(!e || e.kind !== "contains" || !byId.has(e.fromId) || !byId.has(e.toId)){ return; }
+          childMap.get(e.fromId).push(e.toId);
+          if(!parentByChild.has(e.toId)){ parentByChild.set(e.toId, e.fromId); }
+        });
+        childMap.forEach((arr)=>{
+          arr.sort((a,b)=>{
+            const na = byId.get(a);
+            const nb = byId.get(b);
+            const ka = (na && na.kind === "Symbol") ? 1 : 0;
+            const kb = (nb && nb.kind === "Symbol") ? 1 : 0;
+            if(ka !== kb){ return ka - kb; }
+            return String((na && (na.name || na.path || na.id)) || a).localeCompare(String((nb && (nb.name || nb.path || nb.id)) || b));
+          });
+        });
+        let roots = technicalNodes.filter((n)=>!parentByChild.has(n.id));
+        if(!roots.length){ roots = technicalNodes.filter((n)=>n.kind !== "Symbol").slice(0, 50); }
+        roots.sort((a,b)=>String(a.name || a.path || a.id).localeCompare(String(b.name || b.path || b.id)));
+        const seen = new Set();
+        function labelForNode(n){
+          if(n.kind === "File" && n.path){ return String(n.path).split("/").slice(-2).join("/"); }
+          return String(n.name || n.path || n.id);
+        }
+        function renderNode(id, depth){
+          if(seen.has(id) || depth > 12){ return ""; }
+          seen.add(id);
+          const n = byId.get(id);
+          if(!n){ return ""; }
+          const children = childMap.get(id) || [];
+          const label = escHtml(labelForNode(n));
+          const kind = escHtml(n.kind || "Node");
+          const attrs = ' data-index-node-id="' + escHtml(n.id || "") + '" data-index-kind="' + kind + '"';
+          if(children.length){
+            return '<details' + (depth < 2 ? " open" : "") + '><summary><span role="button" tabindex="0" class="graphIndexItem"' + attrs + '><span class="graphIndexKind">' + kind + '</span>' + label + '</span></summary>' +
+              children.map((childId)=>renderNode(childId, depth + 1)).join("") +
+              '</details>';
+          }
+          return '<div style="margin-left:' + Math.min(24, depth * 8) + 'px"><button type="button" class="graphIndexItem"' + attrs + '><span class="graphIndexKind">' + kind + '</span>' + label + '</button></div>';
+        }
+        const html = roots.map((n)=>renderNode(n.id, 0)).join("");
+        rootEl.innerHTML = html || '<p class="graphExplorerMuted">No technical file index found. Rebuild the graph to refresh it.</p>';
+        rootEl.querySelectorAll(".graphIndexItem").forEach((btn)=>{
+          btn.addEventListener("click",(event)=>{
+            const nodeId = btn.getAttribute("data-index-node-id") || "";
+            const kind = btn.getAttribute("data-index-kind") || "";
+            const node = byId.get(nodeId);
+            if(kind === "File" && nodeId){
+              void loadFunctionsForFile(nodeId, node ? (node.name || node.path || nodeId) : nodeId);
+            } else if(kind === "Symbol" && nodeId){
+              selectGraphSymbol(nodeId);
+            } else if(nodeId){
+              window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
+              const svgNode = document.querySelector('[data-node-id="' + CSS.escape(nodeId) + '"]');
+              if(svgNode){ svgNode.classList.toggle("graphNodeFocus"); }
+            }
+          });
+          btn.addEventListener("dblclick",(event)=>{
+            event.preventDefault();
+            event.stopPropagation();
+            const nodeId = btn.getAttribute("data-index-node-id") || "";
+            if(nodeId){ void openGraphFocusModalForNode(nodeId); }
+          });
+        });
+      }
+      async function ensureGraphNodeNeighbors(nodeId){
+        const node = (graphNodeCache.nodes || []).find((n)=>n.id === nodeId);
+        if(!node || node.kind !== "File"){ return; }
+        try{
+          const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nodeId) + "/neighbors")).then((r)=>r.json());
+          if(!res || !res.ok){ return; }
+          const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
+          (res.nodes || []).forEach((n)=>{ if(n && n.id && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
+          const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id || (e.fromId + "::" + e.kind + "::" + e.toId)));
+          (res.edges || []).forEach((e)=>{
+            if(!e){ return; }
+            const key = e.id || (e.fromId + "::" + e.kind + "::" + e.toId);
+            if(!existingEdgeIds.has(key)){ graphNodeCache.edges.push({ ...e, id: key }); }
+          });
+        } catch(_err){}
+      }
+      function collectNodeConnectionGraph(nodeId){
+        const allNodes = graphNodeCache.nodes || [];
+        const allEdges = graphNodeCache.edges || [];
+        const byId = new Map(allNodes.map((n)=>[n.id, n]));
+        const focus = byId.get(nodeId);
+        if(!focus){ return { nodes: [], edges: [], focus: null }; }
+        const nodeIds = new Set([nodeId]);
+        const edges = [];
+        allEdges.forEach((e)=>{
+          if(!e || !byId.has(e.fromId) || !byId.has(e.toId)){ return; }
+          if(e.fromId === nodeId || e.toId === nodeId){
+            edges.push(e);
+            nodeIds.add(e.fromId);
+            nodeIds.add(e.toId);
+          }
+        });
+        if(focus.kind === "Symbol"){
+          const fileId = symbolFileNodeId(nodeId);
+          const fileNode = byId.get(fileId);
+          if(fileNode){
+            nodeIds.add(fileId);
+            const contain = allEdges.find((e)=>e.kind === "contains" && e.fromId === fileId && e.toId === nodeId);
+            edges.push(contain || { id: fileId + "::contains::" + nodeId, fromId: fileId, toId: nodeId, kind: "contains" });
+          }
+        }
+        return {
+          nodes: Array.from(nodeIds).map((id)=>byId.get(id)).filter(Boolean),
+          edges: edges.filter(Boolean),
+          focus,
+        };
+      }
+      function renderFocusModalGraph(nodes, edges, focusId){
+        const svg = document.getElementById("graphFocusModalCanvas");
+        if(!svg){ return; }
+        if(!nodes.length){
+          svg.innerHTML = '<text x="24" y="40" fill="#67e8f9" font-size="14">No connections found for this node.</text>';
+          svg.setAttribute("viewBox", "0 0 900 520");
+          return;
+        }
+        const prevMode = graphViewMode;
+        const layout = computeLayeredLayout(nodes, edges, prevMode);
+        svg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
+        const positions = layout.positions;
+        const byId = new Map(nodes.map((n)=>[n.id, n]));
+        const markerDefs =
+          '<defs>' +
+          '<marker id="graphFocusArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+          '<path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(34,211,238,0.82)"></path>' +
+          '</marker>' +
+          '</defs>';
+        const edgeSvg = (edges || []).map((e, idx)=>{
+          const fp = positions.get(e.fromId);
+          const tp = positions.get(e.toId);
+          const fn = byId.get(e.fromId);
+          const tn = byId.get(e.toId);
+          if(!fp || !tp || !fn || !tn){ return ""; }
+          const s = { ...fn, x: fp.x + fp.w / 2, y: fp.y + fp.h / 2, w: fp.w, h: fp.h };
+          const t = { ...tn, x: tp.x + tp.w / 2, y: tp.y + tp.h / 2, w: tp.w, h: tp.h };
+          const routed = edgePathWithRouting(s, t, idx);
+          return '<path class="graphEdgePath" d="' + routed.d + '" stroke="' + edgeColor(e.kind) + '" stroke-width="1.8" fill="none" marker-end="url(#graphFocusArrow)"></path>';
+        }).join("");
+        const nodeSvg = (nodes || []).map((n)=>{
+          const p = positions.get(n.id);
+          if(!p){ return ""; }
+          const title = escHtml(n.name || n.path || n.id);
+          const fill = nodeColor(n.kind);
+          const active = n.id === focusId ? " graphNodeFocus" : "";
+          return '<g class="graphNodeCard' + active + '">' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="10" ry="10" width="' + p.w + '" height="' + p.h + '" fill="rgba(0,0,0,0.92)" stroke="' + fill + '" stroke-width="1.6"></rect>' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="10" ry="10" width="' + p.w + '" height="22" fill="' + fill + '" fill-opacity="0.28"></rect>' +
+            '<text x="' + (p.x + 10) + '" y="' + (p.y + 15) + '" fill="' + fill + '" font-size="10" font-weight="600" font-family="ui-monospace, Menlo, monospace">' + escHtml(n.kind || "Node").toUpperCase() + '</text>' +
+            '<text x="' + (p.x + 10) + '" y="' + (p.y + 43) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 34) + '</text>' +
+            '</g>';
+        }).join("");
+        svg.innerHTML = markerDefs + '<g>' + edgeSvg + '</g><g>' + nodeSvg + '</g>';
+      }
+      async function openGraphFocusModalForNode(nodeId){
+        const modal = document.getElementById("graphFocusModal");
+        const title = document.getElementById("graphFocusTitle");
+        const hint = document.getElementById("graphFocusModalHint");
+        if(!modal || !nodeId){ return; }
+        await ensureGraphNodeNeighbors(nodeId);
+        const data = collectNodeConnectionGraph(nodeId);
+        if(title){
+          title.textContent = data.focus ? "Focused connections: " + (data.focus.name || data.focus.path || data.focus.id) : "Focused connections";
+        }
+        if(hint){
+          hint.textContent = data.nodes.length + " node(s), " + data.edges.length + " direct connection(s). Double-click another graph node or index item to refocus.";
+        }
+        renderFocusModalGraph(data.nodes, data.edges, nodeId);
+        modal.classList.remove("isHidden");
+      }
+      function closeGraphFocusModal(){
+        const modal = document.getElementById("graphFocusModal");
+        if(modal){ modal.classList.add("isHidden"); }
       }
       function collectLocalDependencyData(selectedFnId){
         const nearNodes = graphNodeCache.nodes || [];
@@ -2567,7 +2922,7 @@ export function buildMainTerminalHtml(token?: string): string {
         });
         graphFocusState.displayNodes = merged.nodes;
         graphFocusState.displayEdges = merged.edges;
-        renderGraphErd(merged.nodes, merged.edges);
+        renderGraphErd(merged.nodes, merged.edges, { focused: true });
         bindFocusedSymbolSelection(merged.nodes);
         setTimeout(()=>{
           const focusIds = (merged.nodes || []).filter((n)=>n && (n.kind === "File" || n.kind === "Symbol")).map((n)=>n.id);
@@ -2602,6 +2957,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const depsBtn = document.getElementById("btnGraphLocalDeps");
         const resetBtn = document.getElementById("btnGraphFocusReset");
         const backBtn = document.getElementById("btnGraphBack");
+        const clearFocusBtn = document.getElementById("btnGraphClearFocus");
         if(!list){ return; }
         const fileNode = (graphNodeCache.nodes || []).find((n)=>n.id === fileNodeId);
         graphFocusState.fileNodeId = fileNodeId;
@@ -2614,6 +2970,7 @@ export function buildMainTerminalHtml(token?: string): string {
         if(panel){ panel.classList.add("open"); }
         if(backBtn){ backBtn.style.display = "inline-block"; }
         if(resetBtn){ resetBtn.disabled = true; }
+        if(clearFocusBtn){ clearFocusBtn.disabled = false; }
         if(file){
           file.textContent = buildFileBreadcrumb(graphFocusState.fileNodePath || fileNodeName);
           file.style.display = "inline-flex";
@@ -2672,6 +3029,24 @@ export function buildMainTerminalHtml(token?: string): string {
           if(hint){ hint.textContent = "Failed to load file functions: " + ((err && err.message) ? err.message : String(err)); }
         }
       }
+      async function focusGraphFromNode(nodeId, nodeName){
+        if(graphViewMode !== "technical" || !nodeId){ return; }
+        closeGraphFocusModal();
+        const node = (graphNodeCache.nodes || []).find((n)=>n.id === nodeId);
+        if(!node){ return; }
+        if(node.kind === "File"){
+          await loadFunctionsForFile(nodeId, nodeName || node.name || node.path || node.id);
+          return;
+        }
+        if(node.kind === "Symbol"){
+          const fileId = symbolFileNodeId(nodeId);
+          const fileNode = fileId ? (graphNodeCache.nodes || []).find((n)=>n.id === fileId) : null;
+          if(fileId && fileNode){
+            await loadFunctionsForFile(fileId, fileNode.name || fileNode.path || fileId);
+          }
+          selectGraphSymbol(nodeId);
+        }
+      }
       async function renderTechnicalFocusGraph(){
         if(!graphFocusState.fileNodeId || !graphFocusState.functionNodeId){ return; }
         window.__graphSelectedFnId = graphFocusState.functionNodeId;
@@ -2707,13 +3082,21 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       function nodeColor(kind){
         const map = {
-          Project: "#67e8f9",
-          Module: "#22d3ee",
+          // Technical kinds - cool palette
+          Project: "#a78bfa",
+          Module: "#60a5fa",
           File: "#22d3ee",
-          Symbol: "#67e8f9",
-          Workflow: "#ff2d2d",
-          Concept: "#ff4d4d",
-          DataEntity: "#22d3ee",
+          Symbol: "#34d399",
+          Workflow: "#f59e0b",
+          Concept: "#f472b6",
+          DataEntity: "#facc15",
+          // Business kinds - warm palette
+          BusinessGoal: "#f472b6",
+          BusinessCapability: "#fb7185",
+          BusinessProcess: "#f59e0b",
+          BusinessStep: "#fbbf24",
+          DataObject: "#facc15",
+          ExternalActor: "#a78bfa",
         };
         return map[kind] || "#22d3ee";
       }
@@ -2790,33 +3173,6 @@ export function buildMainTerminalHtml(token?: string): string {
           graphSimulation = null;
         }
       }
-      function setupHoverForce(graph){
-        let simNodes = [];
-        const adjacency = new Map();
-        (graph.edges || []).forEach((e)=>{
-          if(!adjacency.has(e.fromId)){ adjacency.set(e.fromId, new Set()); }
-          if(!adjacency.has(e.toId)){ adjacency.set(e.toId, new Set()); }
-          adjacency.get(e.fromId).add(e.toId);
-          adjacency.get(e.toId).add(e.fromId);
-        });
-        function force(alpha){
-          if(!graphSimState.hoveredNodeId){ return; }
-          const hoveredId = graphSimState.hoveredNodeId;
-          const neigh = adjacency.get(hoveredId);
-          if(!neigh || neigh.size === 0){ return; }
-          const center = simNodes.find((n)=>n.id === hoveredId);
-          if(!center){ return; }
-          simNodes.forEach((n)=>{
-            if(!neigh.has(n.id)){ return; }
-            const dx = (center.x || 0) - (n.x || 0);
-            const dy = (center.y || 0) - (n.y || 0);
-            n.vx = (n.vx || 0) + dx * alpha * 0.02;
-            n.vy = (n.vy || 0) + dy * alpha * 0.02;
-          });
-        }
-        force.initialize = function(nodes){ simNodes = nodes; };
-        return force;
-      }
       function setupBoundsForce(width, height){
         let simNodes = [];
         function force(){
@@ -2844,7 +3200,7 @@ export function buildMainTerminalHtml(token?: string): string {
           legend.innerHTML = "";
           return;
         }
-        const layout = layoutErd(nodes);
+        const layout = computeLayeredLayout(nodes, edges, graphViewMode);
         applyGraphViewBox(layout.width, layout.height);
         const markerDefs =
           '<defs>' +
@@ -2981,15 +3337,289 @@ export function buildMainTerminalHtml(token?: string): string {
         const height = Math.max(600, marginY * 2 + Math.max(1, ordered.length) * rowH);
         return { positions, width, height };
       }
-      function renderGraphErd(nodes, edges){
+      function rankForKind(kind, mode){
+        if(mode === "business" || mode === "business-goal"){
+          const order = ["BusinessGoal","BusinessCapability","BusinessProcess","BusinessStep","DataObject","ExternalActor"];
+          const idx = order.indexOf(kind);
+          return idx >= 0 ? idx : order.length;
+        }
+        const order = ["Project","Module","File","Symbol","Workflow","Concept","DataEntity"];
+        const idx = order.indexOf(kind);
+        return idx >= 0 ? idx : order.length;
+      }
+      function computeLayeredLayout(nodes, edges, mode){
+        // 1) Bucket by rank (column).
+        const byId = new Map((nodes || []).map((n)=>[n.id, n]));
+        const colByNode = new Map();
+        (nodes || []).forEach((n)=>{
+          colByNode.set(n.id, rankForKind(n.kind || "", mode));
+        });
+        // 2) Refine ranks using "contains"/"drives" hierarchy: a child's column should be >= parent's + 1.
+        const parents = new Map();
+        (edges || []).forEach((e)=>{
+          if(!e || !byId.has(e.fromId) || !byId.has(e.toId)){ return; }
+          if(e.kind === "contains" || e.kind === "drives"){
+            const list = parents.get(e.toId) || [];
+            list.push(e.fromId);
+            parents.set(e.toId, list);
+          }
+        });
+        let changed = true, guard = 0;
+        while(changed && guard++ < 50){
+          changed = false;
+          parents.forEach((ps, child)=>{
+            const childCol = colByNode.get(child) || 0;
+            ps.forEach((p)=>{
+              const parentCol = colByNode.get(p) || 0;
+              if(childCol <= parentCol){
+                colByNode.set(child, parentCol + 1);
+                changed = true;
+              }
+            });
+          });
+        }
+        // 3) Group nodes per column, sort within column by parent group then name for stable layout.
+        const cols = new Map();
+        (nodes || []).forEach((n)=>{
+          const c = colByNode.get(n.id) || 0;
+          const arr = cols.get(c) || [];
+          arr.push(n);
+          cols.set(c, arr);
+        });
+        const sortedColIdxs = Array.from(cols.keys()).sort((a,b)=>a-b);
+        // Order rows within a column: group by first parent so parent and children align horizontally.
+        const orderKey = new Map();
+        sortedColIdxs.forEach((c)=>{
+          const arr = cols.get(c);
+          arr.sort((a,b)=>{
+            const pa = (parents.get(a.id) || [])[0] || "";
+            const pb = (parents.get(b.id) || [])[0] || "";
+            const oa = orderKey.get(pa);
+            const ob = orderKey.get(pb);
+            if(oa !== ob){ return (oa == null ? 1e9 : oa) - (ob == null ? 1e9 : ob); }
+            return String(a.name || a.id).localeCompare(String(b.name || b.id));
+          });
+          arr.forEach((n, idx)=>orderKey.set(n.id, idx));
+        });
+        // 4) Assign coordinates.
+        const colW = 420;
+        const rowH = 138;
+        const marginX = 72;
+        const marginY = 72;
+        const boxW = 230;
+        const boxH = 70;
+        const positions = new Map();
+        let maxRows = 1;
+        sortedColIdxs.forEach((c, ci)=>{
+          const arr = cols.get(c) || [];
+          maxRows = Math.max(maxRows, arr.length);
+          arr.forEach((n, ri)=>{
+            positions.set(n.id, {
+              x: marginX + ci * colW,
+              y: marginY + ri * rowH,
+              w: boxW,
+              h: boxH,
+              col: ci,
+              row: ri,
+            });
+          });
+        });
+        const width = Math.max(1300, marginX * 2 + sortedColIdxs.length * colW + boxW);
+        const height = Math.max(560, marginY * 2 + maxRows * rowH + boxH);
+        return { positions, width, height, colCount: sortedColIdxs.length, bandX: 60, bandW: colW };
+      }
+      function relationClassForFocusedNode(nodeId, edges, focusId){
+        let incoming = false;
+        let outgoing = false;
+        (edges || []).forEach((e)=>{
+          if(!e || (e.kind !== "calls" && e.kind !== "consumes")){ return; }
+          if(e.fromId === nodeId && e.toId === focusId){ incoming = true; }
+          if(e.toId === nodeId && e.fromId === focusId){ outgoing = true; }
+        });
+        if(incoming && outgoing){ return "both"; }
+        if(incoming){ return "incoming"; }
+        if(outgoing){ return "outgoing"; }
+        return "peer";
+      }
+      function separateFocusedOverlaps(simNodes, laneXByIndex){
+        const pad = 34;
+        for(let iter = 0; iter < 90; iter++){
+          let moved = false;
+          for(let i = 0; i < simNodes.length; i++){
+            for(let j = i + 1; j < simNodes.length; j++){
+              const a = simNodes[i];
+              const b = simNodes[j];
+              const minDx = ((a.w || 220) + (b.w || 220)) / 2 + pad;
+              const minDy = ((a.h || 70) + (b.h || 70)) / 2 + pad;
+              let dx = (b.x || 0) - (a.x || 0);
+              let dy = (b.y || 0) - (a.y || 0);
+              if(Math.abs(dx) < minDx && Math.abs(dy) < minDy){
+                if(Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01){
+                  dx = ((j % 2) ? 1 : -1) * 0.5;
+                  dy = ((i % 2) ? 1 : -1) * 0.5;
+                }
+                const sx = dx < 0 ? -1 : 1;
+                const sy = dy < 0 ? -1 : 1;
+                const overlapX = minDx - Math.abs(dx);
+                const overlapY = minDy - Math.abs(dy);
+                const aWeight = a.isFocus ? 0.28 : 0.5;
+                const bWeight = b.isFocus ? 0.28 : 0.5;
+                const total = aWeight + bWeight || 1;
+                if(overlapX < overlapY){
+                  a.x -= sx * overlapX * (bWeight / total);
+                  b.x += sx * overlapX * (aWeight / total);
+                } else {
+                  a.y -= sy * overlapY * (bWeight / total);
+                  b.y += sy * overlapY * (aWeight / total);
+                }
+                moved = true;
+              }
+            }
+          }
+          simNodes.forEach((n)=>{
+            const laneX = laneXByIndex.get(n.lane);
+            if(Number.isFinite(laneX)){
+              n.x += (laneX - (n.x || 0)) * (n.isFocus ? 0.018 : 0.045);
+            }
+          });
+          if(!moved){ break; }
+        }
+      }
+      function computeFocusedGraphLayout(nodes, edges, focusState){
+        const byId = new Map((nodes || []).map((n)=>[n.id, n]));
+        const focusId = (focusState && focusState.functionNodeId) || (window.__graphSelectedFnId || "");
+        const selectedFileId = (focusState && focusState.fileNodeId) || "";
+        const containsBySymbol = new Map();
+        (edges || []).forEach((e)=>{
+          if(e && e.kind === "contains" && byId.has(e.fromId) && byId.has(e.toId)){
+            containsBySymbol.set(e.toId, e.fromId);
+          }
+        });
+        const fileLaneById = new Map();
+        (nodes || []).forEach((n)=>{
+          if(!n || n.kind !== "Symbol" || n.id === focusId){ return; }
+          const fileId = containsBySymbol.get(n.id);
+          if(!fileId){ return; }
+          const rel = relationClassForFocusedNode(n.id, edges, focusId);
+          if(rel === "incoming"){ fileLaneById.set(fileId, 0); }
+          else if(rel === "outgoing"){ fileLaneById.set(fileId, 4); }
+          else if(rel === "both"){ fileLaneById.set(fileId, 2); }
+        });
+        const laneCount = 5;
+        const marginX = 96;
+        const marginY = 96;
+        const laneW = 330;
+        const baseline = 380;
+        const laneX = new Map();
+        for(let i = 0; i < laneCount; i++){
+          laneX.set(i, marginX + i * laneW);
+        }
+        const laneNodes = new Map();
+        for(let i = 0; i < laneCount; i++){ laneNodes.set(i, []); }
+        const simNodes = (nodes || []).filter((n)=>n && n.id).map((n, idx)=>{
+          const size = nodeSizeByKind(n.kind);
+          const w = n.kind === "File" ? 250 : Math.max(size.w, 230);
+          const h = n.kind === "File" ? 76 : Math.max(size.h, 72);
+          let lane = 2;
+          if(n.id === selectedFileId || n.id === focusId){
+            lane = 2;
+          } else if(n.kind === "File"){
+            lane = fileLaneById.has(n.id) ? fileLaneById.get(n.id) : 2;
+          } else if(n.kind === "Symbol"){
+            const rel = relationClassForFocusedNode(n.id, edges, focusId);
+            if(rel === "incoming"){ lane = 1; }
+            else if(rel === "outgoing"){ lane = 3; }
+            else if(rel === "both"){ lane = idx % 2 === 0 ? 1 : 3; }
+            else { lane = 2; }
+          } else {
+            lane = Math.max(0, Math.min(laneCount - 1, nodeLane(n.kind)));
+          }
+          const simNode = {
+            id: n.id,
+            lane,
+            w,
+            h,
+            x: laneX.get(lane),
+            y: baseline,
+            isFocus: n.id === selectedFileId || n.id === focusId,
+          };
+          laneNodes.get(lane).push(simNode);
+          return simNode;
+        });
+        const bySimId = new Map(simNodes.map((n)=>[n.id, n]));
+        laneNodes.forEach((arr, lane)=>{
+          arr.sort((a,b)=>{
+            const aFocus = a.id === selectedFileId ? 0 : a.id === focusId ? 1 : 2;
+            const bFocus = b.id === selectedFileId ? 0 : b.id === focusId ? 1 : 2;
+            if(aFocus !== bFocus){ return aFocus - bFocus; }
+            const an = byId.get(a.id);
+            const bn = byId.get(b.id);
+            return String((an && (an.name || an.path || an.id)) || a.id).localeCompare(String((bn && (bn.name || bn.path || bn.id)) || b.id));
+          });
+          const gap = Math.max(132, ...arr.map((n)=>(n.h || 72) + 66));
+          const start = baseline - ((arr.length - 1) * gap) / 2;
+          arr.forEach((n, idx)=>{
+            n.x = laneX.get(lane);
+            n.y = start + idx * gap;
+          });
+        });
+        const selectedFile = bySimId.get(selectedFileId);
+        const selectedFn = bySimId.get(focusId);
+        if(selectedFn){
+          selectedFn.x = laneX.get(2);
+          selectedFn.y = baseline;
+        }
+        if(selectedFile && selectedFile.id !== focusId){
+          selectedFile.x = laneX.get(2);
+          selectedFile.y = baseline - 170;
+        }
+        const simEdges = (edges || [])
+          .filter((e)=>e && bySimId.has(e.fromId) && bySimId.has(e.toId))
+          .map((e)=>({ source: e.fromId, target: e.toId, kind: e.kind || "" }));
+        if(window.d3 && typeof window.d3.forceSimulation === "function"){
+          const sim = window.d3.forceSimulation(simNodes)
+            .force("link", window.d3.forceLink(simEdges).id((d)=>d.id).distance((d)=>d.kind === "contains" ? 178 : 284).strength((d)=>d.kind === "contains" ? 0.32 : 0.48))
+            .force("charge", window.d3.forceManyBody().strength(-720))
+            .force("collide", window.d3.forceCollide().radius((d)=>Math.sqrt((d.w || 220) * (d.w || 220) + (d.h || 72) * (d.h || 72)) / 2 + 46).strength(1).iterations(4))
+            .force("x", window.d3.forceX((d)=>laneX.get(d.lane) || marginX).strength((d)=>d.isFocus ? 0.22 : 0.46))
+            .force("y", window.d3.forceY((d)=>d.id === selectedFileId ? baseline - 170 : d.id === focusId ? baseline : d.y).strength((d)=>d.isFocus ? 0.2 : 0.1))
+            .stop();
+          for(let i = 0; i < 220; i++){ sim.tick(); }
+        }
+        separateFocusedOverlaps(simNodes, laneX);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        simNodes.forEach((n)=>{
+          minX = Math.min(minX, (n.x || 0) - (n.w || 220) / 2);
+          minY = Math.min(minY, (n.y || 0) - (n.h || 72) / 2);
+          maxX = Math.max(maxX, (n.x || 0) + (n.w || 220) / 2);
+          maxY = Math.max(maxY, (n.y || 0) + (n.h || 72) / 2);
+        });
+        if(!Number.isFinite(minX) || !Number.isFinite(minY)){
+          return computeLayeredLayout(nodes, edges, graphViewMode);
+        }
+        const positions = new Map();
+        simNodes.forEach((n)=>{
+          positions.set(n.id, {
+            x: (n.x || 0) - (n.w || 220) / 2 - minX + marginX,
+            y: (n.y || 0) - (n.h || 72) / 2 - minY + marginY,
+            w: n.w,
+            h: n.h,
+            col: n.lane,
+          });
+        });
+        return {
+          positions,
+          width: Math.max(980, (maxX - minX) + marginX * 2),
+          height: Math.max(620, (maxY - minY) + marginY * 2),
+          colCount: 0,
+        };
+      }
+
+      function renderGraphErd(nodes, edges, options){
         const svg = document.getElementById("graphCanvas");
         const legend = document.getElementById("graphLegend");
         const hoverCard = document.getElementById("graphHoverCard");
         if(!svg || !legend){ return; }
-        if(typeof d3 === "undefined" || !d3.forceSimulation){
-          renderGraphErdStatic(nodes, edges);
-          return;
-        }
         stopGraphSimulation();
         if(hoverCard){ hoverCard.style.display = "none"; }
         if(!nodes || nodes.length === 0){
@@ -2997,21 +3627,63 @@ export function buildMainTerminalHtml(token?: string): string {
           legend.innerHTML = "";
           return;
         }
-        const width = Math.max(1200, Math.floor((svg.parentElement && svg.parentElement.clientWidth) || 1200));
-        const height = Math.max(640, Math.floor((svg.parentElement && svg.parentElement.clientHeight) || 700));
+        const layout = options && options.focused
+          ? computeFocusedGraphLayout(nodes, edges, graphFocusState)
+          : computeLayeredLayout(nodes, edges, graphViewMode);
+        const width = layout.width;
+        const height = layout.height;
         applyGraphViewBox(width, height);
-        const simNodes = (nodes || []).map((n, i)=>{
-          const size = nodeSizeByKind(n.kind);
-          const theta = (i / Math.max(1, nodes.length)) * Math.PI * 2;
-          return { ...n, w: size.w, h: size.h, x: width / 2 + Math.cos(theta) * (180 + i * 2), y: height / 2 + Math.sin(theta) * (160 + i * 2) };
+        const positions = layout.positions;
+        const layoutNodes = (nodes || []).filter((n)=>positions.has(n.id)).map((n)=>{
+          const p = positions.get(n.id);
+          return { ...n, x: p.x + p.w/2, y: p.y + p.h/2, w: p.w, h: p.h };
         });
-        const byId = new Map(simNodes.map((n)=>[n.id, n]));
-        const simEdges = (edges || [])
+        const byId = new Map(layoutNodes.map((n)=>[n.id, n]));
+        const layoutEdges = (edges || [])
           .filter((e)=>e && typeof e.fromId === "string" && typeof e.toId === "string")
-          .filter((e)=>byId.has(e.fromId) && byId.has(e.toId))
-          .map((e)=>({ ...e, source: e.fromId, target: e.toId }));
+          .filter((e)=>byId.has(e.fromId) && byId.has(e.toId));
 
-        function renderTick(){
+        // Adjacency for hover-highlighting.
+        const adjacency = new Map();
+        layoutEdges.forEach((e)=>{
+          if(!adjacency.has(e.fromId)){ adjacency.set(e.fromId, new Set()); }
+          if(!adjacency.has(e.toId)){ adjacency.set(e.toId, new Set()); }
+          adjacency.get(e.fromId).add(e.toId);
+          adjacency.get(e.toId).add(e.fromId);
+        });
+
+        function applyHighlight(focusId){
+          const selected = window.__graphSelectedFnId || "";
+          const activeId = focusId || selected || "";
+          const neigh = activeId ? (adjacency.get(activeId) || new Set()) : null;
+          svg.querySelectorAll(".graphNodeCard").forEach((el)=>{
+            const id = el.getAttribute("data-node-id") || "";
+            if(!activeId){ el.classList.remove("graphNodeDimmed","graphNodeFocus"); return; }
+            if(id === activeId){
+              el.classList.remove("graphNodeDimmed");
+              el.classList.add("graphNodeFocus");
+            } else if(neigh && neigh.has(id)){
+              el.classList.remove("graphNodeDimmed","graphNodeFocus");
+            } else {
+              el.classList.add("graphNodeDimmed");
+              el.classList.remove("graphNodeFocus");
+            }
+          });
+          svg.querySelectorAll(".graphEdgePath").forEach((el)=>{
+            const eid = el.getAttribute("data-edge-id") || "";
+            const e = layoutEdges.find((x)=>(x.id || (x.fromId + "::" + x.kind + "::" + x.toId)) === eid);
+            if(!activeId || !e){ el.classList.remove("graphNodeDimmed","graphEdgeFocus"); return; }
+            if(e.fromId === activeId || e.toId === activeId){
+              el.classList.remove("graphNodeDimmed");
+              el.classList.add("graphEdgeFocus");
+            } else {
+              el.classList.add("graphNodeDimmed");
+              el.classList.remove("graphEdgeFocus");
+            }
+          });
+        }
+
+        function renderOnce(){
           const markerDefs =
             '<defs>' +
             '<marker id="graphArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
@@ -3019,18 +3691,12 @@ export function buildMainTerminalHtml(token?: string): string {
             '</marker>' +
             "</defs>";
           const edgeLabelSvg = [];
-          const edgeSvg = simEdges.map((e, idx)=>{
+          const edgeSvg = layoutEdges.map((e, idx)=>{
             const s = byId.get(e.fromId);
             const t = byId.get(e.toId);
             if(!s || !t){ return ""; }
             const routed = edgePathWithRouting(s, t, idx);
             const label = parseEdgeConnectionLabel(e);
-            const hovered = graphSimState.hoveredNodeId;
-            const selected = window.__graphSelectedFnId || "";
-            const isEmphasized = Boolean(
-              (hovered && (e.fromId === hovered || e.toId === hovered)) ||
-              (selected && (e.fromId === selected || e.toId === selected))
-            );
             if(label){
               const ang = Math.atan2(routed.tp.y - routed.sp.y, routed.tp.x - routed.sp.x) * (180 / Math.PI);
               edgeLabelSvg.push(
@@ -3040,134 +3706,81 @@ export function buildMainTerminalHtml(token?: string): string {
                 '</g>'
               );
             }
-            const edgeWidth = isEmphasized ? 2.2 : (e.kind === "contains" ? 1.2 : (e.kind === "calls" || e.kind === "consumes") ? 1.8 : 1.4);
-            const edgeOpacity = isEmphasized ? 1 : (e.kind === "contains" ? 0.38 : 0.88);
-            return '<path class="graphEdgePath" data-edge-id="' + escHtml(e.id || "") + '" d="' + routed.d + '" stroke="' + edgeColor(e.kind) + '" stroke-opacity="' + edgeOpacity + '" stroke-width="' + edgeWidth + '" fill="none" marker-end="url(#graphArrow)"></path>';
+            const edgeWidth = (e.kind === "contains" ? 1.1 : (e.kind === "calls" || e.kind === "consumes") ? 1.7 : 1.3);
+            const edgeOpacity = (e.kind === "contains" ? 0.45 : 0.85);
+            const edgeId = e.id || (e.fromId + "::" + e.kind + "::" + e.toId);
+            return '<path class="graphEdgePath" data-edge-id="' + escHtml(edgeId) + '" data-edge-kind="' + escHtml(e.kind || "") + '" d="' + routed.d + '" stroke="' + edgeColor(e.kind) + '" stroke-opacity="' + edgeOpacity + '" stroke-width="' + edgeWidth + '" fill="none" marker-end="url(#graphArrow)"></path>';
           }).join("");
-          const nodeSvg = simNodes.map((n)=>{
+          const nodeSvg = layoutNodes.map((n)=>{
             const x = (n.x || 0) - n.w / 2;
             const y = (n.y || 0) - n.h / 2;
             const title = escHtml(n.name || n.id);
             const subtitle = escHtml(n.kind || "Node");
             const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
             const fill = nodeColor(n.kind);
-            return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '">' +
-              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="#000000" stroke="' + fill + '" stroke-width="1.4"></rect>' +
-              '<rect x="' + x + '" y="' + y + '" width="' + n.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
-              '<text x="' + (x + 8) + '" y="' + (y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-              '<text x="' + (x + 8) + '" y="' + (y + 36) + '" fill="#67e8f9" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+            return '<g class="graphNodeCard" data-node-id="' + escHtml(n.id || "") + '" data-kind="' + escHtml(n.kind || "") + '">' +
+              '<rect x="' + x + '" y="' + y + '" rx="10" ry="10" width="' + n.w + '" height="' + n.h + '" fill="rgba(0,0,0,0.92)" stroke="' + fill + '" stroke-width="1.6"></rect>' +
+              '<rect x="' + x + '" y="' + y + '" rx="10" ry="10" width="' + n.w + '" height="22" fill="' + fill + '" fill-opacity="0.28"></rect>' +
+              '<rect x="' + x + '" y="' + (y + 22) + '" width="' + n.w + '" height="1" fill="' + fill + '" fill-opacity="0.55"></rect>' +
+              '<text x="' + (x + 10) + '" y="' + (y + 15) + '" fill="' + fill + '" font-size="10" font-weight="600" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">' + subtitle.toUpperCase() + '</text>' +
+              '<text x="' + (x + 10) + '" y="' + (y + 42) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 32) + '</text>' +
               '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '" data-kind="' + escHtml(n.kind || "") + '">' +
-              '<rect x="' + x + '" y="' + y + '" rx="8" ry="8" width="' + n.w + '" height="' + n.h + '" fill="transparent"></rect>' +
+              '<rect x="' + x + '" y="' + y + '" rx="10" ry="10" width="' + n.w + '" height="' + n.h + '" fill="transparent"></rect>' +
               '</g>' +
               '</g>';
           }).join("");
-          svg.innerHTML = markerDefs + '<g>' + edgeSvg + "</g>" + '<g>' + edgeLabelSvg.join("") + "</g>" + '<g>' + nodeSvg + "</g>";
+          // Column band backgrounds for visual structure.
+          const colCount = layout.colCount;
+          const bandSvg = (function(){
+            const out = [];
+            for(let c = 0; c < colCount; c++){
+              const x = (layout.bandX || 60) + c * (layout.bandW || 420);
+              if(c % 2 === 0){
+                out.push('<rect x="' + x + '" y="0" width="' + (layout.bandW || 420) + '" height="' + height + '" fill="rgba(255,255,255,0.015)"></rect>');
+              }
+            }
+            return out.join("");
+          })();
+          svg.innerHTML = markerDefs + '<g class="graphBands">' + bandSvg + '</g><g class="graphEdges">' + edgeSvg + "</g>" + '<g class="graphEdgeLabels">' + edgeLabelSvg.join("") + "</g>" + '<g class="graphNodes">' + nodeSvg + "</g>";
           if(hoverCard){
+            hoverCard.style.display = "none";
             svg.querySelectorAll(".graphNodeHotspot").forEach((el)=>{
-              el.addEventListener("mousemove",(event)=>{
+              el.addEventListener("click",(event)=>{
                 const summary = el.getAttribute("data-summary") || "No overview available.";
                 const nodeName = el.getAttribute("data-node") || "Node";
-                hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br>" + summary;
+                const kind = el.getAttribute("data-kind") || "Node";
+                const nodeId = el.getAttribute("data-node-id") || "";
+                const nodeKind = el.getAttribute("data-kind") || "";
+                hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br><span style='color:#94a3b8'>" + escHtml(kind) + "</span><br>" + summary;
                 hoverCard.style.display = "block";
                 hoverCard.style.left = (event.offsetX + 14) + "px";
                 hoverCard.style.top = (event.offsetY + 14) + "px";
-              });
-              el.addEventListener("mouseenter",()=>{
-                graphSimState.hoveredNodeId = el.getAttribute("data-node-id") || null;
-                graphSimState.lastInteractionTs = Date.now();
-                if(graphSimulation){ graphSimulation.alphaTarget(0.14).restart(); }
-              });
-              el.addEventListener("mouseleave",()=>{
-                hoverCard.style.display = "none";
-                graphSimState.hoveredNodeId = null;
-                if(graphSimulation){ graphSimulation.alphaTarget(0); }
-              });
-              el.addEventListener("click",()=>{
-                const nodeId = el.getAttribute("data-node-id") || "";
-                const nodeKind = el.getAttribute("data-kind") || "";
-                const nodeName = el.getAttribute("data-node") || "File";
+                window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
+                applyHighlight(nodeId);
                 if(graphViewMode === "technical" && nodeKind === "File" && nodeId){
                   void loadFunctionsForFile(nodeId, nodeName);
                 }
               });
-              el.addEventListener("mousedown",(evt)=>{
-                const nodeId = el.getAttribute("data-node-id");
-                if(!nodeId){ return; }
-                const node = byId.get(nodeId);
-                if(!node){ return; }
-                graphDragState.active = true;
-                graphDragState.nodeId = nodeId;
-                graphDragState.pinOnRelease = Boolean(evt.shiftKey || evt.metaKey || evt.altKey || evt.ctrlKey);
-                node.fx = node.x;
-                node.fy = node.y;
-                graphSimState.lastInteractionTs = Date.now();
-                if(graphSimulation){ graphSimulation.alphaTarget(0.22).restart(); }
-                evt.preventDefault();
+              el.addEventListener("dblclick",(event)=>{
+                event.preventDefault();
+                event.stopPropagation();
+                const nodeId = el.getAttribute("data-node-id") || "";
+                const nodeName = el.getAttribute("data-node") || "";
+                if(nodeId){ void focusGraphFromNode(nodeId, nodeName); }
               });
             });
           }
-          const kinds = Array.from(new Set(simNodes.map((n)=>n.kind || "Other")));
+          const kinds = Array.from(new Set(layoutNodes.map((n)=>n.kind || "Other")));
           let legendHtml = kinds.sort().map((kind)=>'<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + nodeColor(kind) + '"></span>' + escHtml(kind) + "</span>").join("");
           if((window.__graphSelectedFnId || "")){
             legendHtml += '<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + edgeColor("calls") + '"></span>Invokes / Invoked By</span>' +
               '<span class="graphLegendItem"><span class="graphLegendSwatch" style="background:' + edgeColor("consumes") + '"></span>Consumes Output Of / Provides Output To</span>';
           }
           legend.innerHTML = legendHtml;
+          applyHighlight(null);
         }
 
-        graphSimulation = d3.forceSimulation(simNodes)
-          .force("charge", d3.forceManyBody().strength(-420))
-          .force("link", d3.forceLink(simEdges).id((d)=>d.id).distance((e)=>{
-            if(e.kind === "contains") return 180;
-            if(e.kind === "calls") return 145;
-            if(e.kind === "consumes") return 165;
-            return 160;
-          }).strength((e)=>{
-            if(e.kind === "contains") return 0.26;
-            return 0.2;
-          }))
-          .force("center", d3.forceCenter(width / 2, height / 2))
-          .force("collide", d3.forceCollide().radius((d)=>Math.max(d.w, d.h) * 0.55 + 12).iterations(2))
-          .force("hover-cluster", setupHoverForce({ nodes: simNodes, edges: simEdges }))
-          .alpha(1)
-          .alphaDecay(0.035)
-          .velocityDecay(0.32)
-          .on("tick", renderTick);
-
-        function moveDrag(evt){
-          if(!graphDragState.active || !graphDragState.nodeId){ return; }
-          const node = byId.get(graphDragState.nodeId);
-          if(!node){ return; }
-          const rect = svg.getBoundingClientRect();
-          const x = ((evt.clientX - rect.left) / rect.width) * width;
-          const y = ((evt.clientY - rect.top) / rect.height) * height;
-          node.fx = x;
-          node.fy = y;
-          graphSimState.lastInteractionTs = Date.now();
-          if(graphSimulation){ graphSimulation.alphaTarget(0.24).restart(); }
-        }
-        function endDrag(){
-          if(!graphDragState.active || !graphDragState.nodeId){ return; }
-          const node = byId.get(graphDragState.nodeId);
-          if(node && !graphDragState.pinOnRelease){
-            node.fx = null;
-            node.fy = null;
-          }
-          graphDragState.active = false;
-          graphDragState.nodeId = null;
-          graphDragState.pinOnRelease = false;
-          if(graphSimulation){ graphSimulation.alphaTarget(0); }
-        }
-        svg.onmousemove = moveDrag;
-        svg.onmouseup = endDrag;
-        svg.onmouseleave = ()=>{ if(graphDragState.active){ endDrag(); } };
-
-        renderTick();
-        setTimeout(()=>{
-          if(graphSimulation && !graphDragState.active && Date.now() - (graphSimState.lastInteractionTs || 0) > 2500){
-            graphSimulation.stop();
-          }
-        }, 3200);
+        renderOnce();
       }
       async function refreshGraphErd(){
         const hint = document.getElementById("graphHint");
@@ -3202,9 +3815,10 @@ export function buildMainTerminalHtml(token?: string): string {
             const sourceNodes = nodesRes.nodes || [];
             const sourceEdges = edgesRes.edges || [];
             graphNodeCache = { nodes: sourceNodes, edges: sourceEdges };
+            renderTechnicalIndexTree(sourceNodes, sourceEdges);
             renderGraphErd(sourceNodes, sourceEdges);
             if(hint){
-              hint.textContent = "Technical full graph rendered with " + sourceNodes.length + " node(s) and " + sourceEdges.length + " edge(s).";
+              hint.textContent = "Technical full graph rendered with " + sourceNodes.length + " node(s) and " + sourceEdges.length + " edge(s). Click to select; double-click nodes or index rows for isolated connections.";
             }
             if(graphFocusState.fileNodeId && graphFocusState.functionNodeId){
               await renderTechnicalFocusGraph();
@@ -3668,7 +4282,15 @@ export function buildMainTerminalHtml(token?: string): string {
         graphViewBox.h = graphViewBox.baseH;
         applyGraphViewBox();
       });
+      document.getElementById("btnGraphClearFocus")?.addEventListener("click",()=>{
+        resetGraphExplorerState();
+        void refreshGraphErd();
+      });
       document.getElementById("btnGraphOverlayClose")?.addEventListener("click",()=>{ closeGraphOverlay(); });
+      document.getElementById("btnGraphFocusModalClose")?.addEventListener("click",()=>{ closeGraphFocusModal(); });
+      document.getElementById("graphFocusModal")?.addEventListener("click",(evt)=>{
+        if(evt.target && evt.target.id === "graphFocusModal"){ closeGraphFocusModal(); }
+      });
       function decodeDocPath(raw){
         if(!raw){ return ""; }
         try{ return decodeURIComponent(raw); } catch(_e){ return raw; }
@@ -3692,6 +4314,13 @@ export function buildMainTerminalHtml(token?: string): string {
       })();
       window.addEventListener("resize", resizeAll);
       document.addEventListener("keydown",(event)=>{
+        if(event.key === "Escape"){
+          const modal = document.getElementById("graphFocusModal");
+          if(modal && !modal.classList.contains("isHidden")){
+            closeGraphFocusModal();
+            return;
+          }
+        }
         if(event.key === "Escape" && graphOverlayOpen){
           closeGraphOverlay();
         }
