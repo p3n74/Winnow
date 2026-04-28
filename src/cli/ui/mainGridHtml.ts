@@ -294,36 +294,117 @@ export function buildMainTerminalHtml(token?: string): string {
         font-family: var(--font-mono);
         white-space: pre-wrap;
       }
-      .plansRoot { padding: 8px 10px 10px; gap: 8px; }
-      .plansLayout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 8px; min-height: 0; flex: 1; }
-      .plansList {
+      .plansRoot { padding: 10px; gap: 10px; }
+      .plansHero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
         border: 1px solid var(--line);
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius);
         background: var(--bg);
+        padding: 10px;
+      }
+      .plansHeroTitle { color: var(--text-neon); font-size: 14px; font-weight: 700; }
+      .plansHeroSub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+      .plansCreate { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+      .plansCreate .procInput { min-width: 220px; }
+      .planHintPill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid var(--line-faint);
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: rgba(0, 0, 0, 0.3);
+        color: var(--muted);
+      }
+      .plansLayout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 10px; min-height: 0; flex: 1; }
+      .plansSidebar {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--bg);
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .plansSidebarHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid var(--line-faint);
+      }
+      .plansSidebarTitle { color: var(--text-strong); font-size: 12px; font-weight: 700; }
+      .plansList {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         overflow: auto;
         min-height: 160px;
-        max-height: 360px;
-        padding: 6px;
+        max-height: none;
+        padding: 8px;
+        flex: 1;
       }
       .planItem {
-        display: block;
+        display: grid;
+        gap: 5px;
         width: 100%;
         text-align: left;
-        border: 1px solid transparent;
-        background: transparent;
+        border: 1px solid var(--line-faint);
+        background: rgba(0, 0, 0, 0.22);
         color: var(--text);
-        padding: 6px;
-        border-radius: 6px;
+        padding: 9px;
+        border-radius: var(--radius-sm);
         cursor: pointer;
+        margin-bottom: 7px;
+        transition: border-color 0.15s, background 0.15s, transform 0.15s;
       }
-      .planItem:hover { border-color: var(--line-faint); background: rgba(0,0,0,0.35); }
-      .planItem.active { border-color: var(--accent); background: rgba(34,211,238,0.08); }
-      .planMeta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .planItem:hover { border-color: var(--line); background: rgba(34,211,238,0.06); transform: translateY(-1px); }
+      .planItem.active { border-color: var(--accent); background: rgba(34,211,238,0.11); box-shadow: inset 3px 0 0 var(--accent); }
+      .planItemTitle { color: var(--text-neon); font-size: 12px; font-weight: 700; line-height: 1.35; }
+      .planMeta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 10px; color: var(--muted); }
+      .planStatusPill, .planReadonlyPill {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line-faint);
+        border-radius: 999px;
+        padding: 1px 7px;
+        background: rgba(34, 211, 238, 0.06);
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.6;
+        white-space: nowrap;
+      }
+      .planStatusPill { color: var(--text-strong); border-color: rgba(34, 211, 238, 0.22); }
+      .planEditorHead {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+        margin-bottom: 8px;
+      }
+      .planTitleBlock { min-width: 0; }
+      .planDetailTitle { color: var(--text-neon); font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .planDetailMeta { color: var(--muted); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .planActionBar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+      .planActionGroup {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        border: 1px solid var(--line-faint);
+        border-radius: var(--radius-sm);
+        padding: 6px;
+        background: rgba(0, 0, 0, 0.18);
+      }
       .planEditor {
         border: 1px solid var(--line);
-        border-radius: var(--radius-sm);
+        border-radius: var(--radius);
         background: var(--bg);
-        padding: 8px;
+        padding: 10px;
         display: flex;
         flex-direction: column;
         min-height: 0;
@@ -340,22 +421,40 @@ export function buildMainTerminalHtml(token?: string): string {
       .planPreview {
         border: 1px solid var(--line-faint);
         border-radius: 6px;
-        padding: 8px;
+        padding: 12px;
         margin-top: 0;
         flex: 1;
         min-height: 0;
         overflow: auto;
         max-height: none;
         font-size: 12px;
+        background: rgba(0, 0, 0, 0.24);
+        line-height: 1.58;
       }
+      .planPreview h1, .planPreview h2, .planPreview h3 { color: var(--text-neon); margin: 1em 0 0.45em; }
+      .planPreview h1 { font-size: 1.25rem; }
+      .planPreview h2 { font-size: 1.05rem; }
+      .planPreview h3 { font-size: 0.95rem; }
+      .planPreview ul { padding-left: 20px; }
+      .planPreview li { margin: 0.2em 0; }
+      .planPreview code {
+        font-family: var(--font-mono);
+        border: 1px solid var(--line-faint);
+        border-radius: 4px;
+        padding: 1px 4px;
+        background: rgba(34, 211, 238, 0.06);
+      }
+      .planPreview a { color: var(--accent-hover); }
       .planPreview.isHidden { display: none; }
       .planGraphPane {
         border: 1px solid var(--line-faint);
         border-radius: 6px;
-        padding: 8px;
+        padding: 10px;
+        flex: 1;
         overflow: auto;
         min-height: 0;
-        background: rgba(0, 0, 0, 0.35);
+        min-width: 0;
+        background: var(--bg);
       }
       .planGraphPane.planGraphFullscreenFallback {
         position: fixed;
@@ -365,6 +464,77 @@ export function buildMainTerminalHtml(token?: string): string {
         border-color: var(--line);
         box-shadow: 0 0 0 1px var(--line-faint);
       }
+      .planMdPane {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+      }
+      .planMdPane.isHidden { display: none; }
+      .planMdPane.planMdFullscreenFallback {
+        position: fixed;
+        inset: 14px;
+        z-index: 95;
+        background: rgba(0, 0, 0, 0.97);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        box-shadow: 0 0 0 1px var(--line-faint);
+        padding: 8px;
+      }
+      .planMdControls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .planModalBackdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 200;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .planModalBackdrop.isHidden { display: none; }
+      .planModalDialog {
+        background: rgba(10, 12, 16, 0.98);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+        max-width: 720px;
+        width: 100%;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .planModalHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line-faint);
+      }
+      .planModalHeader strong { color: var(--text); font-size: 13px; }
+      .planModalBody {
+        padding: 10px 12px;
+        overflow: auto;
+        font-size: 12px;
+      }
+      .planModalClose {
+        background: transparent;
+        border: 1px solid var(--line-faint);
+        color: var(--text);
+        border-radius: 4px;
+        cursor: pointer;
+        padding: 2px 8px;
+        font-size: 12px;
+      }
+      .planModalClose:hover { border-color: var(--line); }
       .planGraphPane.isHidden { display: none; }
       .planGraphSvg {
         width: 100%;
@@ -381,6 +551,67 @@ export function buildMainTerminalHtml(token?: string): string {
         gap: 6px;
         margin-bottom: 6px;
       }
+      .planGhPanel {
+        margin-bottom: 8px;
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        background: var(--bg);
+        overflow: auto;
+      }
+      .planGhPanel.isHidden { display: none; }
+      .planGhToolbar {
+        margin-bottom: 8px;
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-sm);
+        padding: 6px;
+        background: var(--accent);
+        color: #000000;
+      }
+      .planGhTitle {
+        color: #000000;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }
+      .planGhToolbar .procInput {
+        border-color: #000000;
+        background: #000000;
+        color: var(--accent-hover);
+      }
+      .planGhToolbar .procInput::placeholder { color: rgba(103, 232, 249, 0.72); }
+      .planGhToolbar .reconnect {
+        border-color: #000000;
+        background: #000000;
+        color: var(--accent);
+      }
+      .planGhToolbar .reconnect:hover {
+        background: var(--panel2);
+        color: var(--accent-hover);
+      }
+      .planGhToolbar .procHint {
+        color: #000000;
+        font-weight: 700;
+      }
+      #btnPlanGithubPanel.planGhOpen {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #000000;
+        font-weight: 800;
+      }
+      .planGithubTaskList { display: grid; gap: 6px; font-size: 12px; }
+      .planGhRow {
+        display: grid;
+        grid-template-columns: auto auto minmax(180px, 1fr) 160px 220px minmax(120px, auto) auto;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
+        border: 1px solid var(--line-faint);
+        border-radius: var(--radius-sm);
+        background: rgba(0, 0, 0, 0.2);
+        min-width: 760px;
+      }
+      .planGhDone { opacity: 0.8; width: 14px; text-align: center; }
+      .planGhLabel { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .graphRoot {
         padding: 0 10px 10px;
         gap: 8px;
@@ -819,25 +1050,79 @@ export function buildMainTerminalHtml(token?: string): string {
               <pre id="procLogPreview" class="procLog">Select a process to inspect logs.</pre>
             </div>
             <div id="pane2Plans" class="pane2View isHidden plansRoot" aria-hidden="true">
-              <div class="procToolbar">
-                <input id="planTitleInput" class="procInput procCommand" placeholder="New plan title..." />
-                <button type="button" class="reconnect" id="btnPlanCreate">Create plan</button>
-                <button type="button" class="reconnect" id="btnPlanRefresh">Refresh</button>
-                <span id="planHint" class="procHint">Plans persist as <code>.winnow/plans/*.md</code> and sqlite metadata.</span>
+              <div class="plansHero">
+                <div>
+                  <div class="plansHeroTitle">Planning Workspace</div>
+                  <div class="plansHeroSub">Scope agent sessions, review rendered markdown, inspect graph structure, and sync selected tasks.</div>
+                  <span id="planHint" class="planHintPill">Plans persist as <code>.winnow/plans/*.md</code> and sqlite metadata.</span>
+                </div>
+                <div class="plansCreate">
+                  <input id="planTitleInput" class="procInput procCommand" placeholder="New plan title..." />
+                  <button type="button" class="reconnect" id="btnPlanCreate">Create plan</button>
+                  <button type="button" class="reconnect" id="btnPlanRefresh">Refresh</button>
+                </div>
               </div>
               <div class="plansLayout">
-                <div id="plansList" class="plansList">Loading plans…</div>
+                <div class="plansSidebar">
+                  <div class="plansSidebarHeader">
+                    <span class="plansSidebarTitle">Plans</span>
+                    <span class="planReadonlyPill">agent-managed</span>
+                  </div>
+                  <div id="plansList" class="plansList">Loading plans…</div>
+                </div>
                 <div class="planEditor">
-                  <div class="procToolbar">
-                    <input id="planTitleEdit" class="procInput procMeta" placeholder="Plan title" />
-                    <input id="planStatusEdit" class="procInput procMeta" placeholder="Status" readonly />
-                    <button type="button" class="reconnect" id="btnPlanRename">Rename title</button>
-                    <button type="button" class="reconnect" id="btnPlanGraphView">Graph view</button>
-                    <button type="button" class="reconnect" id="btnPlanGraphRebuild">Rebuild graph</button>
-                    <span class="procHint" title="Plans are agent-managed; update by talking in Agent tab with the selected plan scope.">Agent-managed plan</span>
+                  <div class="planEditorHead">
+                    <div class="planTitleBlock">
+                      <div id="planDetailTitle" class="planDetailTitle">Select a plan</div>
+                      <div id="planDetailMeta" class="planDetailMeta">Choose a plan from the list to load its markdown and graph.</div>
+                    </div>
+                    <span class="planReadonlyPill" title="Plans are agent-managed; update by talking in Agent tab with the selected plan scope.">read-only preview</span>
+                  </div>
+                  <div class="planActionBar">
+                    <div class="planActionGroup">
+                      <input id="planTitleEdit" class="procInput procMeta" placeholder="Plan title" />
+                      <input id="planStatusEdit" class="procInput procMeta" placeholder="Status" readonly />
+                      <button type="button" class="reconnect" id="btnPlanRename">Rename</button>
+                      <button type="button" class="reconnect" id="btnPlanOpenAgent">Open in Agent</button>
+                    </div>
+                    <div class="planActionGroup">
+                      <button type="button" class="reconnect" id="btnPlanNormalize">Normalize</button>
+                      <button type="button" class="reconnect" id="btnPlanReconcile" title="Reconcile rendered plan structure against agent updates and stored mappings">Reconcile</button>
+                      <span id="planStructureBadge" class="planStatusPill">structure: unknown</span>
+                    </div>
+                    <div class="planActionGroup">
+                      <button type="button" class="reconnect" id="btnPlanGraphView">Graph view</button>
+                      <button type="button" class="reconnect" id="btnPlanGraphRebuild">Rebuild graph</button>
+                      <button type="button" class="reconnect" id="btnPlanGithubPanel">GitHub mapping</button>
+                    </div>
+                  </div>
+                  <div id="planGithubPanel" class="planGhPanel isHidden">
+                    <div class="procToolbar planGhToolbar">
+                      <strong class="planGhTitle">GitHub issue mapping</strong>
+                      <input id="planGithubRepo" class="procInput procMeta" placeholder="owner/repo (optional, defaults to current)" style="min-width:240px;" />
+                      <button type="button" class="reconnect" id="btnPlanGithubSyncSelected">Sync selected</button>
+                      <button type="button" class="reconnect" id="btnPlanGithubDryRun">Dry run</button>
+                      <button type="button" class="reconnect planGhClose" id="btnPlanGithubClose">Close</button>
+                      <span id="planGithubStatus" class="procHint"></span>
+                    </div>
+                    <div id="planGithubTaskList" class="muted planGithubTaskList">Load a plan to see its tasks.</div>
+                  </div>
+                  <div id="planReconcileModal" class="planModalBackdrop isHidden" role="dialog" aria-modal="true" aria-labelledby="planReconcileModalTitle">
+                    <div class="planModalDialog">
+                      <div class="planModalHeader">
+                        <strong id="planReconcileModalTitle">Reconcile result</strong>
+                        <button type="button" class="planModalClose" id="btnPlanReconcileClose" aria-label="Close">Close ✕</button>
+                      </div>
+                      <div class="planModalBody" id="planReconcilePanel"></div>
+                    </div>
                   </div>
                   <div id="planBody" class="planBody">
-                    <div id="planPreview" class="planPreview muted">Preview will appear here.</div>
+                    <div id="planMdPane" class="planMdPane">
+                      <div class="planMdControls">
+                        <button type="button" class="reconnect" id="btnPlanMdFullscreen">Fullscreen</button>
+                      </div>
+                      <div id="planPreview" class="planPreview muted">Preview will appear here.</div>
+                    </div>
                     <div id="planGraphPane" class="planGraphPane isHidden">
                       <div class="planGraphControls">
                         <button type="button" class="reconnect" id="btnPlanGraphZoomIn">Zoom +</button>
@@ -848,9 +1133,10 @@ export function buildMainTerminalHtml(token?: string): string {
                         <button type="button" class="reconnect" id="btnPlanGraphDown">▼</button>
                         <button type="button" class="reconnect" id="btnPlanGraphReset">Reset view</button>
                         <button type="button" class="reconnect" id="btnPlanGraphFullscreen">Fullscreen</button>
+                        <button type="button" class="reconnect" id="btnPlanGraphMode" title="Toggle Timeline / Tree layout">Mode: Timeline</button>
                       </div>
                       <svg id="planGraphSvg" class="planGraphSvg" viewBox="0 0 920 640" role="img" aria-label="Plan graph"></svg>
-                      <div class="planGraphHint">Timeline view (ordered top-to-bottom) with branch lanes and latest-worked highlight.</div>
+                      <div class="planGraphHint" id="planGraphHint">Timeline view (ordered top-to-bottom) with branch lanes and latest-worked highlight.</div>
                     </div>
                   </div>
                 </div>
@@ -880,8 +1166,13 @@ export function buildMainTerminalHtml(token?: string): string {
       let cachedPlans = [];
       let planGraphVisible = true;
       let selectedPlanMarkdown = "";
+      let selectedPlanUpdatedAt = "";
       let planGraphViewBox = { x: 0, y: 0, w: 980, h: 720, baseW: 980, baseH: 720 };
       let planGraphFullscreenFallback = false;
+      let planMdFullscreenFallback = false;
+      let planGraphMode = (function(){
+        try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
+      })();
       let graphSimState = { hoveredNodeId: null, selectedNodeId: null, lastInteractionTs: 0 };
       let graphDragState = { active: false, nodeId: null, pinOnRelease: false };
       let graphNodeCache = { nodes: [], edges: [] };
@@ -902,6 +1193,7 @@ export function buildMainTerminalHtml(token?: string): string {
       const panes = ["1","3","4","5"];
       const paneState = new Map();
       const PANE2_ID = "2";
+      const PLAN_SELECTION_KEY = "winnow-active-plan-id";
       function withToken(path){
         if(!AUTH_TOKEN){ return path; }
         const glue = path.includes("?") ? "&" : "?";
@@ -1058,12 +1350,9 @@ export function buildMainTerminalHtml(token?: string): string {
           }, 4000);
         }
         if(isPlans){
-          void refreshPlans();
+          void refreshPlans(true);
           plansRefreshTimer = setInterval(function(){
-            void refreshPlans();
-            if(selectedPlanId){
-              void loadPlan(selectedPlanId);
-            }
+            void refreshPlans(true);
           }, 5000);
         }
       }
@@ -1094,6 +1383,7 @@ export function buildMainTerminalHtml(token?: string): string {
         let idCounter = 0;
         const stack = [];
         let latestWorkedId = "";
+        const taskDepthStack = [];
         for(const raw of lines){
           const line = String(raw || "");
           const heading = line.match(/^(#{1,4})\\s+(.+)$/);
@@ -1105,21 +1395,48 @@ export function buildMainTerminalHtml(token?: string): string {
             while(stack.length > 0 && stack[stack.length - 1].depth >= depth){
               stack.pop();
             }
+            taskDepthStack.length = 0;
             if(stack.length > 0){
               edges.push({ from: stack[stack.length - 1].id, to: id });
             }
             stack.push({ id, depth });
             continue;
           }
-          const task = line.match(/^\\s*-\\s+\\[( |x|X)\\]\\s+(.+)$/);
+          const task = line.match(/^(\\s*)-\\s+\\[( |x|X)\\]\\s+(.+)$/);
           if(task){
-            const done = task[1].toLowerCase() === "x";
-            const label = task[2].trim();
+            const indent = String(task[1] || "").replace(/\t/g, "  ").length;
+            const indentLevels = Math.floor(indent / 2);
+            const done = String(task[2] || "").toLowerCase() === "x";
+            const label = task[3].trim();
+            const sectionDepth = stack[stack.length - 1]?.depth || 1;
+            const depth = sectionDepth + 1 + indentLevels;
+            while(taskDepthStack.length > 0 && taskDepthStack[taskDepthStack.length - 1].indentLevels >= indentLevels){
+              taskDepthStack.pop();
+            }
+            const parentTask = taskDepthStack.length > 0 ? taskDepthStack[taskDepthStack.length - 1] : null;
+            const optional = Boolean(parentTask);
             const id = "t-" + (++idCounter);
-            nodes.push({ id, label: (done ? "✓ " : "○ ") + label, depth: (stack[stack.length - 1]?.depth || 1) + 1, kind: "task" });
-            if(stack.length > 0){
+            // Priority tier: 1 = primary task, 2 = direct sidequest,
+            // 3+ = deeper-nested optional sidequest (lower priority).
+            const priority = optional ? Math.max(2, indentLevels + 1) : 1;
+            const tierTag = optional
+              ? (priority >= 3 ? "  [sidequest p" + priority + "]" : "  [sidequest]")
+              : "";
+            nodes.push({
+              id,
+              label: (done ? "✓ " : "○ ") + label + tierTag,
+              depth,
+              kind: optional ? "sidequest" : "task",
+              optional,
+              priority,
+              done,
+            });
+            if(parentTask){
+              edges.push({ from: parentTask.id, to: id });
+            } else if(stack.length > 0){
               edges.push({ from: stack[stack.length - 1].id, to: id });
             }
+            taskDepthStack.push({ id, indentLevels });
             if(done){
               latestWorkedId = id;
             }
@@ -1129,6 +1446,41 @@ export function buildMainTerminalHtml(token?: string): string {
           latestWorkedId = nodes[nodes.length - 1].id;
         }
         return { nodes, edges, latestWorkedId };
+      }
+      function evaluatePlanStructure(markdown){
+        const raw = String(markdown || "");
+        const normalized = raw.split("\\r").join("");
+        const lines = normalized.split("\\n");
+        const sections = new Set();
+        let headingCount = 0;
+        let taskCount = 0;
+        for(const lineRaw of lines){
+          const line = String(lineRaw || "");
+          const h2 = line.match(/^##\\s+(.+)$/);
+          if(h2){
+            sections.add(String(h2[1] || "").trim().toLowerCase());
+          }
+          if(/^(#{1,4})\\s+/.test(line)){ headingCount += 1; }
+          if(/^\\s*-\\s+\\[( |x|X)\\]\\s+/.test(line)){ taskCount += 1; }
+        }
+        const required = ["goal","completed","in progress","next tasks","validation checklist"];
+        const missing = required.filter((name)=>!sections.has(name));
+        const canonical = missing.length === 0 && headingCount >= 3 && taskCount >= 3;
+        return { canonical, missing, headingCount, taskCount };
+      }
+      function updatePlanStructureBadge(markdown){
+        const badge = document.getElementById("planStructureBadge");
+        if(!badge){ return; }
+        const report = evaluatePlanStructure(markdown);
+        if(report.canonical){
+          badge.textContent = "structure: canonical";
+          badge.style.color = "#86efac";
+          badge.title = "Plan structure is graph-friendly.";
+          return;
+        }
+        badge.textContent = "structure: needs normalize";
+        badge.style.color = "#facc15";
+        badge.title = "Missing sections: " + (report.missing.join(", ") || "n/a");
       }
       function escXml(s){
         return String(s == null ? "" : s)
@@ -1216,6 +1568,41 @@ export function buildMainTerminalHtml(token?: string): string {
         planGraphFullscreenFallback = !planGraphFullscreenFallback;
         pane.classList.toggle("planGraphFullscreenFallback", planGraphFullscreenFallback);
         updatePlanGraphFullscreenButton();
+      }
+      function updatePlanMdFullscreenButton(){
+        const btn = document.getElementById("btnPlanMdFullscreen");
+        if(!btn){ return; }
+        const pane = document.getElementById("planMdPane");
+        const nativeActive = Boolean(document.fullscreenElement) && document.fullscreenElement === pane;
+        const active = nativeActive || planMdFullscreenFallback;
+        btn.textContent = active ? "Exit fullscreen" : "Fullscreen";
+      }
+      async function togglePlanMdFullscreen(){
+        const pane = document.getElementById("planMdPane");
+        if(!pane){ return; }
+        try {
+          if(document.fullscreenElement === pane){
+            await document.exitFullscreen();
+            updatePlanMdFullscreenButton();
+            return;
+          }
+          if(typeof pane.requestFullscreen === "function" && !document.fullscreenElement){
+            await pane.requestFullscreen();
+            updatePlanMdFullscreenButton();
+            return;
+          }
+        } catch (_err) {}
+        planMdFullscreenFallback = !planMdFullscreenFallback;
+        pane.classList.toggle("planMdFullscreenFallback", planMdFullscreenFallback);
+        updatePlanMdFullscreenButton();
+      }
+      function openPlanReconcileModal(){
+        const modal = document.getElementById("planReconcileModal");
+        if(modal){ modal.classList.remove("isHidden"); }
+      }
+      function closePlanReconcileModal(){
+        const modal = document.getElementById("planReconcileModal");
+        if(modal){ modal.classList.add("isHidden"); }
       }
       function renderPlanGraph(markdown){
         const svg = document.getElementById("planGraphSvg");
@@ -1324,14 +1711,34 @@ export function buildMainTerminalHtml(token?: string): string {
           positions.set(id, { x, y, w: width, h, wrapped, kind: n.kind });
           return centerY;
         }
-        for(const root of roots){
-          layoutNode(root);
-          cursorY += 4;
+        if(planGraphMode === "timeline"){
+          // Pure document order: each node gets its own row at marginY + i*rowH.
+          // Depth still controls horizontal lane.
+          const ordered = nodes.map((n)=>String(n.id));
+          let yCursor = marginY;
+          for(const id of ordered){
+            const n = nodeById.get(id);
+            if(!n){ continue; }
+            const { wrapped, h, width } = ensureNodeSize(id);
+            const depth = Math.max(1, Number(n.depth || 1));
+            const x = marginX + (depth - 1) * colW;
+            positions.set(id, { x, y: yCursor, w: width, h, wrapped, kind: n.kind });
+            yCursor += h + gapForDepth(depth);
+          }
+          cursorY = yCursor;
+        } else {
+          for(const root of roots){
+            layoutNode(root);
+            cursorY += 4;
+          }
         }
         const edgeSvg = edges.map((e, idx)=>{
           const a = positions.get(String(e.from || ""));
           const b = positions.get(String(e.to || ""));
           if(!a || !b){ return ""; }
+          const targetNode = nodeById.get(String(e.to || ""));
+          const targetPriority = Math.max(1, Number(targetNode?.priority || (targetNode?.kind === "sidequest" ? 2 : 1)));
+          const isLowPriEdge = targetNode?.kind === "sidequest" && targetPriority >= 3;
           const x1 = a.x + a.w;
           const y1 = a.y + a.h / 2;
           const x2 = b.x;
@@ -1340,24 +1747,52 @@ export function buildMainTerminalHtml(token?: string): string {
           const dx = Math.max(32, (x2 - x1) * 0.42 + laneShift);
           const c1x = x1 + dx;
           const c2x = x2 - Math.max(18, dx * 0.45);
-          return '<path d="M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + y1 + ', ' + c2x + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" stroke="rgba(34,211,238,0.42)" fill="none" stroke-width="1.2"/>';
+          const edgeStroke = isLowPriEdge
+            ? "rgba(250,204,21," + Math.max(0.18, 0.42 - (targetPriority - 2) * 0.08).toFixed(3) + ")"
+            : "rgba(34,211,238,0.42)";
+          const edgeDash = isLowPriEdge ? ' stroke-dasharray="2 3"' : "";
+          return '<path d="M ' + x1 + ' ' + y1 + ' C ' + c1x + ' ' + y1 + ', ' + c2x + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" stroke="' + edgeStroke + '" fill="none" stroke-width="1.2"' + edgeDash + '/>';
         }).join("");
         const nodeSvg = nodes.map((n)=>{
           const p = positions.get(n.id);
           if(!p){ return ""; }
           const isLatest = n.id === latestWorkedId;
+          const priority = Math.max(1, Number(n.priority || (n.kind === "sidequest" ? 2 : 1)));
+          // Optional sidequests at priority 3+ are styled lighter, more dashed,
+          // and italicized to signal lower priority.
+          const isLowPriSidequest = n.kind === "sidequest" && priority >= 3;
+          const sidequestFillAlpha = isLowPriSidequest ? Math.max(0.04, 0.10 - (priority - 2) * 0.02) : 0.10;
+          const sidequestStrokeAlpha = isLowPriSidequest ? Math.max(0.32, 0.7 - (priority - 2) * 0.12) : 0.7;
           const fill = isLatest
             ? "rgba(74,222,128,0.16)"
-            : n.kind === "heading" ? "rgba(34,211,238,0.12)" : "rgba(167,139,250,0.10)";
+            : n.kind === "heading"
+              ? "rgba(34,211,238,0.12)"
+              : n.kind === "sidequest"
+                ? "rgba(250,204,21," + sidequestFillAlpha.toFixed(3) + ")"
+                : "rgba(167,139,250,0.10)";
           const stroke = isLatest
             ? "rgba(74,222,128,0.85)"
-            : n.kind === "heading" ? "rgba(34,211,238,0.55)" : "rgba(167,139,250,0.45)";
+            : n.kind === "heading"
+              ? "rgba(34,211,238,0.55)"
+              : n.kind === "sidequest"
+                ? "rgba(250,204,21," + sidequestStrokeAlpha.toFixed(3) + ")"
+                : "rgba(167,139,250,0.45)";
+          const dashArray = n.kind === "sidequest"
+            ? (isLowPriSidequest ? "2 3" : "4 3")
+            : "";
+          const strokeWidth = isLatest ? 1.8 : (isLowPriSidequest ? 0.9 : 1.1);
+          const textColor = isLowPriSidequest ? "#fde68a" : "#67e8f9";
+          const textStyle = isLowPriSidequest ? ' font-style="italic" opacity="0.85"' : "";
           const textLines = (p.wrapped || [n.label]).map((line, idx)=>{
             return '<tspan x="' + (p.x + 10) + '" y="' + (p.y + 16 + idx * 12) + '">' + escXml(line) + '</tspan>';
           }).join("");
+          const priorityBadge = isLowPriSidequest
+            ? '<text x="' + (p.x + p.w - 28) + '" y="' + (p.y + 12) + '" fill="rgba(250,204,21,0.85)" font-size="9">p' + priority + '</text>'
+            : '';
           return '<g>' +
-            '<rect x="' + p.x + '" y="' + p.y + '" rx="6" ry="6" width="' + p.w + '" height="' + p.h + '" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + (isLatest ? 1.8 : 1.1) + '"/>' +
-            '<text fill="#67e8f9" font-size="11" xml:space="preserve">' + textLines + '</text>' +
+            '<rect x="' + p.x + '" y="' + p.y + '" rx="6" ry="6" width="' + p.w + '" height="' + p.h + '" fill="' + fill + '" stroke="' + stroke + '" stroke-width="' + strokeWidth + '" stroke-dasharray="' + dashArray + '"/>' +
+            '<text fill="' + textColor + '" font-size="11" xml:space="preserve"' + textStyle + '>' + textLines + '</text>' +
+            priorityBadge +
             (isLatest ? ('<text x="' + (p.x + p.w - 62) + '" y="' + (p.y + p.h - 6) + '" fill="#86efac" font-size="10">latest</text>') : '') +
           '</g>';
         }).join("");
@@ -1381,10 +1816,10 @@ export function buildMainTerminalHtml(token?: string): string {
       function setPlanGraphVisibility(visible){
         planGraphVisible = Boolean(visible);
         const pane = document.getElementById("planGraphPane");
-        const preview = document.getElementById("planPreview");
+        const mdPane = document.getElementById("planMdPane");
         const btn = document.getElementById("btnPlanGraphView");
         if(pane){ pane.classList.toggle("isHidden", !planGraphVisible); }
-        if(preview){ preview.classList.toggle("isHidden", planGraphVisible); }
+        if(mdPane){ mdPane.classList.toggle("isHidden", planGraphVisible); }
         if(btn){ btn.textContent = planGraphVisible ? "Rendered view" : "Graph view"; }
       }
       async function rebuildPlanGraph(){
@@ -1411,18 +1846,41 @@ export function buildMainTerminalHtml(token?: string): string {
         selectedPlanId = id;
         const titleEl = document.getElementById("planTitleEdit");
         const statusEl = document.getElementById("planStatusEdit");
+        const detailTitle = document.getElementById("planDetailTitle");
+        const detailMeta = document.getElementById("planDetailMeta");
+        const hint = document.getElementById("planHint");
         try {
           const meta = cachedPlans.find((p)=>String(p.id) === String(id));
           if(titleEl && meta){ titleEl.value = String(meta.title || id); }
           if(statusEl && meta && meta.status){ statusEl.value = String(meta.status); }
+          selectedPlanUpdatedAt = meta && meta.updatedAt ? String(meta.updatedAt) : selectedPlanUpdatedAt;
+          if(detailTitle){ detailTitle.textContent = String((meta && meta.title) || id); }
+          if(detailMeta){
+            const status = String((meta && meta.status) || "draft");
+            const ts = meta && meta.updatedAt ? new Date(String(meta.updatedAt)).toLocaleString() : "";
+            detailMeta.textContent = "id: " + id + " | " + status + (ts ? " | updated " + ts : "");
+          }
           const d = await fetch(withToken("/api/plans/" + encodeURIComponent(id))).then((r)=>r.json());
           if(d && d.ok){
             if(titleEl && d.title){ titleEl.value = String(d.title); }
+            if(detailTitle){ detailTitle.textContent = String(d.title || (meta && meta.title) || id); }
             selectedPlanMarkdown = String(d.markdown || "");
             renderPlanPreview(selectedPlanMarkdown);
             renderPlanGraph(selectedPlanMarkdown);
+            updatePlanStructureBadge(selectedPlanMarkdown);
+            if(hint){ hint.textContent = "Plan loaded."; }
+            try {
+              const ghPane = document.getElementById("planGithubPanel");
+              if(ghPane && !ghPane.classList.contains("isHidden")){
+                if(typeof loadPlanGithubTasks === "function"){ void loadPlanGithubTasks(); }
+              }
+            } catch {}
+          } else if(hint){
+            hint.textContent = "Load failed: " + ((d && d.error) || "unknown error");
           }
-        } catch (_err) {}
+        } catch (err) {
+          if(hint){ hint.textContent = "Load failed: " + ((err && err.message) ? err.message : String(err)); }
+        }
         const list = document.getElementById("plansList");
         if(list){
           list.querySelectorAll(".planItem").forEach((el)=>{
@@ -1430,7 +1888,7 @@ export function buildMainTerminalHtml(token?: string): string {
           });
         }
       }
-      async function refreshPlans(){
+      async function refreshPlans(syncSelected){
         const list = document.getElementById("plansList");
         if(!list){ return; }
         try {
@@ -1438,14 +1896,20 @@ export function buildMainTerminalHtml(token?: string): string {
           cachedPlans = (d && d.ok && Array.isArray(d.plans)) ? d.plans : [];
           if(cachedPlans.length === 0){
             list.innerHTML = '<div class="procSub">No plans yet. Create one above.</div>';
+            selectedPlanId = "";
+            selectedPlanUpdatedAt = "";
             return;
           }
           list.innerHTML = cachedPlans.map((p)=>{
             const active = selectedPlanId && String(p.id) === selectedPlanId;
             const ts = p.updatedAt ? new Date(String(p.updatedAt)).toLocaleString() : "";
-            return '<button type="button" class="planItem' + (active ? ' active' : '') + '" data-plan-id="' + String(p.id).replace(/"/g,'&quot;') + '">' +
-              '<div><strong>' + String(p.title || p.id).replace(/</g, "&lt;") + '</strong></div>' +
-              '<div class="planMeta">' + String(p.status || "draft") + (ts ? (" · " + ts) : "") + '</div>' +
+            const status = String(p.status || "draft");
+            return '<button type="button" class="planItem' + (active ? ' active' : '') + '" data-plan-id="' + escHtml(p.id) + '">' +
+              '<div class="planItemTitle">' + escHtml(p.title || p.id) + '</div>' +
+              '<div class="planMeta">' +
+                '<span class="planStatusPill">' + escHtml(status) + '</span>' +
+                (ts ? '<span>Updated ' + escHtml(ts) + '</span>' : '') +
+              '</div>' +
             '</button>';
           }).join("");
           list.querySelectorAll(".planItem").forEach((el)=>{
@@ -1453,6 +1917,18 @@ export function buildMainTerminalHtml(token?: string): string {
           });
           if(!selectedPlanId){
             await loadPlan(String(cachedPlans[0].id || ""));
+            return;
+          }
+          if(syncSelected){
+            const selectedMeta = cachedPlans.find((p)=>String(p.id) === String(selectedPlanId));
+            if(!selectedMeta){
+              await loadPlan(String(cachedPlans[0].id || ""));
+              return;
+            }
+            const nextUpdatedAt = String(selectedMeta.updatedAt || "");
+            if(nextUpdatedAt && nextUpdatedAt !== selectedPlanUpdatedAt){
+              await loadPlan(selectedPlanId);
+            }
           }
         } catch (err) {
           list.textContent = "Failed to load plans: " + ((err && err.message) ? err.message : String(err));
@@ -1474,7 +1950,7 @@ export function buildMainTerminalHtml(token?: string): string {
           }
           if(titleEl){ titleEl.value = ""; }
           selectedPlanId = String(d.plan && d.plan.id || "");
-          await refreshPlans();
+          await refreshPlans(true);
           if(selectedPlanId){ await loadPlan(selectedPlanId); }
           if(hint){ hint.textContent = "Plan created."; }
         } catch (err) {
@@ -1502,11 +1978,57 @@ export function buildMainTerminalHtml(token?: string): string {
             if(hint){ hint.textContent = "Rename failed: " + ((d && d.error) || "unknown error"); }
             return;
           }
+          await refreshPlans(true);
           if(hint){ hint.textContent = "Title updated."; }
-          await refreshPlans();
-          await loadPlan(selectedPlanId);
         } catch (err) {
           if(hint){ hint.textContent = "Rename failed: " + ((err && err.message) ? err.message : String(err)); }
+        }
+      }
+      function openAgentWithSelectedPlan(){
+        const hint = document.getElementById("planHint");
+        if(!selectedPlanId){
+          if(hint){ hint.textContent = "Select a plan first."; }
+          return;
+        }
+        try {
+          localStorage.setItem(PLAN_SELECTION_KEY, String(selectedPlanId));
+        } catch (_err) {}
+        setPane2Tab("workspace");
+        const applyToIframe = ()=>{
+          const frame = document.querySelector("#pane2Workspace iframe");
+          const frameDoc = frame && frame.contentWindow ? frame.contentWindow.document : null;
+          const sel = frameDoc ? frameDoc.getElementById("agentPlanSelect") : null;
+          if(sel){
+            sel.value = String(selectedPlanId);
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        };
+        setTimeout(applyToIframe, 120);
+        setTimeout(applyToIframe, 420);
+        if(hint){ hint.textContent = "Opened Agent tab with this plan selected."; }
+      }
+      async function normalizeSelectedPlan(){
+        const hint = document.getElementById("planHint");
+        if(!selectedPlanId){
+          if(hint){ hint.textContent = "Select a plan first."; }
+          return;
+        }
+        try {
+          const d = await fetch(withToken("/api/plans/" + encodeURIComponent(selectedPlanId) + "/normalize"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }).then((r)=>r.json());
+          if(!d || d.ok === false){
+            if(hint){ hint.textContent = "Normalize failed: " + ((d && d.error) || "unknown error"); }
+            return;
+          }
+          await refreshPlans(true);
+          await loadPlan(selectedPlanId);
+          updatePlanStructureBadge(selectedPlanMarkdown);
+          if(hint){ hint.textContent = "Plan normalized to canonical structure."; }
+        } catch (err) {
+          if(hint){ hint.textContent = "Normalize failed: " + ((err && err.message) ? err.message : String(err)); }
         }
       }
       async function refreshManagedProcessLog(id){
@@ -2834,8 +3356,10 @@ export function buildMainTerminalHtml(token?: string): string {
       document.getElementById("btnProcStart")?.addEventListener("click",()=>{ void startManagedProcess(); });
       document.getElementById("btnProcRefresh")?.addEventListener("click",()=>{ void refreshManagedProcesses(); });
       document.getElementById("btnPlanCreate")?.addEventListener("click",()=>{ void createPlan(); });
-      document.getElementById("btnPlanRefresh")?.addEventListener("click",()=>{ void refreshPlans(); });
+      document.getElementById("btnPlanRefresh")?.addEventListener("click",()=>{ void refreshPlans(true); });
       document.getElementById("btnPlanRename")?.addEventListener("click",()=>{ void renamePlanTitle(); });
+      document.getElementById("btnPlanOpenAgent")?.addEventListener("click",()=>{ openAgentWithSelectedPlan(); });
+      document.getElementById("btnPlanNormalize")?.addEventListener("click",()=>{ void normalizeSelectedPlan(); });
       document.getElementById("btnPlanGraphView")?.addEventListener("click",()=>{ setPlanGraphVisibility(!planGraphVisible); });
       document.getElementById("btnPlanGraphRebuild")?.addEventListener("click",()=>{ void rebuildPlanGraph(); });
       document.getElementById("btnPlanGraphZoomIn")?.addEventListener("click",()=>{ zoomPlanGraph(1.2); });
@@ -2849,7 +3373,209 @@ export function buildMainTerminalHtml(token?: string): string {
         applyPlanGraphViewBox();
       });
       document.getElementById("btnPlanGraphFullscreen")?.addEventListener("click",()=>{ void togglePlanGraphFullscreen(); });
-      document.addEventListener("fullscreenchange", ()=>{ updatePlanGraphFullscreenButton(); });
+      function applyPlanGraphModeUi(){
+        const btn = document.getElementById("btnPlanGraphMode");
+        const hint = document.getElementById("planGraphHint");
+        if(btn){ btn.textContent = planGraphMode === "tree" ? "Mode: Tree" : "Mode: Timeline"; }
+        if(hint){
+          hint.textContent = planGraphMode === "tree"
+            ? "Tree view: parents centered on children; tightly packed subtrees with sidequest priority shading."
+            : "Timeline view (ordered top-to-bottom) with branch lanes and latest-worked highlight.";
+        }
+      }
+      applyPlanGraphModeUi();
+      document.getElementById("btnPlanGraphMode")?.addEventListener("click",()=>{
+        planGraphMode = planGraphMode === "tree" ? "timeline" : "tree";
+        try { localStorage.setItem("winnow.planGraphMode", planGraphMode); } catch {}
+        applyPlanGraphModeUi();
+        if(selectedPlanMarkdown){ renderPlanGraph(selectedPlanMarkdown); }
+      });
+
+      let planGithubTasks = [];
+      function escHtml(s){
+        return String(s == null ? "" : s)
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      }
+      function renderPlanGithubTasks(){
+        const list = document.getElementById("planGithubTaskList");
+        if(!list){ return; }
+        if(!Array.isArray(planGithubTasks) || planGithubTasks.length === 0){
+          list.innerHTML = '<span class="muted">No tasks parsed from this plan.</span>';
+          return;
+        }
+        const rows = planGithubTasks.map((t)=>{
+          const checked = t.selected ? "checked" : "";
+          const issueRef = t.mapping && t.mapping.issueRef ? t.mapping.issueRef : "";
+          const issueUrl = t.mapping && t.mapping.issueUrl ? t.mapping.issueUrl : "";
+          const issueState = t.mapping && t.mapping.issueState ? t.mapping.issueState : "";
+          const stateBadge = issueState
+            ? '<span class="chip" style="margin-left:6px;">' + escHtml(issueState) + '</span>'
+            : '';
+          const refLink = issueUrl
+            ? '<a href="' + escHtml(issueUrl) + '" target="_blank" rel="noopener">' + escHtml(issueRef || issueUrl) + '</a>'
+            : escHtml(issueRef);
+          const optional = t.optional ? ' <span class="chip" style="background:rgba(250,204,21,0.15);">sidequest</span>' : '';
+          const done = t.done ? '✓' : '○';
+          return (
+            '<div class="planGhRow" data-key="' + escHtml(t.key) + '">' +
+              '<input type="checkbox" class="planGhCheck" ' + checked + ' />' +
+              '<span class="planGhDone">' + done + '</span>' +
+              '<span class="planGhLabel" title="' + escHtml(t.label) + '">' + escHtml(t.label) + optional + '</span>' +
+              '<input type="text" class="procInput procMeta planGhRef" placeholder="owner/repo#123" value="' + escHtml(issueRef) + '" style="width:160px;" />' +
+              '<input type="text" class="procInput procMeta planGhUrl" placeholder="https://github.com/..." value="' + escHtml(issueUrl) + '" style="width:220px;" />' +
+              '<span class="planGhStateView">' + stateBadge + (refLink ? ' <span class="muted" style="font-size:11px;">' + refLink + '</span>' : '') + '</span>' +
+              '<button type="button" class="reconnect planGhSave">Save</button>' +
+            '</div>'
+          );
+        }).join("");
+        list.innerHTML = rows;
+        list.querySelectorAll(".planGhRow").forEach((row)=>{
+          row.querySelector(".planGhCheck")?.addEventListener("change",(evt)=>{
+            const k = row.getAttribute("data-key") || "";
+            const t = planGithubTasks.find((x)=>x.key === k);
+            if(t){ t.selected = Boolean(evt.target && evt.target.checked); }
+          });
+          row.querySelector(".planGhSave")?.addEventListener("click", async ()=>{
+            const k = row.getAttribute("data-key") || "";
+            const ref = (row.querySelector(".planGhRef")?.value || "").trim();
+            const u = (row.querySelector(".planGhUrl")?.value || "").trim();
+            if(!selectedPlanId){ return; }
+            try {
+              const r = await fetch("/api/plans/" + encodeURIComponent(selectedPlanId) + "/tasks/" + encodeURIComponent(k) + "/github", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ issueRef: ref || null, issueUrl: u || null }),
+              });
+              const j = await r.json();
+              if(j && j.ok){
+                const status = document.getElementById("planGithubStatus");
+                if(status){ status.textContent = "Saved mapping for " + k; }
+                await loadPlanGithubTasks();
+              } else {
+                const status = document.getElementById("planGithubStatus");
+                if(status){ status.textContent = "Save failed: " + (j && j.error || "unknown"); }
+              }
+            } catch (err) {
+              const status = document.getElementById("planGithubStatus");
+              if(status){ status.textContent = "Save failed: " + (err && err.message || err); }
+            }
+          });
+        });
+      }
+      async function loadPlanGithubTasks(){
+        if(!selectedPlanId){ planGithubTasks = []; renderPlanGithubTasks(); return; }
+        try {
+          const r = await fetch("/api/plans/" + encodeURIComponent(selectedPlanId) + "/tasks");
+          const j = await r.json();
+          if(j && j.ok && Array.isArray(j.tasks)){
+            const prevSelected = new Set(planGithubTasks.filter((t)=>t.selected).map((t)=>t.key));
+            planGithubTasks = j.tasks.map((t)=>({ ...t, selected: prevSelected.has(t.key) }));
+            renderPlanGithubTasks();
+          }
+        } catch {}
+      }
+      function setPlanGithubPanelVisible(visible){
+        const pane = document.getElementById("planGithubPanel");
+        const btn = document.getElementById("btnPlanGithubPanel");
+        if(!pane){ return; }
+        pane.classList.toggle("isHidden", !visible);
+        if(btn){
+          btn.classList.toggle("planGhOpen", visible);
+          btn.textContent = visible ? "GitHub mapping open" : "GitHub mapping";
+          btn.setAttribute("aria-expanded", visible ? "true" : "false");
+        }
+        if(visible){ void loadPlanGithubTasks(); }
+      }
+      document.getElementById("btnPlanGithubPanel")?.addEventListener("click",()=>{
+        const pane = document.getElementById("planGithubPanel");
+        const visible = pane ? pane.classList.contains("isHidden") : true;
+        setPlanGithubPanelVisible(visible);
+      });
+      document.getElementById("btnPlanGithubClose")?.addEventListener("click",()=>{
+        setPlanGithubPanelVisible(false);
+      });
+      async function runPlanGithubSync(dryRun){
+        if(!selectedPlanId){ return; }
+        const status = document.getElementById("planGithubStatus");
+        const repo = (document.getElementById("planGithubRepo")?.value || "").trim();
+        const taskKeys = planGithubTasks.filter((t)=>t.selected).map((t)=>t.key);
+        if(status){ status.textContent = (dryRun ? "Dry-run sync…" : "Syncing…") + " (" + (taskKeys.length || "all") + " tasks)"; }
+        try {
+          const r = await fetch("/api/plans/" + encodeURIComponent(selectedPlanId) + "/github/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskKeys, repo: repo || undefined, dryRun: Boolean(dryRun) }),
+          });
+          const j = await r.json();
+          if(j && j.ok){
+            const summary = (j.results || []).reduce((acc,x)=>{ acc[x.action] = (acc[x.action]||0)+1; return acc; }, {});
+            if(status){
+              status.textContent = (dryRun ? "Dry-run: " : "Synced: ") +
+                Object.entries(summary).map(([k,v])=>k+"="+v).join(", ");
+            }
+            await loadPlanGithubTasks();
+          } else {
+            if(status){ status.textContent = "Sync failed: " + (j && j.error || "unknown"); }
+          }
+        } catch (err) {
+          if(status){ status.textContent = "Sync failed: " + (err && err.message || err); }
+        }
+      }
+      document.getElementById("btnPlanGithubSyncSelected")?.addEventListener("click",()=>{ void runPlanGithubSync(false); });
+      document.getElementById("btnPlanGithubDryRun")?.addEventListener("click",()=>{ void runPlanGithubSync(true); });
+      async function runPlanReconcile(fix){
+        if(!selectedPlanId){ return; }
+        const panel = document.getElementById("planReconcilePanel");
+        try {
+          const r = await fetch("/api/plans/" + encodeURIComponent(selectedPlanId) + "/reconcile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fix: Boolean(fix) }),
+          });
+          const j = await r.json();
+          if(!panel){ return; }
+          openPlanReconcileModal();
+          if(j && j.ok){
+            const conflicts = Array.isArray(j.conflicts) ? j.conflicts : [];
+            if(conflicts.length === 0){
+              panel.innerHTML = '<span style="color:#86efac;">Reconcile clean — no conflicts between markdown structure and stored mappings.</span>';
+              return;
+            }
+            const fixed = Array.isArray(j.fixed) ? j.fixed : [];
+            const items = conflicts.map((c)=>{
+              const wasFixed = fixed.some((f)=>f.taskKey===c.taskKey && f.kind===c.kind);
+              const tag = wasFixed ? '<span class="chip" style="background:rgba(74,222,128,0.18);">fixed</span> ' : '';
+              return '<li>' + tag + '<strong>' + escHtml(c.kind) + '</strong>' + (c.taskKey ? ' <code>' + escHtml(c.taskKey) + '</code>' : '') + ' — ' + escHtml(c.detail) + '</li>';
+            }).join("");
+            const fixBtn = fix ? '' : ' <button type="button" class="reconnect" id="btnPlanReconcileFix">Apply fixes</button>';
+            panel.innerHTML = '<div style="margin-bottom:6px;color:#fde68a;">' +
+              conflicts.length + ' conflict' + (conflicts.length===1?'':'s') + ' found.' + fixBtn + '</div>' +
+              '<ul style="margin:0;padding-left:18px;">' + items + '</ul>';
+            document.getElementById("btnPlanReconcileFix")?.addEventListener("click",()=>{ void runPlanReconcile(true); });
+          } else {
+            panel.innerHTML = '<span style="color:#fca5a5;">Reconcile failed: ' + escHtml(j && j.error || "unknown") + '</span>';
+          }
+        } catch (err) {
+          if(panel){
+            openPlanReconcileModal();
+            panel.innerHTML = '<span style="color:#fca5a5;">Reconcile failed: ' + escHtml(err && err.message || String(err)) + '</span>';
+          }
+        }
+      }
+      document.getElementById("btnPlanReconcile")?.addEventListener("click",()=>{ void runPlanReconcile(false); });
+      document.getElementById("btnPlanReconcileClose")?.addEventListener("click",()=>{ closePlanReconcileModal(); });
+      document.getElementById("planReconcileModal")?.addEventListener("click",(evt)=>{
+        if(evt.target && evt.target.id === "planReconcileModal"){ closePlanReconcileModal(); }
+      });
+      document.addEventListener("keydown",(evt)=>{
+        if(evt.key === "Escape"){
+          const modal = document.getElementById("planReconcileModal");
+          if(modal && !modal.classList.contains("isHidden")){ closePlanReconcileModal(); }
+        }
+      });
+      document.getElementById("btnPlanMdFullscreen")?.addEventListener("click",()=>{ void togglePlanMdFullscreen(); });
+      document.addEventListener("fullscreenchange", ()=>{ updatePlanGraphFullscreenButton(); updatePlanMdFullscreenButton(); });
       document.getElementById("procFilterInput")?.addEventListener("input",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procStatusFilter")?.addEventListener("change",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procCommandInput")?.addEventListener("keydown",(evt)=>{
