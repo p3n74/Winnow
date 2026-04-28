@@ -1049,7 +1049,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const expectedCursorLabel = cursorModelLabels?.get(modelPreference.trim().toLowerCase());
     const planPreamble =
       planContext && planContext.ok
-        ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan id: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
+        ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan ID: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
         : "";
     const effectivePrompt =
       graphPreamble.trim().length > 0 || planPreamble.trim().length > 0
@@ -1113,7 +1113,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       pushEvent("status", `Graph seed: prepended ${graphPreamble.length} characters of project-graph context.`);
     }
     if (planPreamble.trim().length > 0) {
-      pushEvent("status", `Plan scope: prepended context from plan "${planId}".`);
+      const scopedPlanName = planContext && planContext.ok ? planContext.title : planId;
+      pushEvent("status", `Plan scope: prepended context from plan "${scopedPlanName}".`);
     } else if (planId) {
       pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
     }

@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -35,15 +36,6 @@ export type PlanTaskNode = {
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function slugify(input: string): string {
-  const cleaned = String(input || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return cleaned || `plan-${Date.now()}`;
 }
 
 function applyTitleToMarkdownHeading(markdown: string, title: string): string {
@@ -304,12 +296,9 @@ export class PlanStore {
       throw new Error("plan store not initialized");
     }
     const title = String(input.title || "").trim() || "Untitled plan";
-    const idBase = slugify(title);
-    let id = idBase;
-    let i = 1;
+    let id = randomUUID();
     while (this.get(id)) {
-      i += 1;
-      id = `${idBase}-${i}`;
+      id = randomUUID();
     }
     const mdPath = join(this.plansDir, `${id}.md`);
     const createdAt = nowIso();
