@@ -1,7 +1,12 @@
 {
-  "scannedAt": "2026-04-26T03:54:45.480Z",
+  "scannedAt": "2026-04-28T16:01:48.305Z",
   "root": "/Users/bastionii/Documents/Github/winnow",
   "files": [
+    {
+      "relPath": ".winnow/plans/untitled-plan.md",
+      "kind": "md",
+      "size": 3450
+    },
     {
       "relPath": "docs/architecture.md",
       "kind": "md",
@@ -50,7 +55,7 @@
     {
       "relPath": "README.md",
       "kind": "md",
-      "size": 3807
+      "size": 11955
     }
   ]
 }

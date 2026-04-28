@@ -7,5 +7,13 @@
       "deepseek-reasoner",
       "deepseek-v3"
     ]
+  },
+  "universal": {
+    "provider": "universal",
+    "verifiedAt": "2026-04-26T15:02:58.566Z",
+    "models": [
+      "deepseek/deepseek-r1-0528"
+    ],
+    "baseUrl": "https://openrouter.ai/api"
   }
 }

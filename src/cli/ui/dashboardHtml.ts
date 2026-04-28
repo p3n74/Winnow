@@ -16,6 +16,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         --panel2: #050505;
         --line: rgba(34, 211, 238, 0.32);
         --line-faint: rgba(34, 211, 238, 0.12);
+        --line-hot: rgba(103, 232, 249, 0.58);
         --text: #67e8f9;
         --text-strong: #22d3ee;
         --text-neon: #22d3ee;
@@ -28,7 +29,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         --success: #22d3ee;
         --radius: 8px;
         --radius-sm: 6px;
-        --shadow: none;
+        --shadow: 0 20px 50px rgba(0, 0, 0, 0.42), 0 0 34px rgba(34, 211, 238, 0.08);
         --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       }
@@ -72,9 +73,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         gap: 8px;
         padding: 0 16px;
         border-bottom: 1px solid var(--line);
-        background: var(--panel);
-        box-shadow: none;
+        background: rgba(0, 0, 0, 0.82);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
         z-index: 10;
+        position: sticky;
+        top: 0;
+        backdrop-filter: blur(16px);
       }
       .tab {
         padding: 6px 12px;
@@ -90,8 +94,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         display: inline-flex;
         align-items: center;
       }
-      .tab:hover { color: var(--text-strong); background: rgba(34, 211, 238, 0.08); }
-      .tab.active { color: var(--text-neon); background: var(--panel2); border-color: var(--line); font-weight: 600; }
+      .tab:hover { color: var(--text-strong); background: rgba(34, 211, 238, 0.08); transform: translateY(-1px); }
+      .tab.active { color: var(--text-neon); background: #031013; border-color: var(--line-hot); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent), 0 0 18px rgba(34, 211, 238, 0.10); }
       .tab:disabled { opacity: 0.45; cursor: not-allowed; }
       .body {
         flex: 0 0 auto;
@@ -127,8 +131,19 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         gap: 12px;
         min-height: 0;
         box-shadow: var(--shadow);
+        position: relative;
       }
-      .title { font-size: 14px; font-weight: 700; color: var(--text-neon); letter-spacing: 0.02em; margin: 0; }
+      .panel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        border: 1px solid var(--line-faint);
+        opacity: 0.9;
+      }
+      .panel > * { position: relative; z-index: 1; }
+      .title { font-size: 14px; font-weight: 700; color: var(--text-neon); letter-spacing: 0.02em; margin: 0; text-transform: uppercase; }
       strong, b { color: var(--text-strong); font-weight: 700; }
       code { font-family: var(--font-mono); color: var(--text-strong); font-weight: 600; font-size: 0.95em; }
       .hint { font-size: 12px; color: var(--muted); margin: 0; font-style: italic; }
@@ -293,25 +308,114 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         letter-spacing: 0.05em;
       }
       .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
-      .metric { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg); }
+      .metric { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: rgba(0, 0, 0, 0.72); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04); }
       .metricLabel { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; margin-bottom: 4px; }
-      .metricValue { font-size: 14px; color: var(--text-strong); font-weight: 600; font-family: var(--font-mono); }
+      .metricValue { font-size: 14px; color: var(--text-strong); font-weight: 600; font-family: var(--font-mono); overflow-wrap: anywhere; }
       .metrics.dashboardMetrics {
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
       .body.dashboard-mode {
         gap: 18px;
-        padding: 18px;
+        padding: 22px;
       }
       .body.dashboard-mode .leftCol {
         max-width: 1200px;
         margin: 0 auto;
         width: 100%;
         overflow: visible;
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 18px;
       }
       .body.dashboard-mode .panel {
         padding: 18px;
         gap: 14px;
+      }
+      .dashboardHero {
+        grid-column: 1 / -1;
+        overflow: hidden;
+        padding: 24px;
+        border: 1px solid var(--line-hot);
+        border-radius: calc(var(--radius) + 4px);
+        background: #000;
+        box-shadow: var(--shadow), inset 0 0 0 1px rgba(34, 211, 238, 0.08);
+        position: relative;
+      }
+      .dashboardHero::after {
+        content: "WINNOW//CLI-OS";
+        position: absolute;
+        right: 18px;
+        top: 14px;
+        pointer-events: none;
+        color: rgba(34, 211, 238, 0.2);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 0.22em;
+      }
+      .dashboardHeroMain {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: end;
+      }
+      .dashboardEyebrow {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      .dashboardHero h1 {
+        margin: 4px 0 6px;
+        color: var(--text-neon);
+        font-size: clamp(26px, 4vw, 44px);
+        line-height: 1;
+        letter-spacing: -0.045em;
+        text-shadow: 0 0 28px rgba(34, 211, 238, 0.34);
+      }
+      .dashboardHero p {
+        max-width: 680px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .dashboardHeroStats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+        gap: 10px;
+        min-width: min(440px, 100%);
+      }
+      .dashboardHeroStat {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.64);
+      }
+      .dashboardHeroStat span {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-style: italic;
+      }
+      .dashboardHeroStat strong {
+        display: block;
+        margin-top: 2px;
+        font-family: var(--font-mono);
+        font-size: 15px;
+      }
+      .body.dashboard-mode .dashboard-system,
+      .body.dashboard-mode .dashboard-usage {
+        grid-column: span 7;
+      }
+      .body.dashboard-mode .dashboard-lastrun,
+      .body.dashboard-mode .dashboard-disk,
+      .body.dashboard-mode .dashboard-github,
+      .body.dashboard-mode .dashboard-projects {
+        grid-column: span 5;
       }
       .body.dashboard-mode .title {
         font-size: 15px;
@@ -386,6 +490,134 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         padding-top: 4px;
         border-top: 1px solid var(--line-faint);
       }
+      .systemStatusHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: #020808;
+      }
+      .systemStatusLabel,
+      .githubKicker {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .systemHealthText {
+        color: var(--text-strong);
+        font-family: var(--font-mono);
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .healthPill {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        padding: 4px 9px;
+        text-transform: uppercase;
+      }
+      .healthPill.warn { border-color: #fbbf24; color: #fbbf24; }
+      .healthPill.critical { border-color: var(--danger); color: var(--danger); }
+      .systemRails {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .systemRail {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
+      }
+      .railTop {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 11px;
+      }
+      .railTrack {
+        height: 8px;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: #000;
+        overflow: hidden;
+      }
+      .railFill {
+        width: 0%;
+        height: 100%;
+        background: var(--accent);
+        box-shadow: 0 0 10px rgba(34, 211, 238, 0.45);
+      }
+      .railFill.warn { background: #fbbf24; box-shadow: 0 0 10px rgba(251, 191, 36, 0.35); }
+      .railFill.critical { background: var(--danger); box-shadow: 0 0 10px rgba(255, 45, 45, 0.35); }
+      .githubSummary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .githubNoticeList {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .githubNotice {
+        border: 1px solid var(--line-faint);
+        border-radius: var(--radius-sm);
+        padding: 8px 10px;
+        background: #020808;
+      }
+      .githubNoticeTop {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: start;
+      }
+      .githubNoticeTitle {
+        color: var(--text-strong);
+        font-weight: 700;
+        line-height: 1.35;
+      }
+      .githubNoticeMeta {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      .githubNoticeActions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .githubNoticeAction {
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        text-decoration: none;
+      }
+      .githubNoticeAction:hover { text-decoration: underline; }
+      .githubState {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        padding: 2px 7px;
+        text-transform: uppercase;
+      }
+      .githubState.open { color: #86efac; border-color: rgba(134, 239, 172, 0.65); }
+      .githubState.closed { color: var(--red-pastel); border-color: rgba(255, 77, 77, 0.65); }
       .projectToolbar {
         display: flex;
         flex-wrap: wrap;
@@ -560,10 +792,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       .body.dashboard-mode .usageToolbar {
         display: grid;
         grid-template-columns: repeat(3, minmax(180px, 1fr));
-        padding: 8px 10px;
+        padding: 10px;
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        background: var(--line-faint);
+        background: rgba(34, 211, 238, 0.07);
         gap: 8px;
       }
       .body.dashboard-mode .usageToolbar label {
@@ -599,6 +831,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         flex: 0 0 auto;
         align-self: stretch;
         margin-top: 2px;
+        border: 1px solid var(--line-faint);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        background: rgba(0, 0, 0, 0.42);
       }
       .usageChartWrap canvas {
         width: 100% !important;
@@ -625,7 +861,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         flex: 0 0 auto;
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
-        background: var(--bg);
+        background: rgba(0, 0, 0, 0.64);
         max-height: 220px;
         margin-top: 4px;
       }
@@ -638,7 +874,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         border: 1px solid var(--line);
         border-radius: var(--radius-sm);
         padding: 6px;
-        background: var(--bg);
+        background: rgba(0, 0, 0, 0.56);
         min-height: 160px;
       }
       .body.dashboard-mode #projectList.projectList {
@@ -662,6 +898,14 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       .body.dashboard-mode .usageTable tbody tr:hover td {
         background: var(--line-faint);
       }
+      .diskSummary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .diskSummary .metric {
+        min-width: 0;
+      }
       @media (max-width: 1280px) {
         .body {
           grid-template-columns: minmax(320px, 42%) minmax(0, 1fr);
@@ -676,6 +920,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       @media (max-width: 960px) {
         .body {
           grid-template-columns: 1fr;
+        }
+        .dashboardHeroMain {
+          grid-template-columns: 1fr;
+        }
+        .body.dashboard-mode .leftCol {
+          display: flex;
         }
         .body.dashboard-mode .panel {
           padding: 14px;
@@ -696,6 +946,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         }
       }
       @media (max-width: 780px) {
+        .dashboardHeroStats,
+        .diskSummary,
+        .githubSummary,
+        .systemRails {
+          grid-template-columns: 1fr;
+        }
         .body.dashboard-mode .usageToolbar {
           grid-template-columns: 1fr;
         }
@@ -726,8 +982,43 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       <div class="body">
         <div class="leftCol">
           <!-- Dashboard specific panels -->
+          <section class="dashboardHero dashboard-only" aria-label="Dashboard overview">
+            <div class="dashboardHeroMain">
+              <div>
+                <div class="dashboardEyebrow">Winnow Command Center</div>
+                <h1>Dashboard</h1>
+                <p>Live system health, agent activity, disk pressure, usage trends, and recent project context in one place.</p>
+              </div>
+              <div class="dashboardHeroStats" aria-label="Dashboard refresh details">
+                <div class="dashboardHeroStat"><span>System</span><strong>15s live</strong></div>
+                <div class="dashboardHeroStat"><span>Usage</span><strong>Global</strong></div>
+                <div class="dashboardHeroStat"><span>Projects</span><strong>.winnow</strong></div>
+              </div>
+            </div>
+          </section>
           <div class="panel dashboard-only dashboard-panel dashboard-system">
             <div class="title">System Status</div>
+            <div class="systemStatusHeader">
+              <div>
+                <div class="systemStatusLabel">sys.health</div>
+                <div id="sysHealthText" class="systemHealthText">Boot sequence...</div>
+              </div>
+              <div id="sysHealthPill" class="healthPill">sampling</div>
+            </div>
+            <div class="systemRails" aria-label="System live rails">
+              <div class="systemRail">
+                <div class="railTop"><span>CPU</span><span id="sysCpuRailValue">--</span></div>
+                <div class="railTrack"><div id="sysCpuRail" class="railFill"></div></div>
+              </div>
+              <div class="systemRail">
+                <div class="railTop"><span>MEM</span><span id="sysMemRailValue">--</span></div>
+                <div class="railTrack"><div id="sysMemRail" class="railFill"></div></div>
+              </div>
+              <div class="systemRail">
+                <div class="railTop"><span>BAT</span><span id="sysBatteryRailValue">--</span></div>
+                <div class="railTrack"><div id="sysBatteryRail" class="railFill"></div></div>
+              </div>
+            </div>
             <div class="metrics dashboardMetrics">
               <div class="metric"><div class="metricLabel">Platform</div><div class="metricValue" id="sysPlatform">...</div></div>
               <div class="metric"><div class="metricLabel">CPU</div><div class="metricValue" id="sysCpus">...</div></div>
@@ -764,6 +1055,23 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           <div class="panel dashboard-only dashboard-panel dashboard-lastrun">
             <div class="title">Last agent run</div>
             <div id="lastRunContent" class="muted small">Loading…</div>
+          </div>
+
+          <div class="panel dashboard-only dashboard-panel dashboard-github">
+            <div class="row" style="justify-content:space-between;align-items:center;gap:8px">
+              <div>
+                <div class="title">GitHub Inbox</div>
+                <div class="githubKicker">plan task triage queue</div>
+              </div>
+              <button type="button" id="githubNotificationsRefreshBtn" onclick="refreshGithubNotifications()">Refresh</button>
+            </div>
+            <div class="githubSummary">
+              <div class="metric"><div class="metricLabel">Inbox</div><div class="metricValue" id="ghInboxCount">0</div></div>
+              <div class="metric"><div class="metricLabel">Needs sync</div><div class="metricValue" id="ghNeedsSyncCount">0</div></div>
+              <div class="metric"><div class="metricLabel">Unlinked</div><div class="metricValue" id="ghUnlinkedCount">0</div></div>
+            </div>
+            <div id="githubNotificationsList" class="githubNoticeList small muted">Loading GitHub inbox...</div>
+            <p class="hint">Triage plan tasks with missing issue links, unknown issue state, or stale open/closed mappings.</p>
           </div>
 
           <div class="panel dashboard-only dashboard-panel dashboard-disk">
@@ -1402,17 +1710,36 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           document.getElementById('sysNode').textContent = sys.nodeVersion || '-';
           document.getElementById('sysLoadAvg').textContent = Array.isArray(sys.loadAvg) ? sys.loadAvg.map(v => Number(v).toFixed(2)).join(' / ') : '-';
           if(liveRes && liveRes.ok){
-            document.getElementById('sysCpuPct').textContent = Number.isFinite(liveRes.cpuPercent) ? (Number(liveRes.cpuPercent).toFixed(1) + '%') : 'sampling…';
-            document.getElementById('sysMemUsedPct').textContent = Number.isFinite(liveRes.memUsedPercent) ? (Number(liveRes.memUsedPercent).toFixed(1) + '%') : '-';
+            const cpuPct = Number(liveRes.cpuPercent);
+            const memPct = Number(liveRes.memUsedPercent);
+            const battRaw = Number(liveRes.batteryPercent);
+            document.getElementById('sysCpuPct').textContent = Number.isFinite(cpuPct) ? (cpuPct.toFixed(1) + '%') : 'sampling…';
+            document.getElementById('sysMemUsedPct').textContent = Number.isFinite(memPct) ? (memPct.toFixed(1) + '%') : '-';
             const battPct = Number.isFinite(liveRes.batteryPercent) ? (String(Math.round(Number(liveRes.batteryPercent))) + '%') : null;
             const battState = liveRes.batteryCharging === true ? 'charging' : liveRes.batteryCharging === false ? 'battery' : null;
             document.getElementById('sysBattery').textContent = [battPct, battState].filter(Boolean).join(' · ') || 'unavailable';
             document.getElementById('sysThermal').textContent = liveRes.thermalState || 'unknown';
+            setRail('sysCpuRail', cpuPct);
+            setRail('sysMemRail', memPct);
+            setRail('sysBatteryRail', battRaw, !Number.isFinite(battRaw));
+            const battRail = document.getElementById('sysBatteryRail');
+            if(battRail){
+              battRail.classList.remove('warn', 'critical');
+              if(Number.isFinite(battRaw) && liveRes.batteryCharging !== true){
+                battRail.classList.toggle('warn', battRaw <= 25 && battRaw > 10);
+                battRail.classList.toggle('critical', battRaw <= 10);
+              }
+            }
+            updateSystemHealth(liveRes);
           } else {
             document.getElementById('sysCpuPct').textContent = 'unavailable';
             document.getElementById('sysMemUsedPct').textContent = '-';
             document.getElementById('sysBattery').textContent = 'unavailable';
             document.getElementById('sysThermal').textContent = 'unknown';
+            setRail('sysCpuRail', 0, true);
+            setRail('sysMemRail', 0, true);
+            setRail('sysBatteryRail', 0, true);
+            updateSystemHealth({ ok: false });
           }
           document.getElementById('sysRefreshedAt').textContent = 'Updated ' + new Date().toLocaleTimeString();
           await refreshSystemTrend();
@@ -1541,6 +1868,59 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           .replace(/"/g, '&quot;');
       }
 
+      function setRail(id, value, unavailable){
+        const rail = document.getElementById(id);
+        const label = document.getElementById(id + 'Value');
+        const n = Number(value);
+        const valid = !unavailable && Number.isFinite(n);
+        if(label){ label.textContent = valid ? (Math.round(n) + '%') : '--'; }
+        if(!rail){ return; }
+        rail.classList.remove('warn', 'critical');
+        rail.style.width = valid ? (Math.max(0, Math.min(100, n)) + '%') : '0%';
+        if(valid && n >= 90){ rail.classList.add('critical'); }
+        else if(valid && n >= 75){ rail.classList.add('warn'); }
+      }
+
+      function updateSystemHealth(liveRes){
+        const text = document.getElementById('sysHealthText');
+        const pill = document.getElementById('sysHealthPill');
+        if(!pill || !text){ return; }
+        const cpu = Number(liveRes && liveRes.cpuPercent);
+        const mem = Number(liveRes && liveRes.memUsedPercent);
+        const battery = Number(liveRes && liveRes.batteryPercent);
+        const charging = liveRes && liveRes.batteryCharging === true;
+        const thermal = String((liveRes && liveRes.thermalState) || '').toLowerCase();
+        const thermalBad = thermal && !['nominal', 'unknown', ''].includes(thermal);
+        const critical =
+          (Number.isFinite(cpu) && cpu >= 90) ||
+          (Number.isFinite(mem) && mem >= 92) ||
+          (Number.isFinite(battery) && battery <= 10 && !charging) ||
+          ['serious', 'critical'].includes(thermal);
+        const warn =
+          critical ||
+          (Number.isFinite(cpu) && cpu >= 75) ||
+          (Number.isFinite(mem) && mem >= 80) ||
+          (Number.isFinite(battery) && battery <= 25 && !charging) ||
+          thermalBad;
+        pill.classList.remove('warn', 'critical');
+        if(critical){
+          text.textContent = 'CRITICAL LOAD';
+          pill.textContent = 'critical';
+          pill.classList.add('critical');
+        } else if(warn){
+          text.textContent = 'ATTENTION REQUIRED';
+          pill.textContent = 'warn';
+          pill.classList.add('warn');
+        } else if(liveRes && liveRes.ok){
+          text.textContent = 'NOMINAL';
+          pill.textContent = 'online';
+        } else {
+          text.textContent = 'TELEMETRY LIMITED';
+          pill.textContent = 'limited';
+          pill.classList.add('warn');
+        }
+      }
+
       async function refreshLastAgentPanel() {
         const el = document.getElementById('lastRunContent');
         if (!el) { return; }
@@ -1590,6 +1970,121 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         }
       }
 
+      function setGithubSummary(inbox, needsSync, unlinked){
+        const inboxEl = document.getElementById('ghInboxCount');
+        const needsEl = document.getElementById('ghNeedsSyncCount');
+        const unlinkedEl = document.getElementById('ghUnlinkedCount');
+        if(inboxEl){ inboxEl.textContent = String(inbox); }
+        if(needsEl){ needsEl.textContent = String(needsSync); }
+        if(unlinkedEl){ unlinkedEl.textContent = String(unlinked); }
+      }
+
+      async function refreshGithubNotifications(){
+        const root = document.getElementById('githubNotificationsList');
+        const btn = document.getElementById('githubNotificationsRefreshBtn');
+        if(!root){ return; }
+        if(btn){ btn.disabled = true; }
+        root.textContent = 'Scanning GitHub inbox...';
+        try {
+          const plansData = await fetch(withToken('/api/plans')).then((r) => r.json());
+          const plans = plansData && Array.isArray(plansData.plans) ? plansData.plans : [];
+          if(!plans.length){
+            setGithubSummary(0, 0, 0);
+            root.innerHTML = '<div class="muted">No plans found. Create a plan to start feeding the GitHub inbox.</div>';
+            return;
+          }
+          const taskGroups = await Promise.all(plans.slice(0, 12).map(async function(plan){
+            try {
+              const data = await fetch(withToken('/api/plans/' + encodeURIComponent(plan.id) + '/tasks')).then((r) => r.json());
+              return { plan: plan, tasks: data && Array.isArray(data.tasks) ? data.tasks : [] };
+            } catch (_err) {
+              return { plan: plan, tasks: [] };
+            }
+          }));
+          let linked = 0;
+          let needsSync = 0;
+          let unlinked = 0;
+          const notices = [];
+          taskGroups.forEach(function(group){
+            (group.tasks || []).forEach(function(task){
+              const mapping = task.mapping || null;
+              const issueRef = mapping && mapping.issueRef ? String(mapping.issueRef) : '';
+              const issueUrl = mapping && mapping.issueUrl ? String(mapping.issueUrl) : '';
+              const issueState = mapping && mapping.issueState ? String(mapping.issueState).toLowerCase() : '';
+              const hasIssue = Boolean(issueRef || issueUrl);
+              const desired = task.done ? 'closed' : 'open';
+              if(hasIssue){
+                linked += 1;
+                if(issueState && issueState !== desired){
+                  needsSync += 1;
+                  notices.push({
+                    kind: 'State drift',
+                    state: issueState,
+                    title: task.label || task.key,
+                    plan: group.plan.title || group.plan.id,
+                    ref: issueRef || issueUrl,
+                    url: issueUrl,
+                    detail: 'Plan says ' + desired + ', mapping says ' + issueState + '.',
+                  });
+                } else if(!issueState){
+                  needsSync += 1;
+                  notices.push({
+                    kind: 'Unknown state',
+                    state: 'unknown',
+                    title: task.label || task.key,
+                    plan: group.plan.title || group.plan.id,
+                    ref: issueRef || issueUrl,
+                    url: issueUrl,
+                    detail: 'Issue is linked but has no recorded open/closed state.',
+                  });
+                }
+                return;
+              }
+              if(!task.done && !task.optional){
+                unlinked += 1;
+                notices.push({
+                  kind: 'Unlinked task',
+                  state: 'open',
+                  title: task.label || task.key,
+                  plan: group.plan.title || group.plan.id,
+                  ref: '',
+                  url: '',
+                  detail: 'Primary open task has no GitHub issue mapping.',
+                });
+              }
+            });
+          });
+          setGithubSummary(notices.length, needsSync, unlinked);
+          if(notices.length === 0){
+            root.innerHTML = '<div class="muted">GitHub inbox clear. Linked plan tasks match their recorded issue state.</div>';
+            return;
+          }
+          root.innerHTML = notices.slice(0, 6).map(function(n){
+            const kindClass = String(n.kind || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const ref = n.url
+              ? '<a href="' + escAttr(n.url) + '" target="_blank" rel="noopener">' + escAttr(n.ref || n.url) + '</a>'
+              : escAttr(n.ref || n.kind);
+            const actions = n.url
+              ? '<div class="githubNoticeActions"><a class="githubNoticeAction" href="' + escAttr(n.url) + '" target="_blank" rel="noopener">Open issue</a></div>'
+              : '';
+            return '<div class="githubNotice">' +
+              '<div class="githubNoticeTop">' +
+                '<div><div class="githubNoticeTitle">' + escAttr(n.title) + '</div>' +
+                '<div class="githubNoticeMeta">' + escAttr(n.plan) + ' / ' + ref + '</div></div>' +
+                '<span class="githubState ' + escAttr(kindClass) + '">' + escAttr(n.kind || n.state) + '</span>' +
+              '</div>' +
+              '<div class="small muted" style="margin-top:6px">' + escAttr(n.detail) + '</div>' +
+              actions +
+            '</div>';
+          }).join('');
+        } catch (_err) {
+          setGithubSummary(0, 0, 0);
+          root.textContent = 'Could not load GitHub inbox.';
+        } finally {
+          if(btn){ btn.disabled = false; }
+        }
+      }
+
       async function refreshDiskDashboard() {
         const c = document.getElementById('diskContent');
         const note = document.getElementById('diskNote');
@@ -1621,7 +2116,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               return '<tr><td class="small">' + escAttr(p.name) + '</td><td class="small">' + escAttr(p.path) + '</td><td class="small">' + escAttr(fmtBytes(p.sizeBytes)) + tag + '</td></tr>';
             }).join('');
             c.innerHTML =
-              '<p class="small" style="margin:0 0 8px 0">Volume of workspace: <code>' + escAttr(pvol) + '</code> — free ' + escAttr(freeL) + (totL !== '—' ? (' / ' + escAttr(totL) + ' total') : '') + '</p>' +
+              '<div class="diskSummary">' +
+              '<div class="metric"><div class="metricLabel">Workspace volume</div><div class="metricValue">' + escAttr(freeL) + '</div><div class="hint">free' + (totL !== '—' ? (' / ' + escAttr(totL) + ' total') : '') + '</div></div>' +
+              '<div class="metric"><div class="metricLabel">Volume path</div><div class="metricValue" title="' + escAttr(pvol) + '">' + escAttr(pvol) + '</div></div>' +
+              '</div>' +
               (d.workspaceRoot ? ('<p class="hint" style="margin:0 0 6px 0">Workspace: <code>' + escAttr(d.workspaceRoot) + '</code></p>') : '') +
               (rows
                 ? ('<div style="overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm);max-height:180px"><table class="usageTable"><thead><tr><th>Project</th><th>Path</th><th>Size (latest)</th></tr></thead><tbody>' + rows + '</tbody></table></div>')
@@ -2226,6 +2724,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           body.classList.add('dashboard-mode');
           refreshSystemInfo();
           void refreshLastAgentPanel();
+          void refreshGithubNotifications();
           void refreshDiskDashboard();
           refreshProjects();
           refreshUsageDashboard();

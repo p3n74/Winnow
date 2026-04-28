@@ -1,0 +1,272 @@
+[
+  {
+    "sampledAt": "2026-04-27T06:33:48.460Z",
+    "cpuPercent": null,
+    "memUsedPercent": 97.95074462890625,
+    "memUsedBytes": 8413904896,
+    "batteryPercent": 70,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:34:03.459Z",
+    "cpuPercent": 20.664824583437998,
+    "memUsedPercent": 97.33238220214844,
+    "memUsedBytes": 8360787968,
+    "batteryPercent": 70,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:34:18.441Z",
+    "cpuPercent": 21.39023981217508,
+    "memUsedPercent": 98.57940673828125,
+    "memUsedBytes": 8467906560,
+    "batteryPercent": 70,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:34:33.605Z",
+    "cpuPercent": 21.774794929157345,
+    "memUsedPercent": 98.2492446899414,
+    "memUsedBytes": 8439545856,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:34:48.597Z",
+    "cpuPercent": 20.16264252179745,
+    "memUsedPercent": 98.58627319335938,
+    "memUsedBytes": 8468496384,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:35:03.598Z",
+    "cpuPercent": 16.442025952281288,
+    "memUsedPercent": 99.11766052246094,
+    "memUsedBytes": 8514142208,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:35:18.612Z",
+    "cpuPercent": 27.03765690376569,
+    "memUsedPercent": 94.34432983398438,
+    "memUsedBytes": 8104116224,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:35:33.464Z",
+    "cpuPercent": 23.216700473292764,
+    "memUsedPercent": 98.44532012939453,
+    "memUsedBytes": 8456388608,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:35:48.458Z",
+    "cpuPercent": 29.70330129544505,
+    "memUsedPercent": 97.38292694091797,
+    "memUsedBytes": 8365129728,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:36:03.457Z",
+    "cpuPercent": 29.909819639278556,
+    "memUsedPercent": 98.67877960205078,
+    "memUsedBytes": 8476442624,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:36:13.185Z",
+    "cpuPercent": null,
+    "memUsedPercent": 97.58872985839844,
+    "memUsedBytes": 8382808064,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:36:28.142Z",
+    "cpuPercent": 32.670192226978926,
+    "memUsedPercent": 95.94459533691406,
+    "memUsedBytes": 8241577984,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:36:43.143Z",
+    "cpuPercent": 21.89695550351288,
+    "memUsedPercent": 97.30548858642578,
+    "memUsedBytes": 8358477824,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:36:58.140Z",
+    "cpuPercent": 21.626818257816417,
+    "memUsedPercent": 98.08616638183594,
+    "memUsedBytes": 8425537536,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:37:13.086Z",
+    "cpuPercent": 29.880344741025855,
+    "memUsedPercent": 98.32305908203125,
+    "memUsedBytes": 8445886464,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:37:28.088Z",
+    "cpuPercent": 14.585949928828605,
+    "memUsedPercent": 96.86012268066406,
+    "memUsedBytes": 8320221184,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:37:43.088Z",
+    "cpuPercent": 9.882018241151368,
+    "memUsedPercent": 97.97630310058594,
+    "memUsedBytes": 8416100352,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:37:58.085Z",
+    "cpuPercent": 9.683629059256779,
+    "memUsedPercent": 98.68412017822266,
+    "memUsedBytes": 8476901376,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:38:13.071Z",
+    "cpuPercent": 34.944705093833775,
+    "memUsedPercent": 97.79834747314453,
+    "memUsedBytes": 8400814080,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:38:28.082Z",
+    "cpuPercent": 18.114247536328712,
+    "memUsedPercent": 97.9156494140625,
+    "memUsedBytes": 8410890240,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:38:43.086Z",
+    "cpuPercent": 8.047802105966905,
+    "memUsedPercent": 97.60417938232422,
+    "memUsedBytes": 8384135168,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:38:58.082Z",
+    "cpuPercent": 6.327315279170846,
+    "memUsedPercent": 98.22349548339844,
+    "memUsedBytes": 8437334016,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:39:13.094Z",
+    "cpuPercent": 13.051839464882944,
+    "memUsedPercent": 99.21016693115234,
+    "memUsedBytes": 8522088448,
+    "batteryPercent": 69,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:39:28.074Z",
+    "cpuPercent": 14.030526668903054,
+    "memUsedPercent": 99.13997650146484,
+    "memUsedBytes": 8516059136,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:39:43.074Z",
+    "cpuPercent": 15.042692114515319,
+    "memUsedPercent": 98.66867065429688,
+    "memUsedBytes": 8475574272,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:39:58.071Z",
+    "cpuPercent": 12.258226576237126,
+    "memUsedPercent": 98.1637954711914,
+    "memUsedBytes": 8432205824,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:40:13.085Z",
+    "cpuPercent": 23.694342149313695,
+    "memUsedPercent": 98.32687377929688,
+    "memUsedBytes": 8446214144,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:40:28.087Z",
+    "cpuPercent": 14.242652599849285,
+    "memUsedPercent": 95.97816467285156,
+    "memUsedBytes": 8244461568,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:40:43.084Z",
+    "cpuPercent": 10.857190691444835,
+    "memUsedPercent": 96.85783386230469,
+    "memUsedBytes": 8320024576,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  },
+  {
+    "sampledAt": "2026-04-27T06:40:58.089Z",
+    "cpuPercent": 13.477788003011796,
+    "memUsedPercent": 98.94790649414062,
+    "memUsedBytes": 8499560448,
+    "batteryPercent": 68,
+    "batteryCharging": false,
+    "thermalState": "Note: No thermal warning level has been recorded"
+  }
+]
