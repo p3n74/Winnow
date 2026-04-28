@@ -2444,11 +2444,11 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const continueMode = document.getElementById('continueMode').checked;
         const select = document.getElementById('agentSessionSelect');
         const pickedSession = (select?.value || selectedResumeSessionId || '').trim();
-        const candidateResume = continueMode ? (pickedSession || selectedResumeSessionId || activeSessionId || '') : '';
-        // Only forward UUID-style Cursor chat ids; other ids (Winnow-generated, etc.)
-        // make cursor-agent silently downgrade to the Auto model.
-        const isCursorChatId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidateResume);
-        const resumeSessionId = isCursorChatId ? candidateResume : '';
+        const localSessionId = continueMode ? (pickedSession || selectedResumeSessionId || activeSessionId || '') : '';
+        // Only forward UUID-style Cursor chat ids to cursor-agent resume.
+        // Winnow session ids are still valid for local transcript continuation.
+        const isCursorChatId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localSessionId);
+        const resumeSessionId = isCursorChatId ? localSessionId : '';
         const baseArgs = (document.getElementById('agentArgs').value || '').trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\s)--resume\s+\S+/g, '').trim();
         const effectiveArgs = resumeSessionId
@@ -2460,7 +2460,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           modelPreference: document.getElementById('agentModelPref').value,
           autonomyMode: document.getElementById('autonomyMode').checked,
           graphSeed: document.getElementById('graphSeedMode').checked,
-          sessionId: resumeSessionId || undefined,
+          sessionId: localSessionId || undefined,
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;

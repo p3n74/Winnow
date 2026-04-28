@@ -46,6 +46,7 @@ import { SystemTelemetryStore } from "../data/systemTelemetryStore.js";
 import { ProcessManager } from "../data/processManager.js";
 import { buildEfficiencyAdvisories } from "../data/efficiencyAdvisor.js";
 import { PlanStore } from "../data/planStore.js";
+import { reconcilePlan, syncPlanTasksToGithub } from "../data/planGithubSync.js";
 import {
   ensureCursorWorkspaceLayout,
   ensureCursorWorkspaceLayoutSync,
@@ -1048,7 +1049,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const expectedCursorLabel = cursorModelLabels?.get(modelPreference.trim().toLowerCase());
     const planPreamble =
       planContext && planContext.ok
-        ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan id: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
+        ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan ID: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
         : "";
     const effectivePrompt =
       graphPreamble.trim().length > 0 || planPreamble.trim().length > 0
@@ -1112,7 +1113,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       pushEvent("status", `Graph seed: prepended ${graphPreamble.length} characters of project-graph context.`);
     }
     if (planPreamble.trim().length > 0) {
-      pushEvent("status", `Plan scope: prepended context from plan "${planId}".`);
+      const scopedPlanName = planContext && planContext.ok ? planContext.title : planId;
+      pushEvent("status", `Plan scope: prepended context from plan "${scopedPlanName}".`);
     } else if (planId) {
       pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
     }
@@ -1579,6 +1581,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname.startsWith("/api/plans/") && url.pathname.endsWith("/tasks") && req.method === "GET") {
+      const id = decodeURIComponent(url.pathname.slice("/api/plans/".length, -"/tasks".length)).trim();
+      try {
+        const tasks = planStore.listTasks(id);
+        sendJson(res, 200, { ok: true, planId: id, tasks });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (url.pathname.startsWith("/api/plans/") && req.method === "GET") {
       const id = decodeURIComponent(url.pathname.slice("/api/plans/".length)).trim();
       const body = await readPlanMarkdown(id);
@@ -1586,7 +1599,65 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
-    if (url.pathname.startsWith("/api/plans/") && !url.pathname.endsWith("/normalize") && req.method === "POST") {
+    {
+      const reconcileMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/reconcile$/);
+      if (reconcileMatch && req.method === "POST") {
+        const id = decodeURIComponent(reconcileMatch[1]).trim();
+        try {
+          const body = (await readJsonBody(req).catch(() => ({}))) as { fix?: boolean };
+          const report = reconcilePlan(planStore, id, { fix: Boolean(body && body.fix) });
+          sendJson(res, report.ok ? 200 : 400, report);
+        } catch (error) {
+          sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+    }
+
+    {
+      const syncMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/github\/sync$/);
+      if (syncMatch && req.method === "POST") {
+        const id = decodeURIComponent(syncMatch[1]).trim();
+        try {
+          const body = (await readJsonBody(req)) as {
+            taskKeys?: string[];
+            repo?: string;
+            dryRun?: boolean;
+          };
+          const result = await syncPlanTasksToGithub(planStore, id, {
+            taskKeys: Array.isArray(body.taskKeys) ? body.taskKeys.map(String) : [],
+            repo: typeof body.repo === "string" ? body.repo : undefined,
+            dryRun: Boolean(body.dryRun),
+          });
+          sendJson(res, result.ok ? 200 : 400, result);
+        } catch (error) {
+          sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+    }
+
+    {
+      const ghMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/tasks\/([^/]+)\/github$/);
+      if (ghMatch && req.method === "POST") {
+        const id = decodeURIComponent(ghMatch[1]).trim();
+        const taskKey = decodeURIComponent(ghMatch[2]).trim();
+        try {
+          const body = (await readJsonBody(req)) as {
+            issueRef?: string | null;
+            issueUrl?: string | null;
+            issueState?: string | null;
+          };
+          const mapping = planStore.setTaskMapping(id, taskKey, body);
+          sendJson(res, 200, { ok: true, mapping });
+        } catch (error) {
+          sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+    }
+
+    if (url.pathname.startsWith("/api/plans/") && !url.pathname.endsWith("/normalize") && !url.pathname.endsWith("/tasks") && !/\/tasks\/[^/]+\/github$/.test(url.pathname) && !url.pathname.endsWith("/github/sync") && !url.pathname.endsWith("/reconcile") && req.method === "POST") {
       const id = decodeURIComponent(url.pathname.slice("/api/plans/".length)).trim();
       try {
         const body = (await readJsonBody(req)) as {
