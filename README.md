@@ -24,6 +24,33 @@ Winnow closes that gap:
 - **Opinionated where it matters**: practical defaults, focused controls, and quick actions that remove friction.
 - **Extensible by design**: `.winnow` workspace data, local session artifacts, and modular CLI/UI code make experimentation straightforward.
 
+## Visual tour
+
+| Dashboard | Main grid |
+| --- | --- |
+| <img src="./Dashboard_screenshot.png" alt="Winnow dashboard showing system health and the last agent run" width="480"> | <img src="./MainGrid_screenshot.png" alt="Winnow main grid with terminal panes and the agent companion" width="480"> |
+| Live system health, recent agent activity, usage context, and project status in one command center. | A multi-pane operating surface with terminal tools on the left and agent, shell, docs, graph, plans, and process controls on the right. |
+
+| Docs | Project graph |
+| --- | --- |
+| <img src="./MDViewer_screenshot.png" alt="Workspace docs viewer rendering Markdown graph documentation" width="480"> | <img src="./Graphview_screenshot.png" alt="Project graph explorer showing technical dependencies" width="480"> |
+| Indexed Markdown and PDF docs render inside the companion pane, keeping project reference material close to the work. | The technical graph exposes files, symbols, dependencies, and business views for faster codebase navigation. |
+
+| Focused graph | Planning workspace |
+| --- | --- |
+| <img src="./FocusedGraphView_Screenshot.png" alt="Focused project graph centered on one symbol and its connections" width="480"> | <img src="./PlanningWindow_Screentshot.png" alt="Planning workspace with an agent-managed plan rendered as Markdown" width="480"> |
+| Drill into a symbol or file to inspect local and external dependencies without losing surrounding context. | Agent-managed plans keep goals, completed work, next tasks, graph views, and GitHub mapping in the workspace. |
+
+| Plan timeline | GitHub issue mapping |
+| --- | --- |
+| <img src="./PlanTimelineGraph_screenshot.png" alt="Plan timeline graph showing completed and upcoming tasks" width="480"> | <img src="./PlanningWindowGHIssueController_screenshot.png" alt="GitHub issue mapping for plan tasks" width="480"> |
+| Timeline and tree views turn plans into navigable execution maps with completed, active, and next-task sections. | Plan tasks can be mapped to GitHub issues, synced selectively, and previewed before changes are pushed upstream. |
+
+| Managed processes |
+| --- |
+| <img src="./ProcessManager_screenshot.png" alt="Managed process panel showing npm build and test runs with logs" width="640"> |
+| Start, track, filter, and inspect long-running commands from the same companion pane used for agent work. |
+
 ## Features
 
 ### CLI and sessions
@@ -36,10 +63,12 @@ Winnow closes that gap:
 ### Web companion UI (`winnow ui`)
 
 - **Dashboard** — system snapshot, disk summary, registered projects, usage runs and filters, and the last agent run recap.
-- **Agent workspace** — selectable models (including externally advertised lists where configured), resume picker for prior sessions, execution-mode style controls, streaming run timeline (thinking + chat), and run / cancel / stop wired to the agent API. Optional **graph seed** mode prepends Winnow graph hints to narrow agent scope.
-- **Main grid** — five configurable terminal panes (xterm + WebSocket PTYs), per-pane reconnect, and a **Workspace** companion with tabs for embedded Cursor host, shell, **Docs**, and a **Graph** overlay.
+- **Agent workspace** — selectable models (including externally advertised lists where configured), resume picker for prior sessions, execution-mode style controls, streaming run timeline (thinking + chat), and run / cancel / stop wired to the agent API. Optional **Heuristic Engine** mode injects ranked project-graph context to narrow agent scope before broad repository scans.
+- **Main grid** — five configurable terminal panes (xterm + WebSocket PTYs), per-pane reconnect, and a **Workspace** companion with tabs for agent runs, shell, **Docs**, **Graph**, **Plans**, and **Processes**.
 - **Docs** — workspace-wide index of Markdown and PDF (`.winnow/docs-index.json`), refresh/reindex, rendered Markdown (sanitized) and in-browser PDF.
-- **Project graph** — SQLite-backed graph service exposed over HTTP: summary, nodes/edges, neighborhood expansion, rebuild/reconcile, corrections, and business-logic views; the grid UI supports technical vs business graph modes and file→function exploration (see `docs/graph/`).
+- **Project graph** — SQLite-backed graph service exposed over HTTP: summary, nodes/edges, neighborhood expansion, rebuild/reconcile, corrections, and business-logic views; the grid UI supports technical vs business graph modes and file→function exploration.
+- **Planning workspace** — agent-managed plans stored under `.winnow/plans`, rendered as Markdown, normalized/reconciled through API flows, visualized as timeline/tree graphs, and mapped to GitHub issues when configured.
+- **Managed processes** — start and monitor named commands, filter by status/tags, and inspect logs without leaving the companion pane.
 - **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions.
 - **Files** — directory listing, preview, and “open in editor” helpers from the UI server.
 - **Shared / LAN use** — optional `?token=…` gate and bindable `--host` (token auto-generated when binding `0.0.0.0` without one).
@@ -51,13 +80,15 @@ Winnow closes that gap:
 
 ## What's new
 
-Highlights from recent development (newest first; use `git log` for the full story):
+Recent highlights (newest first; use `git log` for the full story):
 
-- **Project graph** — HTTP APIs plus an interactive graph in the main grid (technical / business layers, neighborhood drill-down, corrections workflow). The agent dashboard can **seed prompts from graph context** when graph seed mode is enabled.
+- **Heuristic Engine** — graph-derived concept, workflow, file, and symbol hints are ranked against the user prompt, then prepended as a compact navigation seed. This guides the agent toward likely-relevant code paths first, reducing discovery time and making large-codebase workflows more targeted.
+- **Project graph** — HTTP APIs plus an interactive graph in the main grid (technical / business layers, neighborhood drill-down, corrections workflow).
+- **Planning and execution** — agent-managed plan boards, timeline/tree graph views, GitHub issue mapping, and a managed process runner are available from the main grid companion.
 - **Providers and models** — external provider hooks, smoke checks from the UI, and selectable model lists (including externally advertised models when configured).
 - **Docs in the UI** — indexed Markdown and PDF with refresh, rendered in the Workspace **Docs** tab.
 - **Agent lifecycle** — clearer loading and run states, cancel/stop endpoints, and tighter resume and execution-mode controls in the agent UI.
-- **Windows installer** — Inno Setup–based `.exe` under `scripts/installer/` (see **Windows installer (.exe)** below), alongside `npm run setup` for macOS and Windows.
+- **Windows support** — `npm run setup` and the Inno Setup `.exe` installer provision the Windows command wrapper, Git Bash PTY dependency, and Cursor Agent CLI path.
 - **Setup and runtime** — Node version policy, PTY/shell behavior, and navigation guards polished for day-to-day use.
 
 ## Quickstart
@@ -166,13 +197,3 @@ Winnow is intentionally moving beyond “wrapper” territory. It is becoming:
 - and a foundation for advanced AI orchestration experiments.
 
 If you want an environment that reflects how *you* actually build with AI, Winnow is that environment.
-
-## Graph Engine Planning Docs
-
-The project-level AI dependency graph initiative is documented in:
-- `docs/graph/README.md`
-- `docs/graph/spec.md`
-- `docs/graph/schema-v1.md`
-- `docs/graph/lifecycle.md`
-- `docs/graph/ui-integration.md`
-- `docs/graph/rollout-plan.md`

@@ -1,0 +1,4 @@
+
+> winnow@1.0.0 build
+> tsc -p tsconfig.json && node scripts/copy-electron-main.mjs
+

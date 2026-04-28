@@ -1,0 +1,17 @@
+[
+  {
+    "id": "1777270843812-t2adhl",
+    "projectRoot": "/Users/bastionii/Documents/Github/winnow",
+    "label": "npm",
+    "command": "npm run build",
+    "cwd": "/Users/bastionii/Documents/Github/winnow",
+    "pid": 13780,
+    "startedAt": "2026-04-27T06:20:43.813Z",
+    "status": "done",
+    "tags": [],
+    "logPath": "/Users/bastionii/Documents/Github/winnow/.winnow/processes/logs/1777270843812-t2adhl.log",
+    "lastOutput": "> tsc -p tsconfig.json && node scripts/copy-electron-main.mjs",
+    "endedAt": "2026-04-27T06:20:45.083Z",
+    "exitCode": 0
+  }
+]
