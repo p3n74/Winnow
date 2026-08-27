@@ -336,6 +336,44 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         padding: 10px 12px 12px;
         background: var(--bg);
       }
+      #agentAttachmentStrip {
+        display: none;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      #agentAttachmentStrip:not([hidden]) {
+        display: flex;
+      }
+      .attachment-chip {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        overflow: hidden;
+        background: var(--panel2);
+        flex-shrink: 0;
+      }
+      .attachment-chip img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .attachment-chip .attachment-remove {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        padding: 0 5px;
+        min-width: 0;
+        line-height: 16px;
+        font-size: 11px;
+      }
+      .composer.is-drop-target #agentPrompt,
+      .composer.is-drop-target #agentAttachmentStrip {
+        border-color: var(--accent);
+      }
       #agentPrompt { width: 100%; min-height: 88px; resize: vertical; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
       .composer-actions {
         display: flex;
@@ -555,7 +593,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             <div class="small muted" style="padding: 6px 12px 0">Conversation</div>
             <div class="chat-scroll"><div id="chatHistory"></div></div>
             <div class="composer">
+              <div id="agentAttachmentStrip" hidden></div>
               <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
+              <input type="file" id="agentAttachInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
               <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
                 <div class="agent-run-loading-top">
                   <span class="agent-run-spinner-lg" aria-hidden="true"></span>
@@ -565,6 +605,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               <div class="composer-actions">
                 <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
+                <button type="button" class="secondary" id="btnAgentAttach" title="Attach screenshot">Attach</button>
                 <span class="agent-run-wrap">
                   <button type="button" data-agent-run="1" onclick="startAgentRun()">Run</button>
                   <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
@@ -883,6 +924,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let agentStartAbort = null;
       let agentStartInFlight = false;
       let agentSessionRunning = false;
+      const ALLOWED_ATTACH_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+      const MAX_ATTACHMENTS_PER_SEND = 8;
+      const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+      const agentAttachments = [];
       let agentNavLockInstalled = false;
       let agentFlavorTimer = null;
       let agentFlavorIndex = 0;
@@ -1337,6 +1382,102 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           }
         }
       }
+      function renderAttachmentStrip() {
+        const strip = document.getElementById("agentAttachmentStrip");
+        if (!strip) {
+          return;
+        }
+        strip.innerHTML = "";
+        if (!agentAttachments.length) {
+          strip.hidden = true;
+          return;
+        }
+        strip.hidden = false;
+        agentAttachments.forEach((item, index) => {
+          const chip = document.createElement("div");
+          chip.className = "attachment-chip";
+          const img = document.createElement("img");
+          img.src = item.previewUrl;
+          img.alt = "Attached image " + (index + 1);
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "secondary attachment-remove";
+          remove.setAttribute("aria-label", "Remove attachment");
+          remove.textContent = "×";
+          remove.onclick = () => removeAttachment(index);
+          chip.appendChild(img);
+          chip.appendChild(remove);
+          strip.appendChild(chip);
+        });
+      }
+      function removeAttachment(index) {
+        const item = agentAttachments[index];
+        if (item && item.previewUrl) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+        agentAttachments.splice(index, 1);
+        renderAttachmentStrip();
+      }
+      function clearAttachments() {
+        agentAttachments.forEach((item) => {
+          if (item && item.previewUrl) {
+            URL.revokeObjectURL(item.previewUrl);
+          }
+        });
+        agentAttachments.length = 0;
+        renderAttachmentStrip();
+      }
+      function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || "");
+            const comma = result.indexOf(",");
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+          };
+          reader.onerror = () => reject(reader.error || new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+      }
+      async function attachImageFiles(fileList) {
+        const files = Array.from(fileList || []).filter(Boolean);
+        for (const file of files) {
+          if (agentAttachments.length >= MAX_ATTACHMENTS_PER_SEND) {
+            appendChat("system", "At most 8 attachments per send.");
+            break;
+          }
+          const mime = String(file.type || "");
+          if (!ALLOWED_ATTACH_MIMES.includes(mime)) {
+            appendChat("system", "Skipped non-image file" + (file.name ? " (" + file.name + ")" : "") + ".");
+            continue;
+          }
+          if (file.size > MAX_ATTACHMENT_BYTES) {
+            appendChat("system", "Attachment too large (max 8 MB).");
+            continue;
+          }
+          try {
+            const dataBase64 = await fileToBase64(file);
+            const httpRes = await fetch(withToken("/api/attachments"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mime: mime, dataBase64: dataBase64 }),
+            });
+            const data = await httpRes.json();
+            if (!data || data.ok !== true) {
+              appendChat("system", "Attach failed: " + JSON.stringify(data));
+              continue;
+            }
+            agentAttachments.push({
+              id: data.id,
+              absPath: data.absPath,
+              previewUrl: URL.createObjectURL(file),
+            });
+            renderAttachmentStrip();
+          } catch (err) {
+            appendChat("system", "Attach failed: " + (err && err.message ? err.message : String(err)));
+          }
+        }
+      }
       async function startAgentRun() {
         const prompt = document.getElementById("agentPrompt").value.trim();
         if (!prompt) {
@@ -1371,6 +1512,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           planId: document.getElementById("agentPlanSelect")?.value || undefined,
           sessionId: localSessionId || undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
+          attachmentIds: agentAttachments.map((item) => item.id),
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -1409,6 +1551,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         activeSessionId = res.sessionId;
         notifyParentAgentSession(activeSessionId);
         clearPrompt();
+        clearAttachments();
         if (continueMode) {
           selectedResumeSessionId = activeSessionId;
         }
@@ -1619,6 +1762,58 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           startAgentRun();
         }
       });
+      document.getElementById("agentPrompt").addEventListener("paste", (evt) => {
+        const items = evt.clipboardData && evt.clipboardData.items;
+        if (!items) {
+          return;
+        }
+        const files = [];
+        for (const item of items) {
+          if (item.kind === "file" && ALLOWED_ATTACH_MIMES.includes(item.type)) {
+            const file = item.getAsFile();
+            if (file) {
+              files.push(file);
+            }
+          }
+        }
+        if (files.length) {
+          evt.preventDefault();
+          void attachImageFiles(files);
+        }
+      });
+      function bindAttachmentDropTarget(el) {
+        if (!el) {
+          return;
+        }
+        el.addEventListener("dragover", (evt) => {
+          evt.preventDefault();
+          el.closest(".composer")?.classList.add("is-drop-target");
+        });
+        el.addEventListener("dragleave", () => {
+          el.closest(".composer")?.classList.remove("is-drop-target");
+        });
+        el.addEventListener("drop", (evt) => {
+          evt.preventDefault();
+          el.closest(".composer")?.classList.remove("is-drop-target");
+          const files = evt.dataTransfer && evt.dataTransfer.files;
+          if (files && files.length) {
+            void attachImageFiles(files);
+          }
+        });
+      }
+      bindAttachmentDropTarget(document.getElementById("agentPrompt"));
+      bindAttachmentDropTarget(document.getElementById("agentAttachmentStrip"));
+      const attachInput = document.getElementById("agentAttachInput");
+      const attachBtn = document.getElementById("btnAgentAttach");
+      if (attachBtn && attachInput) {
+        attachBtn.addEventListener("click", () => attachInput.click());
+        attachInput.addEventListener("change", () => {
+          if (attachInput.files && attachInput.files.length) {
+            void attachImageFiles(attachInput.files);
+          }
+          attachInput.value = "";
+        });
+      }
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
       initAgentControlsCollapse();

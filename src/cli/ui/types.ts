@@ -36,6 +36,8 @@ export type AgentStartRequest = {
   planId?: string;
   sessionId?: string;
   executionMode?: "cursor" | "external";
+  /** Filename stems (UUIDs) of files previously stored via POST /api/attachments. */
+  attachmentIds?: string[];
 };
 
 export type AgentEvent = {

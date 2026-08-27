@@ -71,6 +71,12 @@ import {
   parseCursorUpdateOutput,
   type CursorAccountSnapshot,
 } from "../cursor/cursorAccount.js";
+import {
+  MAX_ATTACHMENTS_PER_SEND,
+  buildAttachmentPromptBlock,
+  resolveStoredAttachments,
+  saveAttachment,
+} from "../cursor/attachments.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -1098,7 +1104,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     sessions.set(id, session);
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
-    const prompt = payload.prompt;
+    const attachmentIds = Array.isArray(payload.attachmentIds)
+      ? payload.attachmentIds.slice(0, MAX_ATTACHMENTS_PER_SEND).map((value) => String(value))
+      : [];
+    const attachmentBlock = buildAttachmentPromptBlock(
+      resolveStoredAttachments(uiWorkspace.dir, attachmentIds).map((item) => item.absPath),
+    );
+    const prompt = attachmentBlock ? `${payload.prompt}\n\n${attachmentBlock}` : payload.prompt;
     const planId = String(payload.planId || "").trim();
     const graphSeedEnabled = payload.graphSeed !== false;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
@@ -2431,6 +2443,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         });
       } catch (error) {
         sendJson(res, 500, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/attachments" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { mime?: string; dataBase64?: string };
+        const saved = await saveAttachment(uiWorkspace.dir, {
+          mime: String(body.mime ?? ""),
+          dataBase64: String(body.dataBase64 ?? ""),
+        });
+        sendJson(res, 200, { ok: true, id: saved.id, relPath: saved.relPath, absPath: saved.absPath });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
