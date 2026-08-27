@@ -171,6 +171,42 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .pane2View:not(.isHidden) { z-index: 1; }
       .pane2View .cursorHost { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+      .pane1Body {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .pane1View {
+        position: absolute;
+        inset: 0;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane1View.isHidden {
+        visibility: hidden;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .pane1View:not(.isHidden) { z-index: 1; }
+      .pane1View .term { flex: 1; min-height: 0; width: 100%; }
+      #pane1Trace {
+        flex: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 10px 12px;
+        overflow: auto;
+        background: var(--bg);
+        color: var(--text-neon);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
       .pane2DocsRoot { padding: 0 10px 10px; gap: 8px; }
       .docsToolbar {
         display: flex;
@@ -1031,7 +1067,7 @@ export function buildMainTerminalHtml(token?: string): string {
           <span class="brand">Winnow Main Grid</span>
         </div>
         <div class="toolbarRight">
-          <span class="chip">1 ranger</span>
+          <span class="chip">1 ranger · trace</span>
           <span class="chip">2 agent · shell · docs · graph · plans · processes</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
@@ -1040,7 +1076,28 @@ export function buildMainTerminalHtml(token?: string): string {
       </div>
       <div class="root">
       <div class="left">
-        <div id="pane1Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span><button class="reconnect" data-pane="1">Reconnect</button></div><div id="pane1" class="term"></div></div></div>
+        <div id="pane1Wrap" class="pane">
+          <div class="paneInner">
+            <div class="paneHead">
+              <span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="paneTabs" role="tablist" aria-label="File browser and agent trace">
+                  <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace</button>
+                </div>
+                <button type="button" class="reconnect" id="reconnectPane1" data-pane="1">Reconnect</button>
+              </div>
+            </div>
+            <div class="pane1Body">
+              <div id="pane1Browser" class="pane1View" aria-hidden="false">
+                <div id="pane1" class="term"></div>
+              </div>
+              <div id="pane1TraceWrap" class="pane1View isHidden" aria-hidden="true">
+                <pre id="pane1Trace">No active agent session.</pre>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="leftBottom">
           <div class="leftBottomLeft">
             <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">htop</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
@@ -1271,6 +1328,12 @@ export function buildMainTerminalHtml(token?: string): string {
       const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
       let graphViewMode = "technical";
       let pane2Mode = "workspace";
+      let pane1Mode = "browser";
+      let pane1TraceSessionId = "";
+      let pane1TraceSource = null;
+      let pane1TraceTimer = null;
+      let pane1TraceLines = [];
+      let pane1TraceSeen = new Set();
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let processRefreshTimer = null;
@@ -1374,6 +1437,119 @@ export function buildMainTerminalHtml(token?: string): string {
           if(p2.ws.readyState===WebSocket.OPEN){
             p2.ws.send(JSON.stringify({type:"resize",cols:p2.term.cols,rows:p2.term.rows}));
           }
+        }
+      }
+      function formatPane1TraceTime(ts){
+        const d = ts ? new Date(ts) : new Date();
+        if(Number.isNaN(d.getTime())){
+          return new Date().toTimeString().slice(0, 8);
+        }
+        return d.toTimeString().slice(0, 8);
+      }
+      function closePane1TraceStream(){
+        if(pane1TraceSource){
+          pane1TraceSource.close();
+          pane1TraceSource = null;
+        }
+      }
+      function renderPane1Trace(){
+        const pre = document.getElementById("pane1Trace");
+        if(!pre){ return; }
+        if(!pane1TraceSessionId){
+          pre.textContent = "No active agent session.";
+          return;
+        }
+        if(pane1TraceLines.length === 0){
+          pre.textContent = "No tool/status events yet.";
+          return;
+        }
+        pre.textContent = pane1TraceLines.join("\\n");
+        pre.scrollTop = pre.scrollHeight;
+      }
+      function appendPane1TraceEvent(ev){
+        if(!ev){ return; }
+        const kind = String(ev.kind || "");
+        if(kind !== "tool" && kind !== "status" && kind !== "system"){ return; }
+        const id = String(ev.id || "");
+        if(id){
+          if(pane1TraceSeen.has(id)){ return; }
+          pane1TraceSeen.add(id);
+        }
+        pane1TraceLines.push("[" + formatPane1TraceTime(ev.ts) + "] " + String(ev.content || ""));
+        if(pane1TraceLines.length > 500){
+          pane1TraceLines = pane1TraceLines.slice(-500);
+        }
+        renderPane1Trace();
+      }
+      function openPane1TraceStream(sessionId, force){
+        if(!sessionId){ return; }
+        if(sessionId === pane1TraceSessionId && !force){
+          if(pane1TraceSource && pane1TraceSource.readyState !== 2){ return; }
+          if(!pane1TraceSource){ return; }
+        }
+        if(sessionId !== pane1TraceSessionId){
+          pane1TraceSessionId = sessionId;
+          pane1TraceLines = [];
+          pane1TraceSeen = new Set();
+          renderPane1Trace();
+        }
+        closePane1TraceStream();
+        pane1TraceSessionId = sessionId;
+        pane1TraceSource = new EventSource(withToken("/api/agent/" + sessionId + "/stream"));
+        pane1TraceSource.addEventListener("timeline",(evt)=>{
+          try {
+            const data = JSON.parse(evt.data || "{}");
+            appendPane1TraceEvent(data.event);
+          } catch(_e) {}
+        });
+        pane1TraceSource.addEventListener("done",()=>{
+          closePane1TraceStream();
+        });
+      }
+      async function pollPane1TraceActive(){
+        try {
+          const res = await fetch(withToken("/api/agent/active")).then((r)=>r.json());
+          if(!res || !res.ok){ return; }
+          const session = res.session;
+          if(!session || !session.id){
+            if(!pane1TraceSessionId){ renderPane1Trace(); }
+            return;
+          }
+          openPane1TraceStream(session.id);
+        } catch(_e) {}
+      }
+      function startPane1TracePolling(){
+        if(pane1TraceTimer){ return; }
+        void pollPane1TraceActive();
+        pane1TraceTimer = setInterval(pollPane1TraceActive, 2000);
+      }
+      function setPane1Tab(mode){
+        pane1Mode = mode === "trace" ? "trace" : "browser";
+        const isBrowser = pane1Mode === "browser";
+        const isTrace = pane1Mode === "trace";
+        const browserEl = document.getElementById("pane1Browser");
+        const traceEl = document.getElementById("pane1TraceWrap");
+        const tb = document.getElementById("pane1TabBrowser");
+        const tt = document.getElementById("pane1TabTrace");
+        const recon = document.getElementById("reconnectPane1");
+        if(browserEl && traceEl){
+          browserEl.classList.toggle("isHidden", !isBrowser);
+          traceEl.classList.toggle("isHidden", !isTrace);
+          browserEl.setAttribute("aria-hidden", isBrowser ? "false" : "true");
+          traceEl.setAttribute("aria-hidden", isTrace ? "false" : "true");
+        }
+        if(tb && tt){
+          tb.classList.toggle("paneTabActive", isBrowser);
+          tt.classList.toggle("paneTabActive", isTrace);
+          tb.setAttribute("aria-selected", String(isBrowser));
+          tt.setAttribute("aria-selected", String(isTrace));
+        }
+        if(recon){ recon.hidden = !isBrowser; }
+        if(isBrowser){
+          requestAnimationFrame(resizeAll);
+        }
+        if(isTrace){
+          void pollPane1TraceActive();
         }
       }
       function setPane2Tab(mode){
@@ -4020,6 +4196,14 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(hint){ hint.textContent = relPath; }
       }
+      document.getElementById("pane1TabBrowser")?.addEventListener("click",()=>setPane1Tab("browser"));
+      document.getElementById("pane1TabTrace")?.addEventListener("click",()=>setPane1Tab("trace"));
+      window.addEventListener("message",(event)=>{
+        const data = event.data;
+        if(!data || data.type !== "winnow-agent-session"){ return; }
+        const sessionId = data.sessionId ? String(data.sessionId) : "";
+        if(sessionId){ openPane1TraceStream(sessionId, true); }
+      });
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
       document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
@@ -4386,6 +4570,8 @@ export function buildMainTerminalHtml(token?: string): string {
       });
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
+      setPane1Tab("browser");
+      startPane1TracePolling();
       setPane2Tab("workspace");
       setPlanGraphVisibility(true);
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{

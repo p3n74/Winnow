@@ -90,6 +90,7 @@ import {
 } from "./ui/types.js";
 import { sendJson, readJsonBody } from "./ui/httpUtil.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
+import { pickActiveAgentSession } from "./ui/agentTrace.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
 import { buildAgentGraphContextPreamble } from "../graph/agentGraphSeed.js";
@@ -2496,6 +2497,25 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/agent/active" && req.method === "GET") {
+      const picked = pickActiveAgentSession(sessions.values());
+      if (!picked) {
+        sendJson(res, 200, { ok: true, session: null });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        session: {
+          id: picked.id,
+          status: picked.status,
+          startedAt: picked.startedAt,
+          endedAt: picked.endedAt,
+          events: (picked.events ?? []).slice(-500),
+        },
+      });
       return;
     }
 

@@ -311,6 +311,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       #btnAgentRunCancel {
         min-width: 120px;
       }
+      .agentThinkingLabel,
+      #agentThinking {
+        display: none !important;
+      }
       #agentThinking {
         flex-shrink: 0;
         max-height: 100px;
@@ -546,7 +550,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               </div>
             </div>
-            <div class="small muted" style="padding: 6px 12px 0">Thinking trace</div>
+            <div class="small muted agentThinkingLabel" style="padding: 6px 12px 0">Thinking trace</div>
             <pre id="agentThinking">No thinking trace yet.</pre>
             <div class="small muted" style="padding: 6px 12px 0">Conversation</div>
             <div class="chat-scroll"><div id="chatHistory"></div></div>
@@ -1060,7 +1064,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           appendChat(lane, msg.content || "");
         }
         const thinkingBlock = document.getElementById("agentThinking");
-        if (thinkingEvents.length === 0) {
+        if (thinkingEvents.length === 0 && thinkingBlock) {
           thinkingBlock.textContent = "No thinking trace found in this session history.";
         }
         scrollToBottom();
@@ -1098,6 +1102,17 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       function traceNow() {
         return new Date().toTimeString().slice(0, 8);
       }
+      function notifyParentAgentSession(sessionId) {
+        if (!sessionId) {
+          return;
+        }
+        if (!EMBED_MODE && window.parent === window) {
+          return;
+        }
+        try {
+          window.parent.postMessage({ type: "winnow-agent-session", sessionId: sessionId }, "*");
+        } catch (_e) {}
+      }
       function pushTrace(line) {
         if (!line) {
           return;
@@ -1107,6 +1122,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           thinkingEvents = thinkingEvents.slice(-120);
         }
         const block = document.getElementById("agentThinking");
+        if (!block) {
+          lastTraceAtMs = Date.now();
+          return;
+        }
         block.textContent = thinkingEvents.join("\\n");
         block.scrollTop = block.scrollHeight;
         lastTraceAtMs = Date.now();
@@ -1185,6 +1204,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function attachStream(sessionId) {
         closeStream();
+        notifyParentAgentSession(sessionId);
         streamSource = new EventSource(withToken("/api/agent/" + sessionId + "/stream"));
         streamSource.addEventListener("timeline", (evt) => {
           try {
@@ -1387,6 +1407,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           return;
         }
         activeSessionId = res.sessionId;
+        notifyParentAgentSession(activeSessionId);
         clearPrompt();
         if (continueMode) {
           selectedResumeSessionId = activeSessionId;
@@ -1394,7 +1415,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         clearChat();
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
-        document.getElementById("agentThinking").textContent = "";
+        const thinkingBlock = document.getElementById("agentThinking");
+        if (thinkingBlock) {
+          thinkingBlock.textContent = "";
+        }
         pushTrace("session started");
         document.getElementById("agentStatusBadge").textContent = "running";
         document.getElementById("agentSessionInfo").textContent = "session=" + activeSessionId + " status=running";
