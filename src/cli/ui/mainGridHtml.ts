@@ -1289,6 +1289,8 @@ export function buildMainTerminalHtml(token?: string): string {
         try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
       })();
       let graphNodeCache = { nodes: [], edges: [] };
+      let graphExpandedNodeIds = new Set();
+      let graphSummaryTotals = { nodes: 0, edges: 0 };
       let graphViewBox = { x: 0, y: 0, w: 1200, h: 600, baseW: 1200, baseH: 600 };
       let graphDrag = { active: false, startX: 0, startY: 0, initX: 0, initY: 0 };
       let graphFocusState = {
@@ -1448,8 +1450,6 @@ export function buildMainTerminalHtml(token?: string): string {
           void refreshDocsIndex(false);
         }
         if(isGraph){
-          void refreshGraphSummary();
-          void refreshGraphRecaps();
           void refreshGraphErd();
         }
         if(isProc){
@@ -2692,6 +2692,7 @@ export function buildMainTerminalHtml(token?: string): string {
               window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
               const svgNode = document.querySelector('[data-node-id="' + CSS.escape(nodeId) + '"]');
               if(svgNode){ svgNode.classList.toggle("graphNodeFocus"); }
+              void expandGraphNeighborhood(nodeId);
             }
           });
           btn.addEventListener("dblclick",(event)=>{
@@ -2703,20 +2704,77 @@ export function buildMainTerminalHtml(token?: string): string {
         });
       }
       async function ensureGraphNodeNeighbors(nodeId){
-        const node = (graphNodeCache.nodes || []).find((n)=>n.id === nodeId);
-        if(!node || node.kind !== "File"){ return; }
+        if(!nodeId){ return { ok: false, nodes: [], edges: [] }; }
+        if(graphExpandedNodeIds.has(nodeId)){
+          return { ok: true, nodes: graphNodeCache.nodes || [], edges: graphNodeCache.edges || [] };
+        }
         try{
           const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nodeId) + "/neighbors")).then((r)=>r.json());
-          if(!res || !res.ok){ return; }
-          const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
-          (res.nodes || []).forEach((n)=>{ if(n && n.id && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
-          const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id || (e.fromId + "::" + e.kind + "::" + e.toId)));
-          (res.edges || []).forEach((e)=>{
-            if(!e){ return; }
-            const key = e.id || (e.fromId + "::" + e.kind + "::" + e.toId);
-            if(!existingEdgeIds.has(key)){ graphNodeCache.edges.push({ ...e, id: key }); }
-          });
-        } catch(_err){}
+          if(!res || !res.ok){ return res || { ok: false, nodes: [], edges: [] }; }
+          const merged = mergeGraphData(graphNodeCache.nodes, graphNodeCache.edges, res.nodes || [], res.edges || []);
+          graphNodeCache = { nodes: merged.nodes, edges: merged.edges };
+          graphExpandedNodeIds.add(nodeId);
+          return res;
+        } catch(_err){
+          return { ok: false, nodes: [], edges: [] };
+        }
+      }
+      function formatGraphSummaryHint(loadedNodes, loadedEdges){
+        const total = graphSummaryTotals.nodes
+          ? " Graph has " + graphSummaryTotals.nodes + " node(s) and " + graphSummaryTotals.edges + " edge(s) total."
+          : "";
+        return "Showing neighborhood of " + loadedNodes + " node(s) and " + loadedEdges + " edge(s)." + total + " Click a node to expand; double-click to isolate connections.";
+      }
+      async function expandGraphNeighborhood(nodeId){
+        if(!nodeId){ return; }
+        await ensureGraphNodeNeighbors(nodeId);
+        renderTechnicalIndexTree(graphNodeCache.nodes, graphNodeCache.edges);
+        if(!graphFocusState.functionNodeId){
+          renderGraphErd(graphNodeCache.nodes, graphNodeCache.edges);
+        }
+        const hint = document.getElementById("graphHint");
+        if(hint){
+          hint.textContent = formatGraphSummaryHint((graphNodeCache.nodes || []).length, (graphNodeCache.edges || []).length);
+        }
+      }
+      async function loadTechnicalGraphSeed(){
+        graphSummaryTotals = { nodes: 0, edges: 0 };
+        const summaryRes = await fetch(withToken("/api/graph/summary")).then((r)=>r.json());
+        if(summaryRes && summaryRes.ok && summaryRes.summary){
+          graphSummaryTotals = {
+            nodes: Number(summaryRes.summary.nodesTotal) || 0,
+            edges: Number(summaryRes.summary.edgesTotal) || 0,
+          };
+        } else if(!summaryRes || !summaryRes.ok){
+          return { ok: false, nodes: [], edges: [], error: (summaryRes && summaryRes.error) || "summary unavailable" };
+        }
+        const projectRes = await fetch(withToken("/api/graph/nodes?kind=Project&limit=5")).then((r)=>r.json());
+        let seedNode = (projectRes && projectRes.ok && (projectRes.nodes || [])[0]) || null;
+        if(!seedNode){
+          const moduleRes = await fetch(withToken("/api/graph/nodes?kind=Module&limit=1")).then((r)=>r.json());
+          seedNode = (moduleRes && moduleRes.ok && (moduleRes.nodes || [])[0]) || null;
+        }
+        if(!seedNode){
+          return { ok: true, nodes: [], edges: [], error: null };
+        }
+        const hop1 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(seedNode.id) + "/neighbors")).then((r)=>r.json());
+        if(!hop1 || !hop1.ok){
+          return { ok: true, nodes: [seedNode], edges: [], error: null };
+        }
+        graphExpandedNodeIds.add(seedNode.id);
+        let nodes = (hop1.nodes && hop1.nodes.length) ? hop1.nodes : [seedNode];
+        let edges = hop1.edges || [];
+        const nextModule = nodes.find((n)=>n && n.kind === "Module" && n.id !== seedNode.id);
+        if(nextModule){
+          const hop2 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nextModule.id) + "/neighbors")).then((r)=>r.json());
+          if(hop2 && hop2.ok){
+            const merged = mergeGraphData(nodes, edges, hop2.nodes || [], hop2.edges || []);
+            nodes = merged.nodes;
+            edges = merged.edges;
+            graphExpandedNodeIds.add(nextModule.id);
+          }
+        }
+        return { ok: true, nodes: nodes, edges: edges, error: null };
       }
       function collectNodeConnectionGraph(nodeId){
         const allNodes = graphNodeCache.nodes || [];
@@ -2979,22 +3037,13 @@ export function buildMainTerminalHtml(token?: string): string {
         list.innerHTML = "";
         if(filter){ filter.value = ""; }
         try{
-          const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(fileNodeId) + "/neighbors")).then((r)=>r.json());
+          const res = await ensureGraphNodeNeighbors(fileNodeId);
           if(!res.ok){
             if(hint){ hint.textContent = "Failed to load file functions: " + (res.error || "unknown"); }
             return;
           }
-          const nodes = res.nodes || [];
-          const edges = res.edges || [];
-
-          // Merge into global cache for focus view lookup
-          const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
-          nodes.forEach((n)=>{ if(n && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
-          const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id));
-          edges.forEach((e)=>{ if(e && !existingEdgeIds.has(e.id)){ graphNodeCache.edges.push(e); } });
-
-          const byId = new Map(nodes.map((n)=>[n.id, n]));
-          const functions = edges
+          const byId = new Map((graphNodeCache.nodes || []).map((n)=>[n.id, n]));
+          const functions = (graphNodeCache.edges || [])
             .filter((e)=>e.kind === "contains" && e.fromId === fileNodeId)
             .map((e)=>byId.get(e.toId))
             .filter((n)=>n && n.kind === "Symbol");
@@ -3757,8 +3806,12 @@ export function buildMainTerminalHtml(token?: string): string {
                 hoverCard.style.top = (event.offsetY + 14) + "px";
                 window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
                 applyHighlight(nodeId);
-                if(graphViewMode === "technical" && nodeKind === "File" && nodeId){
-                  void loadFunctionsForFile(nodeId, nodeName);
+                if(graphViewMode === "technical" && nodeId){
+                  if(nodeKind === "File"){
+                    void loadFunctionsForFile(nodeId, nodeName);
+                  } else {
+                    void expandGraphNeighborhood(nodeId);
+                  }
                 }
               });
               el.addEventListener("dblclick",(event)=>{
@@ -3805,20 +3858,26 @@ export function buildMainTerminalHtml(token?: string): string {
             }
           } else {
             stopGraphSimulation();
-            const nodesRes = await fetch(withToken("/api/graph/nodes?limit=2000")).then((r)=>r.json());
-            const edgesRes = await fetch(withToken("/api/graph/edges?limit=4000")).then((r)=>r.json());
-            if(!nodesRes.ok || !edgesRes.ok){
-              if(hint){ hint.textContent = "Graph visualization unavailable: " + ((nodesRes.error || edgesRes.error || "unknown")); }
+            graphExpandedNodeIds = new Set();
+            const seed = await loadTechnicalGraphSeed();
+            if(!seed.ok){
+              if(hint){ hint.textContent = "Graph visualization unavailable: " + (seed.error || "unknown"); }
+              graphNodeCache = { nodes: [], edges: [] };
+              renderTechnicalIndexTree([], []);
               renderGraphErd([], []);
               return;
             }
-            const sourceNodes = nodesRes.nodes || [];
-            const sourceEdges = edgesRes.edges || [];
+            const sourceNodes = seed.nodes || [];
+            const sourceEdges = seed.edges || [];
             graphNodeCache = { nodes: sourceNodes, edges: sourceEdges };
             renderTechnicalIndexTree(sourceNodes, sourceEdges);
             renderGraphErd(sourceNodes, sourceEdges);
             if(hint){
-              hint.textContent = "Technical full graph rendered with " + sourceNodes.length + " node(s) and " + sourceEdges.length + " edge(s). Click to select; double-click nodes or index rows for isolated connections.";
+              hint.textContent = sourceNodes.length
+                ? formatGraphSummaryHint(sourceNodes.length, sourceEdges.length)
+                : (graphSummaryTotals.nodes
+                  ? "Graph has " + graphSummaryTotals.nodes + " node(s). Rebuild if the neighborhood is empty."
+                  : "Graph is empty. Rebuild to index the project.");
             }
             if(graphFocusState.fileNodeId && graphFocusState.functionNodeId){
               await renderTechnicalFocusGraph();
