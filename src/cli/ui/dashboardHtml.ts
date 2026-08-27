@@ -705,6 +705,11 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         background: var(--panel);
         box-shadow: none;
       }
+      .chatMsg[data-role="user"] {
+        border-color: var(--accent);
+        background: var(--panel2);
+      }
+      .chatMsg[data-role="user"] .chatRole { color: var(--text-neon); }
       .chatMsg:last-child { margin-bottom: 0; }
       .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-style: italic; }
       .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: var(--text); }
@@ -1295,7 +1300,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               <button onclick="clearPrompt()">Clear prompt</button>
             </div>
             <div class="small"><span class="statusBadge" id="agentStatusBadge">idle</span> <span id="agentSessionInfo">No active session.</span></div>
-            <div class="hint">Tip: use <code>--resume &lt;sessionId&gt;</code> in Cursor Args to continue a session.</div>
+            <div class="hint">Continue uses Cursor <code>--resume</code> with the stored chat UUID. Winnow does not paste local history into the prompt.</div>
             <div class="metrics">
               <div class="metric"><div class="metricLabel">Prompt tokens est</div><div class="metricValue" id="metricPromptTokens">0</div></div>
               <div class="metric"><div class="metricLabel">Output tokens est</div><div class="metricValue" id="metricOutputTokens">0</div></div>
@@ -2361,6 +2366,21 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       let selectedSyncedSession = null;
       let selectedSyncedMessages = [];
       let selectedResumeSessionId = null;
+      let lastCursorSessionId = "";
+      const CURSOR_CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      function isCursorChatId(value) {
+        return CURSOR_CHAT_ID_RE.test(String(value || "").trim());
+      }
+      function rememberCursorSessionId(id, explicit) {
+        const hint = String(explicit || "").trim();
+        if (isCursorChatId(hint)) {
+          lastCursorSessionId = hint;
+          return;
+        }
+        if (isCursorChatId(id)) {
+          lastCursorSessionId = String(id).trim();
+        }
+      }
       let cachedSessionRows = [];
       let agentMetrics = {
         startedAtMs: 0,
@@ -2392,22 +2412,32 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       function appendChat(role, text){
         const root = document.getElementById('chatHistory');
         if(!root){ return; }
-
         const lastMsg = root.lastElementChild;
-        if (lastMsg) {
-          const roleEl = lastMsg.querySelector(".chatRole");
-          if (roleEl && roleEl.textContent === role) {
-            const textEl = lastMsg.querySelector(".chatText");
-            if (textEl) {
-              textEl.textContent += text;
-              root.scrollTop = root.scrollHeight;
-              return;
-            }
+        const lastRoleEl = lastMsg ? lastMsg.querySelector('.chatRole') : null;
+        const lastTextEl = lastMsg ? lastMsg.querySelector('.chatText') : null;
+        const lastRole = lastRoleEl ? String(lastRoleEl.textContent || '') : '';
+        const lastText = lastTextEl ? String(lastTextEl.textContent || '') : '';
+        if(role === 'user'){
+          if(shouldReplaceUserText(lastRole, lastText, text) && lastTextEl){
+            lastTextEl.textContent = text;
+            root.scrollTop = root.scrollHeight;
+            return;
           }
+          if(shouldSkipDuplicateUser(lastRole, lastText, text)){
+            return;
+          }
+        } else if(role === 'assistant' && lastRole === 'assistant' && lastTextEl){
+          lastTextEl.textContent += text;
+          root.scrollTop = root.scrollHeight;
+          return;
+        } else if(lastMsg && lastRole === role && role !== 'user' && lastTextEl){
+          lastTextEl.textContent += text;
+          root.scrollTop = root.scrollHeight;
+          return;
         }
-
         const msg = document.createElement('div');
         msg.className = 'chatMsg';
+        msg.setAttribute('data-role', role);
         const roleEl = document.createElement('div');
         roleEl.className = 'chatRole';
         roleEl.textContent = role;
@@ -2418,6 +2448,22 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         msg.appendChild(textEl);
         root.appendChild(msg);
         root.scrollTop = root.scrollHeight;
+      }
+      function shouldSkipDuplicateUser(lastRole, lastText, incoming){
+        if(lastRole !== 'user'){ return false; }
+        const previous = String(lastText || '');
+        const next = String(incoming || '');
+        if(!next){ return true; }
+        if(previous === next){ return true; }
+        if(previous && next.startsWith(previous)){ return true; }
+        if(next && previous.startsWith(next)){ return true; }
+        return false;
+      }
+      function shouldReplaceUserText(lastRole, lastText, incoming){
+        if(lastRole !== 'user'){ return false; }
+        const previous = String(lastText || '');
+        const next = String(incoming || '');
+        return Boolean(previous && next && next.startsWith(previous) && next.length > previous.length);
       }
       function clearChat(){
         const root = document.getElementById('chatHistory');
@@ -2455,20 +2501,26 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           if (msg.id) {
             seenTimelineIds.add(msg.id);
           }
-          const role = String(msg.role || 'entry').toLowerCase();
-          
+          const role = String(msg.kind || msg.role || '').toLowerCase();
+          if(!role || role === 'entry'){
+            continue;
+          }
           if (role === 'tool' || role === 'status' || role === 'system') {
             pushTrace(msg.content || "");
             continue;
           }
 
-          let lane = 'assistant';
+          let lane = '';
           if(role === 'user' || role.includes('user') || role.includes('human')){
             lane = 'user';
+          } else if(role === 'assistant'){
+            lane = 'assistant';
           } else if(role === 'stderr' || role.includes('stderr') || role.includes('error')){
             lane = 'stderr';
           }
-
+          if(!lane){
+            continue;
+          }
           appendChat(lane, msg.content || '');
         }
         const thinkingBlock = document.getElementById('agentThinking');
@@ -2500,6 +2552,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
       function startFreshSession(){
         selectedResumeSessionId = null;
+        lastCursorSessionId = "";
         const select = document.getElementById('agentSessionSelect');
         if(select){ select.value = ''; }
         updateArgsResume(null);
@@ -2859,16 +2912,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const res = await fetch(withToken('/api/agent/' + activeSessionId)).then(r=>r.json());
         if(!res.ok){ return; }
         const s = res.session;
+        rememberCursorSessionId(s.id, s.cursorSessionId);
         document.getElementById('agentSessionInfo').textContent = 'session=' + s.id + ' status=' + s.status + (s.exitCode !== undefined ? (' exit=' + s.exitCode) : '');
         document.getElementById('agentStatusBadge').textContent = s.status;
         agentMetrics.outputChars = (s.output || '').length + (s.errorOutput || '').length;
         refreshMetrics();
-        const streamDead = !streamSource || streamSource.readyState !== 1;
-        if(streamDead && s.status !== 'running' && Array.isArray(s.events)){
-          for(const ev of s.events){
-            appendFromTimelineEvent(ev);
-          }
-        }
+        backfillConversationEvents(s.events);
         if(s.status !== 'running' && pollTimer){
           clearInterval(pollTimer);
           pollTimer = null;
@@ -2880,6 +2929,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         } else {
           agentSessionRunning = true;
           applyAgentRunUi();
+        }
+      }
+      function backfillConversationEvents(events){
+        if(!Array.isArray(events)){ return; }
+        for(const ev of events){
+          appendFromTimelineEvent(ev);
         }
       }
       function closeStream(){
@@ -3018,22 +3073,18 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const select = document.getElementById('agentSessionSelect');
         const pickedSession = (select?.value || selectedResumeSessionId || '').trim();
         const localSessionId = continueMode ? (pickedSession || selectedResumeSessionId || activeSessionId || '') : '';
-        // Only forward UUID-style Cursor chat ids to cursor-agent resume.
-        // Winnow session ids are still valid for local transcript continuation.
-        const isCursorChatId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localSessionId);
-        const resumeSessionId = isCursorChatId ? localSessionId : '';
         const baseArgs = (document.getElementById('agentArgs').value || '').trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\s)--resume\s+\S+/g, '').trim();
-        const effectiveArgs = resumeSessionId
-          ? (cleanedArgs ? cleanedArgs + ' --resume ' + resumeSessionId : '--resume ' + resumeSessionId)
-          : cleanedArgs;
         const payload = {
           prompt,
-          args: effectiveArgs,
+          args: cleanedArgs,
           modelPreference: document.getElementById('agentModelPref').value,
           autonomyMode: document.getElementById('autonomyMode').checked,
           graphSeed: document.getElementById('graphSeedMode').checked,
           sessionId: localSessionId || undefined,
+          cursorSessionId: continueMode
+            ? lastCursorSessionId || (isCursorChatId(localSessionId) ? localSessionId : undefined)
+            : undefined,
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -3070,6 +3121,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           return;
         }
         activeSessionId = res.sessionId;
+        rememberCursorSessionId(res.sessionId, res.cursorSessionId);
         clearPrompt();
         if(continueMode){
           selectedResumeSessionId = activeSessionId;
@@ -3080,6 +3132,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         lastTraceAtMs = Date.now();
         const block = document.getElementById('agentThinking');
         if (block) block.textContent = "";
+        appendChat('user', prompt);
         pushTrace('session started');
         document.getElementById('agentStatusBadge').textContent = 'running';
         document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
@@ -3140,18 +3193,21 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         document.querySelectorAll('.sync-session').forEach((el) => {
           el.onclick = () => loadSession(el.getAttribute('data-session-id'));
         });
-        if(selectedResumeSessionId){ await loadSession(selectedResumeSessionId); }
+        if(selectedResumeSessionId && !agentSessionRunning){ await loadSession(selectedResumeSessionId); }
       }
       async function loadSession(id){
         if(!id){ return; }
+        const data = await fetch(withToken('/api/sessions/' + id)).then(r=>r.json());
+        if(!data || data.error || !Array.isArray(data.messages)){ return; }
         selectedSyncedSession = id;
         selectedResumeSessionId = id;
-        activeSessionId = id;
-        updateArgsResume(id);
         const select = document.getElementById('agentSessionSelect');
         if(select){ select.value = id; }
-        const data = await fetch(withToken('/api/sessions/' + id)).then(r=>r.json());
-        selectedSyncedMessages = data.messages || [];
+        selectedSyncedMessages = data.messages;
+        rememberCursorSessionId(id, data.cursorSessionId);
+        if(agentSessionRunning){ return; }
+        activeSessionId = id;
+        updateArgsResume(id);
         loadHistoryIntoPanels(selectedSyncedMessages);
         const preview = selectedSyncedMessages.slice(-8).map((m) => '[' + m.role + '] ' + m.content).join('\\n\\n');
         document.getElementById('sessionPreview').textContent = preview || 'No message content.';

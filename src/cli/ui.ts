@@ -58,6 +58,8 @@ import {
   listCursorSessions,
   listCursorSessionsForWorkspaceRoot,
   SessionSummary,
+  isCursorChatSessionId,
+  resolveCursorResumeId,
 } from "../cursor/sessionUtils.js";
 import {
   parseCursorModelsOutput,
@@ -84,6 +86,7 @@ import {
   withBuiltinSubagents,
   type LiveSubagentRow,
 } from "../cursor/subagents.js";
+import { assistantTextFromStreamEvent, shouldAppendAssistantStreamEvent } from "../cursor/streamJson.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -666,6 +669,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             status: record.status,
             preview: (record.prompt || record.output || "").slice(0, 160),
             source: "winnow-local",
+            cursorSessionId: record.cursorSessionId,
           };
           byId.set(id, entry);
         } catch {
@@ -733,10 +737,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       file: localSessionRecordPath(entry.id),
       updatedAt: entry.updatedAt,
       preview: entry.preview,
+      cursorSessionId: entry.cursorSessionId,
     }));
   }
 
-  async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
+  async function readLocalSession(
+    id: string,
+  ): Promise<{ id: string; messages: SessionMessage[]; cursorSessionId?: string }> {
     const content = await readFile(localSessionRecordPath(id), "utf8");
     const record = JSON.parse(content) as LocalSessionRecord;
     if (Array.isArray(record.events) && record.events.length > 0) {
@@ -746,7 +753,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         content: event.content,
         timestamp: event.ts,
       }));
-      return { id, messages };
+      return { id, messages, cursorSessionId: record.cursorSessionId };
     }
     const messages: SessionMessage[] = [
       { id: "init-prompt", role: "user", content: record.prompt, timestamp: record.startedAt },
@@ -757,7 +764,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (record.errorOutput?.trim()) {
       messages.push({ id: "init-error", role: "stderr", content: record.errorOutput, timestamp: record.endedAt });
     }
-    return { id, messages };
+    return { id, messages, cursorSessionId: record.cursorSessionId };
   }
 
   const sessions = new Map<string, AgentSession>();
@@ -991,14 +998,6 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     return next;
   };
-  /**
-   * Looks like a Cursor chat session id (UUID-style) reported by `cursor-agent`.
-   * Anything else (e.g. Winnow's internal `<timestamp>-<rand>` ids) must not be
-   * passed to `--resume`, since cursor-agent silently falls back to the `Auto`
-   * model when given an unknown id, which produces false-positive runs.
-   */
-  const isLikelyCursorSessionId = (value: string): boolean =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
   const stripResumeArgs = (args: string[]): { stripped: string[]; removed: string[] } => {
     const stripped: string[] = [];
     const removed: string[] = [];
@@ -1076,16 +1075,43 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const baseArgs = baseArgsNoResume;
     const autonomyEnabled = payload.autonomyMode !== false;
     const requestedResumeId = (payload.sessionId || "").trim();
-    const resumeSessionId = isLikelyCursorSessionId(requestedResumeId) ? requestedResumeId : "";
-    const droppedResumeIds = [
-      ...removedResumeIds.filter((value) => !isLikelyCursorSessionId(value)),
-      ...(requestedResumeId && !resumeSessionId ? [requestedResumeId] : []),
-    ];
+    const existing = sessions.get(id);
+
+    let diskEvents: AgentEvent[] = [];
+    let diskOutput = "";
+    let diskErrorOutput = "";
+    let diskStartedAt = new Date().toISOString();
+    let diskCursorSessionId = "";
+    if (!existing) {
+      try {
+        const recordPath = localSessionRecordPath(id);
+        const content = readFileSync(recordPath, "utf8");
+        const record = JSON.parse(content) as LocalSessionRecord;
+        diskEvents = record.events || [];
+        diskOutput = record.output || "";
+        diskErrorOutput = record.errorOutput || "";
+        diskStartedAt = record.startedAt || diskStartedAt;
+        diskCursorSessionId = record.cursorSessionId || "";
+      } catch {
+        // New session or failed to read
+      }
+    }
+    const storedCursorSessionId = existing?.cursorSessionId || diskCursorSessionId || "";
+    let { resumeId: resumeSessionId, droppedArgIds: droppedResumeIds } = resolveCursorResumeId({
+      payloadSessionId: requestedResumeId,
+      payloadCursorSessionId: String(payload.cursorSessionId || "").trim(),
+      storedCursorSessionId,
+      resumeArgIds: removedResumeIds,
+    });
+    if (requestedResumeId && executionMode === "cursor" && !resumeSessionId) {
+      throw new Error(
+        "Continue needs a Cursor chat UUID so the model can load native thread context. Uncheck continue to start a new chat, or run this session once so Winnow can store the id from cursor-agent.",
+      );
+    }
     const args =
       executionMode === "cursor"
         ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, resumeSessionId)
         : [];
-    const existing = sessions.get(id);
     let session: AgentSession;
 
     if (existing) {
@@ -1099,26 +1125,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         startedAt: existing.startedAt || new Date().toISOString(),
         events: existing.events ?? [],
         liveSubagents: [],
+        cursorSessionId: existing.cursorSessionId || storedCursorSessionId || undefined,
       };
     } else {
-      // Try loading from disk
-      let diskEvents: AgentEvent[] = [];
-      let diskOutput = "";
-      let diskErrorOutput = "";
-      let diskStartedAt = new Date().toISOString();
-
-      try {
-        const recordPath = localSessionRecordPath(id);
-        const content = readFileSync(recordPath, "utf8");
-        const record = JSON.parse(content) as LocalSessionRecord;
-        diskEvents = record.events || [];
-        diskOutput = record.output || "";
-        diskErrorOutput = record.errorOutput || "";
-        diskStartedAt = record.startedAt || diskStartedAt;
-      } catch {
-        // New session or failed to read
-      }
-
       session = {
         id,
         status: "running",
@@ -1129,6 +1138,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         args,
         events: diskEvents,
         liveSubagents: [],
+        cursorSessionId: storedCursorSessionId || undefined,
       };
     }
 
@@ -1143,9 +1153,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     );
     const prompt = attachmentBlock ? `${payload.prompt}\n\n${attachmentBlock}` : payload.prompt;
     const planId = String(payload.planId || "").trim();
-    const graphSeedEnabled = payload.graphSeed !== false;
+    const graphSeedEnabled = payload.graphSeed !== false && !resumeSessionId;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
-    const planContext = planId ? await readPlanMarkdown(planId) : null;
+    const planContext = planId && !resumeSessionId ? await readPlanMarkdown(planId) : null;
     let selectedModelError: string | undefined;
     let initModelVerified = false;
     // Preload the id→label map so we can validate `system.init` synchronously below.
@@ -1176,6 +1186,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         output: session.output,
         errorOutput: session.errorOutput,
         events: session.events,
+        cursorSessionId: session.cursorSessionId,
       });
 
     const pushEvent = (kind: AgentEvent["kind"], content: string) => {
@@ -1221,6 +1232,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         status: "error",
         preview: prompt.slice(0, 160),
         source: "winnow-local",
+        cursorSessionId: session.cursorSessionId,
       });
       closeStreamClients(id);
       sessions.delete(id);
@@ -1234,15 +1246,21 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (planPreamble.trim().length > 0) {
       const scopedPlanName = planContext && planContext.ok ? planContext.title : planId;
       pushEvent("status", `Plan scope: prepended context from plan "${scopedPlanName}".`);
-    } else if (planId) {
+    } else if (planId && !resumeSessionId) {
       pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
     }
     if (droppedResumeIds.length > 0) {
       pushEvent(
         "status",
-        `Dropped invalid --resume id(s): ${droppedResumeIds.join(", ")}. ` +
-          "These are not Cursor chat ids; cursor-agent would silently fall back to the Auto model.",
+        `Dropped invalid --resume id(s) from extra args: ${droppedResumeIds.join(", ")}. ` +
+          "cursor-agent --resume only accepts Cursor chat UUIDs.",
       );
+    }
+    if (resumeSessionId) {
+      if (!session.cursorSessionId) {
+        session.cursorSessionId = resumeSessionId;
+      }
+      pushEvent("status", `Resuming Cursor chat ${resumeSessionId} (native thread, no local history dump).`);
     }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
@@ -1254,6 +1272,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       status: session.status,
       preview: prompt.slice(0, 160),
       source: "winnow-local",
+      cursorSessionId: session.cursorSessionId,
     });
 
     upsertRunStart({
@@ -1296,6 +1315,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: "error",
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushDone();
       };
@@ -1379,6 +1399,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: "done",
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushDone();
       } catch (error) {
@@ -1427,6 +1448,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             );
           }
           if (data.type === "system" && data.subtype === "init") {
+            const cursorChatId = typeof data.session_id === "string" ? data.session_id.trim() : "";
+            if (isCursorChatSessionId(cursorChatId) && session.cursorSessionId !== cursorChatId) {
+              session.cursorSessionId = cursorChatId;
+              pushEvent("status", `Cursor chat id ${cursorChatId}`);
+              void persistRecord();
+            }
             const reportedLabel = typeof data.model === "string" ? data.model.trim() : "";
             if (!isGenericCursorModel(modelPreference) && expectedCursorLabel) {
               const expected = expectedCursorLabel.trim().toLowerCase();
@@ -1451,11 +1478,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               }
             }
           } else if (data.type === "assistant" && data.message?.content) {
-            // Only process partial stream chunks to avoid double-printing full collapsed blocks
-            if (!data.model_call_id) {
-              const text = data.message.content.map((c: any) => c.text).join("");
-              session.output += text;
-              pushEvent("assistant", text);
+            // stream-partial-output: append only timestamped deltas. Skip the
+            // pre-tool-call flush (model_call_id) and the final turn flush (no timestamp_ms).
+            if (shouldAppendAssistantStreamEvent(data)) {
+              const text = assistantTextFromStreamEvent(data);
+              if (text) {
+                session.output += text;
+                pushEvent("assistant", text);
+              }
             }
           } else if (data.type === "tool_call") {
             const toolType = Object.keys(data.tool_call || {})[0] || "tool";
@@ -1481,6 +1511,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               session.output += "\n";
             }
           } else if (data.type === "result") {
+            const resultChatId = typeof data.session_id === "string" ? data.session_id.trim() : "";
+            if (isCursorChatSessionId(resultChatId) && session.cursorSessionId !== resultChatId) {
+              session.cursorSessionId = resultChatId;
+              pushEvent("status", `Cursor chat id ${resultChatId}`);
+              void persistRecord();
+            }
             if (data.subtype === "success") {
               const reportedModel = typeof data.model === "string" ? data.model.trim() : "";
               // Only the `system.init` event reliably contains the resolved model.
@@ -1559,6 +1595,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: session.status,
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushStreamEvent(id, "status", {
           status: session.status,
@@ -2931,7 +2968,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         }
         const merged = [...byId.values()]
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-          .slice(0, max);
+          .slice(0, max)
+          .map((s) =>
+            s.cursorSessionId || !isCursorChatSessionId(s.id)
+              ? s
+              : { ...s, cursorSessionId: s.id },
+          );
         sendJson(res, 200, {
           sessions: merged,
           dir: transcriptDirLabel,
@@ -2948,7 +2990,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const id = url.pathname.replace("/api/sessions/", "").trim();
         const explicitDir = url.searchParams.get("dir") ?? undefined;
         const envTranscripts = Boolean(process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim());
-        let session: { id: string; messages: SessionMessage[] };
+        let session: { id: string; messages: SessionMessage[]; cursorSessionId?: string };
         try {
           session = await readLocalSession(id);
         } catch {
@@ -2960,7 +3002,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             session = await readCursorSession(id, undefined, uiWorkspace.dir);
           }
         }
-        sendJson(res, 200, session);
+        sendJson(res, 200, {
+          ...session,
+          cursorSessionId: session.cursorSessionId || (isCursorChatSessionId(id) ? id : undefined),
+        });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
@@ -3017,7 +3062,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           return;
         }
         const session = await startAgentSession(payload, { signal: abortFromDisconnect.signal });
-        sendJson(res, 200, { ok: true, sessionId: session.id });
+        sendJson(res, 200, { ok: true, sessionId: session.id, cursorSessionId: session.cursorSessionId || null });
       } catch (error) {
         const aborted =
           error instanceof DOMException && error.name === "AbortError"

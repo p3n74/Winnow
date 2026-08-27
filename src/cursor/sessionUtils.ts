@@ -11,7 +11,37 @@ export type SessionSummary = {
   file: string;
   updatedAt: string;
   preview: string;
+  /** Cursor `--resume` UUID when this row is a Winnow-local session that already captured one. */
+  cursorSessionId?: string;
 };
+
+const CURSOR_CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Cursor `--resume` only accepts chat UUIDs. Winnow's `<timestamp>-<rand>` ids are not valid. */
+export function isCursorChatSessionId(value: string): boolean {
+  return CURSOR_CHAT_ID_RE.test(String(value || "").trim());
+}
+
+export function resolveCursorResumeId(input: {
+  payloadSessionId?: string;
+  payloadCursorSessionId?: string;
+  storedCursorSessionId?: string;
+  resumeArgIds?: string[];
+}): { resumeId: string; droppedArgIds: string[] } {
+  const payload = String(input.payloadSessionId || "").trim();
+  const fromClient = String(input.payloadCursorSessionId || "").trim();
+  const stored = String(input.storedCursorSessionId || "").trim();
+  const args = (input.resumeArgIds || []).map((id) => String(id || "").trim()).filter(Boolean);
+  const droppedArgIds = args.filter((id) => !isCursorChatSessionId(id));
+  const fromArgs = args.find((id) => isCursorChatSessionId(id)) || "";
+  const fromPayload = isCursorChatSessionId(payload) ? payload : "";
+  const fromHint = isCursorChatSessionId(fromClient) ? fromClient : "";
+  const fromStored = isCursorChatSessionId(stored) ? stored : "";
+  return {
+    resumeId: fromHint || fromPayload || fromStored || fromArgs,
+    droppedArgIds,
+  };
+}
 
 /**
  * Cursor stores transcripts under ~/.cursor/projects/<workspace-id>/agent-transcripts

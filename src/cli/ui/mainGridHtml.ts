@@ -83,7 +83,11 @@ export function buildMainTerminalHtml(token?: string): string {
       .back:hover { background: var(--line-faint); color: var(--text-neon); }
       .root { display: grid; grid-template-columns: 45fr 55fr; gap: 16px; padding: 16px; min-width: 0; min-height: 0; }
       .left { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
+      .left.pane1Expanded { grid-template-rows: minmax(0, 1fr); }
       .leftBottom { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; min-width: 0; min-height: 0; }
+      .left.pane1Expanded .leftBottom {
+        display: none;
+      }
       .leftBottomLeft { display: grid; grid-template-rows: 60fr 40fr; gap: 16px; min-width: 0; min-height: 0; }
       .pane {
         min-width: 0;
@@ -94,15 +98,18 @@ export function buildMainTerminalHtml(token?: string): string {
         overflow: hidden;
         box-shadow: var(--shadow);
       }
-      .paneInner { width: 100%; height: 100%; display: grid; grid-template-rows: 38px 1fr; }
+      .paneInner { width: 100%; height: 100%; display: grid; grid-template-rows: auto 1fr; }
       .paneHead {
         border-bottom: 1px solid var(--line);
         color: var(--muted);
         font-size: 12px;
-        padding: 0 12px;
+        padding: 4px 12px;
+        min-height: 38px;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
         background: var(--panel);
       }
       .paneTitle { display: flex; align-items: center; gap: 8px; color: var(--text-strong); font-weight: 500; }
@@ -207,7 +214,7 @@ export function buildMainTerminalHtml(token?: string): string {
         white-space: pre-wrap;
         word-break: break-word;
       }
-      .pane2DocsRoot { padding: 0 10px 10px; gap: 8px; }
+      .docsRoot { padding: 0 10px 10px; gap: 8px; }
       .docsToolbar {
         display: flex;
         flex-wrap: wrap;
@@ -1160,24 +1167,26 @@ export function buildMainTerminalHtml(token?: string): string {
           <span class="brand">Winnow Main Grid</span>
         </div>
         <div class="toolbarRight">
-          <span class="chip">1 ranger · trace</span>
-          <span class="chip">2 agent · shell · docs · graph · plans · processes · scripts</span>
+          <span class="chip">1 ranger · trace · docs</span>
+          <span class="chip">2 agent · shell · graph · plans · processes · scripts</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
         </div>
       </div>
       <div class="root">
-      <div class="left">
+      <div id="gridLeft" class="left">
         <div id="pane1Wrap" class="pane">
           <div class="paneInner">
             <div class="paneHead">
               <span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span>
               <div style="display:flex;align-items:center;gap:10px">
-                <div class="paneTabs" role="tablist" aria-label="File browser and agent trace">
+                <div class="paneTabs" role="tablist" aria-label="File browser, agent trace, and docs">
                   <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
                   <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="docs" id="pane1TabDocs">Docs</button>
                 </div>
+                <button type="button" class="reconnect" id="btnPane1Expand" aria-pressed="false" title="Hide panes 3, 4, and 5 and use their space">Fullscreen</button>
                 <button type="button" class="reconnect" id="reconnectPane1" data-pane="1">Reconnect</button>
               </div>
             </div>
@@ -1188,10 +1197,23 @@ export function buildMainTerminalHtml(token?: string): string {
               <div id="pane1TraceWrap" class="pane1View isHidden" aria-hidden="true">
                 <pre id="pane1Trace">No active agent session.</pre>
               </div>
+              <div id="pane1Docs" class="pane1View isHidden docsRoot" aria-hidden="true">
+                <div class="docsToolbar">
+                  <button type="button" class="reconnect" id="btnDocsReindex">Refresh index</button>
+                  <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
+                    <option value="">(select file)</option>
+                  </select>
+                </div>
+                <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
+                <div class="docsBody">
+                  <article id="docsMdRendered" class="docsMdRendered isHidden"></article>
+                  <iframe id="docsPdfViewer" class="docsPdfViewer isHidden" title="PDF preview"></iframe>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-        <div class="leftBottom">
+        <div id="gridLeftBottom" class="leftBottom">
           <div class="leftBottomLeft">
             <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">htop</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
             <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">4 Network <span class="paneCmd">netwatch</span></span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
@@ -1204,10 +1226,9 @@ export function buildMainTerminalHtml(token?: string): string {
           <div class="paneHead">
             <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, plans, processes, and scripts">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, graph, plans, processes, and scripts">
                 <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
-                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="plans" id="pane2TabPlans">Plans</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="processes" id="pane2TabProcesses">Processes</button>
@@ -1226,19 +1247,6 @@ export function buildMainTerminalHtml(token?: string): string {
             </div>
             <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
               <div id="pane2term" class="term"></div>
-            </div>
-            <div id="pane2Docs" class="pane2View isHidden pane2DocsRoot" aria-hidden="true">
-              <div class="docsToolbar">
-                <button type="button" class="reconnect" id="btnDocsReindex">Refresh index</button>
-                <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
-                  <option value="">(select file)</option>
-                </select>
-              </div>
-              <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
-              <div class="docsBody">
-                <article id="docsMdRendered" class="docsMdRendered isHidden"></article>
-                <iframe id="docsPdfViewer" class="docsPdfViewer isHidden" title="PDF preview"></iframe>
-              </div>
             </div>
             <div id="pane2Graph" class="pane2View isHidden graphRoot" aria-hidden="true">
               <div class="graphToolbar">
@@ -1469,6 +1477,9 @@ export function buildMainTerminalHtml(token?: string): string {
       let pane1TraceTimer = null;
       let pane1TraceLines = [];
       let pane1TraceSeen = new Set();
+      let pane1Expanded = (function(){
+        try { return localStorage.getItem("winnow.pane1Expanded") === "1"; } catch { return false; }
+      })();
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let processRefreshTimer = null;
@@ -1565,6 +1576,7 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       function resizeAll(){
         panes.forEach((paneId)=>{
+          if(pane1Expanded && (paneId === "3" || paneId === "4" || paneId === "5")){ return; }
           const current = paneState.get(paneId);
           if(!current){ return; }
           current.fit.fit();
@@ -1665,25 +1677,32 @@ export function buildMainTerminalHtml(token?: string): string {
         pane1TraceTimer = setInterval(pollPane1TraceActive, 2000);
       }
       function setPane1Tab(mode){
-        pane1Mode = mode === "trace" ? "trace" : "browser";
+        pane1Mode = mode === "trace" ? "trace" : mode === "docs" ? "docs" : "browser";
         const isBrowser = pane1Mode === "browser";
         const isTrace = pane1Mode === "trace";
+        const isDocs = pane1Mode === "docs";
         const browserEl = document.getElementById("pane1Browser");
         const traceEl = document.getElementById("pane1TraceWrap");
+        const docsEl = document.getElementById("pane1Docs");
         const tb = document.getElementById("pane1TabBrowser");
         const tt = document.getElementById("pane1TabTrace");
+        const td = document.getElementById("pane1TabDocs");
         const recon = document.getElementById("reconnectPane1");
-        if(browserEl && traceEl){
+        if(browserEl && traceEl && docsEl){
           browserEl.classList.toggle("isHidden", !isBrowser);
           traceEl.classList.toggle("isHidden", !isTrace);
+          docsEl.classList.toggle("isHidden", !isDocs);
           browserEl.setAttribute("aria-hidden", isBrowser ? "false" : "true");
           traceEl.setAttribute("aria-hidden", isTrace ? "false" : "true");
+          docsEl.setAttribute("aria-hidden", isDocs ? "false" : "true");
         }
-        if(tb && tt){
+        if(tb && tt && td){
           tb.classList.toggle("paneTabActive", isBrowser);
           tt.classList.toggle("paneTabActive", isTrace);
+          td.classList.toggle("paneTabActive", isDocs);
           tb.setAttribute("aria-selected", String(isBrowser));
           tt.setAttribute("aria-selected", String(isTrace));
+          td.setAttribute("aria-selected", String(isDocs));
         }
         if(recon){ recon.hidden = !isBrowser; }
         if(isBrowser){
@@ -1692,12 +1711,32 @@ export function buildMainTerminalHtml(token?: string): string {
         if(isTrace){
           void pollPane1TraceActive();
         }
+        if(isDocs){
+          void refreshDocsIndex(false);
+        }
+      }
+      function setPane1Expanded(next){
+        pane1Expanded = Boolean(next);
+        const left = document.getElementById("gridLeft");
+        const bottom = document.getElementById("gridLeftBottom");
+        const btn = document.getElementById("btnPane1Expand");
+        if(left){ left.classList.toggle("pane1Expanded", pane1Expanded); }
+        if(bottom){ bottom.setAttribute("aria-hidden", pane1Expanded ? "true" : "false"); }
+        if(btn){
+          btn.textContent = pane1Expanded ? "Restore" : "Fullscreen";
+          btn.setAttribute("aria-pressed", pane1Expanded ? "true" : "false");
+          btn.title = pane1Expanded ? "Show panes 3, 4, and 5 again" : "Hide panes 3, 4, and 5 and use their space";
+        }
+        try { localStorage.setItem("winnow.pane1Expanded", pane1Expanded ? "1" : "0"); } catch {}
+        requestAnimationFrame(()=>{
+          resizeAll();
+          setTimeout(resizeAll, 80);
+        });
       }
       function setPane2Tab(mode){
         pane2Mode = mode;
         const wsEl = document.getElementById("pane2Workspace");
         const tsEl = document.getElementById("pane2TerminalWrap");
-        const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
         const plansEl = document.getElementById("pane2Plans");
         const procEl = document.getElementById("pane2Processes");
@@ -1705,7 +1744,6 @@ export function buildMainTerminalHtml(token?: string): string {
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
-        const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
         const tplans = document.getElementById("pane2TabPlans");
         const tp = document.getElementById("pane2TabProcesses");
@@ -1713,41 +1751,36 @@ export function buildMainTerminalHtml(token?: string): string {
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
-        const isDoc = mode === "docs";
         const isGraph = mode === "graph";
         const isPlans = mode === "plans";
         const isProc = mode === "processes";
         const isScripts = mode === "scripts";
-        if(wsEl && tsEl && docEl && graphEl && plansEl && procEl && scriptsEl){
+        if(wsEl && tsEl && graphEl && plansEl && procEl && scriptsEl){
           wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
-          docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
           plansEl.classList.toggle("isHidden", !isPlans);
           procEl.classList.toggle("isHidden", !isProc);
           scriptsEl.classList.toggle("isHidden", !isScripts);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
-          docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
           plansEl.setAttribute("aria-hidden", isPlans ? "false" : "true");
           procEl.setAttribute("aria-hidden", isProc ? "false" : "true");
           scriptsEl.setAttribute("aria-hidden", isScripts ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
         }
-        if(tw && tt && td && tg && tplans && tp && ts){
+        if(tw && tt && tg && tplans && tp && ts){
           tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
-          td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
           tplans.classList.toggle("paneTabActive", isPlans);
           tp.classList.toggle("paneTabActive", isProc);
           ts.classList.toggle("paneTabActive", isScripts);
           tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
-          td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
           tplans.setAttribute("aria-selected", isPlans.toString());
           tp.setAttribute("aria-selected", isProc.toString());
@@ -1773,9 +1806,6 @@ export function buildMainTerminalHtml(token?: string): string {
             const cur = paneState.get(PANE2_ID);
             if(cur && cur.term){ cur.term.focus(); }
           });
-        }
-        if(isDoc){
-          void refreshDocsIndex(false);
         }
         if(isGraph){
           void refreshGraphErd();
@@ -4663,6 +4693,8 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       document.getElementById("pane1TabBrowser")?.addEventListener("click",()=>setPane1Tab("browser"));
       document.getElementById("pane1TabTrace")?.addEventListener("click",()=>setPane1Tab("trace"));
+      document.getElementById("pane1TabDocs")?.addEventListener("click",()=>setPane1Tab("docs"));
+      document.getElementById("btnPane1Expand")?.addEventListener("click",()=>setPane1Expanded(!pane1Expanded));
       window.addEventListener("message",(event)=>{
         const data = event.data;
         if(!data || data.type !== "winnow-agent-session"){ return; }
@@ -4671,7 +4703,6 @@ export function buildMainTerminalHtml(token?: string): string {
       });
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
-      document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
       document.getElementById("pane2TabPlans")?.addEventListener("click",()=>setPane2Tab("plans"));
       document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
@@ -5040,11 +5071,16 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(event.key === "Escape" && graphOverlayOpen){
           closeGraphOverlay();
+          return;
+        }
+        if(event.key === "Escape" && pane1Expanded){
+          setPane1Expanded(false);
         }
       });
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
       setPane1Tab("browser");
+      setPane1Expanded(pane1Expanded);
       startPane1TracePolling();
       setPane2Tab("workspace");
       setPlanGraphVisibility(true);

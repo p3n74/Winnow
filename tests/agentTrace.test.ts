@@ -62,11 +62,20 @@ describe("pickActiveAgentSession", () => {
 });
 
 describe("pane 1 Trace HTML contract", () => {
-  it("includes Browser and Trace tabs and the trace log", () => {
+  it("includes Browser, Trace, and Docs tabs on pane 1", () => {
     const html = buildMainTerminalHtml();
     expect(html).toContain('data-pane1-tab="browser"');
     expect(html).toContain('data-pane1-tab="trace"');
+    expect(html).toContain('data-pane1-tab="docs"');
+    expect(html).toContain('id="pane1TabDocs"');
+    expect(html).toContain('id="pane1Docs"');
+    expect(html).toContain('id="docsFileSelect"');
+    expect(html).not.toContain('data-pane2-tab="docs"');
+    expect(html).not.toContain('id="pane2Docs"');
     expect(html).toContain('id="pane1Trace"');
+    expect(html).toContain('id="btnPane1Expand"');
+    expect(html).toContain(".left.pane1Expanded");
+    expect(html).toContain('id="gridLeftBottom"');
   });
 
   it("includes a Scripts tab on pane 2", () => {
