@@ -330,6 +330,99 @@ export function buildMainTerminalHtml(token?: string): string {
         font-family: var(--font-mono);
         white-space: pre-wrap;
       }
+      .scriptsRoot {
+        padding: 8px 10px 10px;
+        gap: 8px;
+      }
+      .scriptsStep {
+        min-height: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .scriptsStep.isHidden { display: none !important; }
+      .scriptsLayout {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+        flex: 1;
+      }
+      .scriptsList {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        overflow: auto;
+        min-height: 0;
+        flex: 1;
+        padding: 6px;
+      }
+      .scriptRow {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: rgba(0,0,0,0.5);
+        color: inherit;
+        font-family: inherit;
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 10px 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+      }
+      .scriptRow:hover { border-color: var(--line); }
+      .scriptRow.selected { border-color: var(--accent); }
+      .scriptRowTitle { color: var(--text-neon); font-size: 13px; font-weight: 600; }
+      .scriptRowMeta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+      .scriptRowBlurb { color: var(--text); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+      .scriptDetail {
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: 1;
+      }
+      .scriptDetailHead {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .scriptKnobs {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .scriptKnob {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      .scriptKnobHead { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+      .scriptKnobSample { font-size: 11px; color: var(--text-neon); margin-top: 4px; font-family: var(--font-mono); }
+      .scriptKnobOrigin { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      .scriptKnobInput {
+        margin-top: 6px;
+        width: 100%;
+      }
+      .scriptRuns { display: flex; flex-direction: column; gap: 6px; }
+      .scriptRunCard {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 11px;
+      }
+      .scriptPreview {
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        white-space: pre-wrap;
+        min-height: 42px;
+      }
       .plansRoot { padding: 10px; gap: 10px; }
       .plansHero {
         display: grid;
@@ -1068,7 +1161,7 @@ export function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger · trace</span>
-          <span class="chip">2 agent · shell · docs · graph · plans · processes</span>
+          <span class="chip">2 agent · shell · docs · graph · plans · processes · scripts</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -1111,13 +1204,14 @@ export function buildMainTerminalHtml(token?: string): string {
           <div class="paneHead">
             <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, and system shell">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, plans, processes, and scripts">
                 <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="plans" id="pane2TabPlans">Plans</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="processes" id="pane2TabProcesses">Processes</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="scripts" id="pane2TabScripts">Scripts</button>
               </div>
               <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
             </div>
@@ -1220,6 +1314,47 @@ export function buildMainTerminalHtml(token?: string): string {
               <div id="procList" class="procList">Loading…</div>
               <div class="procHint">Selected process output (tail):</div>
               <pre id="procLogPreview" class="procLog">Select a process to inspect logs.</pre>
+            </div>
+            <div id="pane2Scripts" class="pane2View isHidden scriptsRoot" aria-hidden="true">
+              <div id="scriptsStepList" class="scriptsStep" data-scripts-step="list">
+                <div class="procToolbar">
+                  <button type="button" class="reconnect" id="btnScriptsScan">Scan</button>
+                  <button type="button" class="reconnect" id="btnScriptsRefresh">Refresh</button>
+                  <input id="scriptsFilter" class="procInput procCommand" placeholder="Filter scripts…" />
+                </div>
+                <p id="scriptsHint" class="procHint">Pick a script. Next page is knobs, intent, and run controls.</p>
+                <div id="scriptsList" class="scriptsList">Scan the repo to index scripts.</div>
+              </div>
+              <div id="scriptsStepDetail" class="scriptsStep isHidden" data-scripts-step="detail" aria-hidden="true">
+                <div class="procToolbar">
+                  <button type="button" class="reconnect" id="btnScriptsBack">Back to scripts</button>
+                  <button type="button" class="reconnect" id="btnScriptsInspect">Refresh knobs</button>
+                  <button type="button" class="reconnect" id="btnScriptsPropose">Propose</button>
+                  <button type="button" class="reconnect" id="btnScriptsRun">Run</button>
+                  <button type="button" class="reconnect" id="btnScriptsStop">Stop</button>
+                </div>
+                <p id="scriptsDetailHint" class="procHint">Adjust knobs, describe the run, then Propose and confirm.</p>
+                <div class="scriptDetail">
+                  <div class="scriptDetailHead">
+                    <div>
+                      <div id="scriptDetailTitle" class="scriptRowTitle">Select a script</div>
+                      <div id="scriptDetailBlurb" class="scriptRowMeta">Knobs and run history appear here.</div>
+                    </div>
+                  </div>
+                  <div class="small muted">Sample command</div>
+                  <pre id="scriptSampleCommand" class="scriptPreview">Scan to generate a sample usage.</pre>
+                  <div id="scriptLinkedYaml" class="scriptRowMeta">No linked YAML configs.</div>
+                  <div class="small muted">Adjustable parameters</div>
+                  <div id="scriptKnobs" class="scriptKnobs"><div class="scriptRowMeta">No script selected.</div></div>
+                  <textarea id="scriptIntent" class="procInput" placeholder="High-level intent: smaller batch, same seed, longer run…" style="min-height:64px;width:100%;resize:vertical"></textarea>
+                  <div class="small muted">Command preview (confirm before run)</div>
+                  <pre id="scriptPreview" class="scriptPreview">Propose a command first.</pre>
+                  <div class="small muted">Latest insight</div>
+                  <div id="scriptInsight" class="scriptRunCard">No runs yet.</div>
+                  <div class="small muted">History</div>
+                  <div id="scriptRuns" class="scriptRuns"></div>
+                </div>
+              </div>
             </div>
             <div id="pane2Plans" class="pane2View isHidden plansRoot" aria-hidden="true">
               <div class="plansHero">
@@ -1338,8 +1473,14 @@ export function buildMainTerminalHtml(token?: string): string {
       let graphSimulation = null;
       let processRefreshTimer = null;
       let plansRefreshTimer = null;
+      let scriptsRefreshTimer = null;
       let selectedManagedProcessId = null;
       let cachedManagedProcesses = [];
+      let selectedScriptId = "";
+      let scriptsStep = "list";
+      let cachedScripts = [];
+      let scriptProposal = null;
+      let activeScriptRunId = null;
       let selectedPlanId = "";
       let cachedPlans = [];
       let planGraphVisible = true;
@@ -1560,6 +1701,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const graphEl = document.getElementById("pane2Graph");
         const plansEl = document.getElementById("pane2Plans");
         const procEl = document.getElementById("pane2Processes");
+        const scriptsEl = document.getElementById("pane2Scripts");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
@@ -1567,6 +1709,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const tg = document.getElementById("pane2TabGraph");
         const tplans = document.getElementById("pane2TabPlans");
         const tp = document.getElementById("pane2TabProcesses");
+        const ts = document.getElementById("pane2TabScripts");
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
@@ -1574,36 +1717,41 @@ export function buildMainTerminalHtml(token?: string): string {
         const isGraph = mode === "graph";
         const isPlans = mode === "plans";
         const isProc = mode === "processes";
-        if(wsEl && tsEl && docEl && graphEl && plansEl && procEl){
+        const isScripts = mode === "scripts";
+        if(wsEl && tsEl && docEl && graphEl && plansEl && procEl && scriptsEl){
           wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
           docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
           plansEl.classList.toggle("isHidden", !isPlans);
           procEl.classList.toggle("isHidden", !isProc);
+          scriptsEl.classList.toggle("isHidden", !isScripts);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
           plansEl.setAttribute("aria-hidden", isPlans ? "false" : "true");
           procEl.setAttribute("aria-hidden", isProc ? "false" : "true");
+          scriptsEl.setAttribute("aria-hidden", isScripts ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : isPlans ? "plan board" : "managed processes";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
         }
-        if(tw && tt && td && tg && tplans && tp){
+        if(tw && tt && td && tg && tplans && tp && ts){
           tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
           td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
           tplans.classList.toggle("paneTabActive", isPlans);
           tp.classList.toggle("paneTabActive", isProc);
+          ts.classList.toggle("paneTabActive", isScripts);
           tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
           tplans.setAttribute("aria-selected", isPlans.toString());
           tp.setAttribute("aria-selected", isProc.toString());
+          ts.setAttribute("aria-selected", isScripts.toString());
         }
         if(recon){ recon.hidden = !isTerm; }
         if(processRefreshTimer){
@@ -1613,6 +1761,10 @@ export function buildMainTerminalHtml(token?: string): string {
         if(plansRefreshTimer){
           clearInterval(plansRefreshTimer);
           plansRefreshTimer = null;
+        }
+        if(scriptsRefreshTimer){
+          clearInterval(scriptsRefreshTimer);
+          scriptsRefreshTimer = null;
         }
         if(isTerm){
           openPane2Terminal();
@@ -1635,6 +1787,12 @@ export function buildMainTerminalHtml(token?: string): string {
             if(selectedManagedProcessId){
               void refreshManagedProcessLog(selectedManagedProcessId);
             }
+          }, 4000);
+        }
+        if(isScripts){
+          void refreshScripts(false);
+          scriptsRefreshTimer = setInterval(function(){
+            if(scriptsStep === "detail" && selectedScriptId){ void loadScriptDetail(selectedScriptId, "poll"); }
           }, 4000);
         }
         if(isPlans){
@@ -2356,6 +2514,313 @@ export function buildMainTerminalHtml(token?: string): string {
         selectedManagedProcessId = id;
         await refreshManagedProcesses();
         await refreshManagedProcessLog(id);
+      }
+      function setScriptsHint(text){
+        const hint = document.getElementById(scriptsStep === "detail" ? "scriptsDetailHint" : "scriptsHint");
+        if(hint){ hint.textContent = text; }
+      }
+      function showScriptsStep(step){
+        scriptsStep = step === "detail" ? "detail" : "list";
+        const listEl = document.getElementById("scriptsStepList");
+        const detailEl = document.getElementById("scriptsStepDetail");
+        if(listEl){
+          listEl.classList.toggle("isHidden", scriptsStep !== "list");
+          listEl.setAttribute("aria-hidden", scriptsStep === "list" ? "false" : "true");
+        }
+        if(detailEl){
+          detailEl.classList.toggle("isHidden", scriptsStep !== "detail");
+          detailEl.setAttribute("aria-hidden", scriptsStep === "detail" ? "false" : "true");
+        }
+      }
+      function collectScriptKnobValues(){
+        const inputs = document.querySelectorAll("#scriptKnobs [data-knob-id]");
+        const lines = [];
+        inputs.forEach((input)=>{
+          const flag = decodeURIComponent(input.getAttribute("data-knob-flag") || "");
+          const id = decodeURIComponent(input.getAttribute("data-knob-id") || "");
+          const value = String(input.value || "").trim();
+          const origin = input.getAttribute("data-knob-origin") || "cli";
+          const yamlFile = decodeURIComponent(input.getAttribute("data-yaml-file") || "");
+          const yamlKey = decodeURIComponent(input.getAttribute("data-yaml-key") || "");
+          if(origin === "yaml" && (yamlFile || yamlKey)){
+            lines.push((yamlFile || "config.yaml") + " → " + (yamlKey || flag || id) + "=" + (value || "(empty)"));
+          } else if(flag || id){
+            lines.push((flag || id) + "=" + (value || "(empty)"));
+          }
+        });
+        return lines;
+      }
+      function currentScriptIntent(){
+        const typed = String(document.getElementById("scriptIntent")?.value || "").trim();
+        const knobs = collectScriptKnobValues();
+        if(!knobs.length){ return typed; }
+        const block = "Current knob values:\\n" + knobs.join("\\n");
+        return typed ? typed + "\\n\\n" + block : block;
+      }
+      function escapeHtml(value){
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function renderScriptList(){
+        const list = document.getElementById("scriptsList");
+        if(!list){ return; }
+        const filter = String(document.getElementById("scriptsFilter")?.value || "").trim().toLowerCase();
+        const rows = cachedScripts.filter((row)=>{
+          if(!filter){ return true; }
+          const hay = [row.title, row.relPath, row.blurb, String(row.knobCount || ""), row.sampleCommand, ...(row.linkedConfigs || []).map((item)=>item.relPath)].join(" ").toLowerCase();
+          return hay.includes(filter);
+        });
+        if(!cachedScripts.length){
+          list.innerHTML = '<div class="scriptRowMeta">No scripts indexed yet. Click Scan.</div>';
+          return;
+        }
+        if(!rows.length){
+          list.innerHTML = '<div class="scriptRowMeta">No scripts match that filter.</div>';
+          return;
+        }
+        list.innerHTML = rows.map((row)=>{
+          const count = Number(row.knobCount || (row.knobs || []).length || 0);
+          const yamlCount = Number(row.yamlCount || (row.linkedConfigs || []).length || 0);
+          const badge = count <= 0 ? "no knobs" : (count === 1 ? "1 knob" : count + " knobs");
+          const yamlBadge = yamlCount > 0 ? " · " + yamlCount + " yaml" : "";
+          const blurb = String(row.blurb || "").trim() || "No description yet. Open it to inspect knobs.";
+          return '<button type="button" class="scriptRow" data-script-id="' + encodeURIComponent(row.id) + '">' +
+            '<div class="scriptRowTitle">' + escapeHtml(row.title || row.relPath) + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(row.relPath) + ' · ' + escapeHtml(badge) + escapeHtml(yamlBadge) + '</div>' +
+            '<div class="scriptRowBlurb">' + escapeHtml(blurb) + '</div>' +
+            '</button>';
+        }).join("");
+        list.querySelectorAll("[data-script-id]").forEach((btn)=>{
+          btn.addEventListener("click", ()=>{
+            const id = decodeURIComponent(btn.getAttribute("data-script-id") || "");
+            void openScriptDetail(id);
+          });
+        });
+      }
+      function renderScriptKnobs(knobs){
+        const root = document.getElementById("scriptKnobs");
+        if(!root){ return; }
+        const rows = Array.isArray(knobs) ? knobs : [];
+        if(!rows.length){
+          root.innerHTML = '<div class="scriptRowMeta">No adjustable parameters.</div>';
+          return;
+        }
+        root.innerHTML = rows.map((knob)=>{
+          const last = knob.lastValue || knob.default || "";
+          const id = knob.id || knob.flag || "";
+          const origin = knob.origin === "yaml" ? "yaml" : "cli";
+          const originLabel = origin === "yaml" ? "yaml · " + (knob.yamlFile || "config") : "cli";
+          const sample = knob.sampleUsage || "";
+          return '<div class="scriptKnob">' +
+            '<div class="scriptKnobHead"><strong>' + escapeHtml(knob.label || knob.flag) + '</strong><span class="scriptKnobOrigin">' + escapeHtml(originLabel) + '</span></div>' +
+            '<div class="scriptKnobDesc">' + escapeHtml(knob.description || "No description yet. Use Refresh knobs.") + '</div>' +
+            (sample ? '<div class="scriptKnobSample">' + escapeHtml(sample) + '</div>' : '') +
+            '<div class="scriptRowMeta">kind ' + escapeHtml(knob.kind || "text") + ' · default ' + escapeHtml(knob.default || "—") + '</div>' +
+            '<input class="procInput scriptKnobInput" data-knob-id="' + encodeURIComponent(id) + '" data-knob-flag="' + encodeURIComponent(knob.flag || "") + '" data-knob-origin="' + origin + '" data-yaml-file="' + encodeURIComponent(knob.yamlFile || "") + '" data-yaml-key="' + encodeURIComponent(knob.yamlKey || "") + '" value="' + escapeHtml(last) + '" placeholder="value" />' +
+            '</div>';
+        }).join("");
+      }
+      function renderScriptRuns(runs){
+        const root = document.getElementById("scriptRuns");
+        const insight = document.getElementById("scriptInsight");
+        const rows = Array.isArray(runs) ? runs : [];
+        if(insight){
+          const latest = rows[0];
+          insight.textContent = latest && latest.summaryMd ? latest.summaryMd : "No insight yet. Run a script to generate a summary.";
+        }
+        if(!root){ return; }
+        if(!rows.length){
+          root.innerHTML = '<div class="scriptRowMeta">No runs yet.</div>';
+          return;
+        }
+        root.innerHTML = rows.map((run)=>{
+          const cmd = (run.actualArgv && run.actualArgv.length ? run.actualArgv : run.proposedArgv || []).join(" ");
+          return '<div class="scriptRunCard"><div><strong>' + escapeHtml(run.status) + '</strong> · ' + escapeHtml(run.startedAt || "") + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(run.intent || "(no intent)") + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(cmd) + '</div></div>';
+        }).join("");
+      }
+      async function refreshScripts(scan){
+        try {
+          if(scan){
+            const scanned = await fetch(withToken("/api/scripts/scan"), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r)=>r.json());
+            if(!scanned || scanned.ok === false){
+              setScriptsHint("Scan failed: " + ((scanned && scanned.error) || "unknown"));
+              return;
+            }
+            cachedScripts = scanned.scripts || [];
+            setScriptsHint("Indexed " + cachedScripts.length + " scripts.");
+          } else {
+            const data = await fetch(withToken("/api/scripts")).then((r)=>r.json());
+            cachedScripts = (data && data.scripts) || [];
+            if(!cachedScripts.length){
+              setScriptsHint("No catalog yet. Click Scan.");
+            }
+          }
+          renderScriptList();
+          if(scriptsStep === "detail" && selectedScriptId){
+            await loadScriptDetail(selectedScriptId, "poll");
+          } else {
+            showScriptsStep("list");
+          }
+        } catch (err) {
+          setScriptsHint("Scripts failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function openScriptDetail(id){
+        showScriptsStep("detail");
+        await loadScriptDetail(id, "open");
+      }
+      function backToScriptList(){
+        showScriptsStep("list");
+        renderScriptList();
+        setScriptsHint("Pick a script. Next page is knobs, intent, and run controls.");
+      }
+      async function loadScriptDetail(id, mode){
+        selectedScriptId = id;
+        showScriptsStep("detail");
+        try {
+          const data = await fetch(withToken("/api/scripts/detail?id=" + encodeURIComponent(id))).then((r)=>r.json());
+          if(!data || data.ok === false){
+            setScriptsHint((data && data.error) || "script not found");
+            return;
+          }
+          const script = data.script || {};
+          const title = document.getElementById("scriptDetailTitle");
+          const blurb = document.getElementById("scriptDetailBlurb");
+          if(title){ title.textContent = script.title || script.relPath || id; }
+          if(blurb){ blurb.textContent = (script.blurb || "No description yet.") + " · " + (script.knobCount || 0) + " knobs"; }
+          const sampleEl = document.getElementById("scriptSampleCommand");
+          if(sampleEl){ sampleEl.textContent = script.sampleCommand || "No sample command yet. Scan again after knobs are known."; }
+          const yamlEl = document.getElementById("scriptLinkedYaml");
+          if(yamlEl){
+            const linked = Array.isArray(script.linkedConfigs) ? script.linkedConfigs : [];
+            yamlEl.textContent = linked.length
+              ? ("Linked YAML: " + linked.map((item)=>item.relPath).join(", "))
+              : "No linked YAML configs.";
+          }
+          if(mode !== "poll"){
+            renderScriptKnobs(script.knobs || []);
+          }
+          renderScriptRuns(data.runs || []);
+          if(mode === "open"){
+            scriptProposal = null;
+            const preview = document.getElementById("scriptPreview");
+            if(preview){ preview.textContent = "Propose a command first."; }
+          }
+        } catch (err) {
+          setScriptsHint("Detail failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function pollScriptSession(sessionId, kind){
+        for(let i = 0; i < 180; i += 1){
+          const data = await fetch(withToken("/api/scripts/session-result?kind=" + encodeURIComponent(kind) + "&sessionId=" + encodeURIComponent(sessionId) + "&scriptId=" + encodeURIComponent(selectedScriptId))).then((r)=>r.json());
+          if(data && data.ready){
+            return data;
+          }
+          if(data && data.ok === false){
+            throw new Error(data.error || "session failed");
+          }
+          await new Promise((resolve)=>setTimeout(resolve, 1000));
+        }
+        throw new Error("timed out waiting for the agent");
+      }
+      async function inspectSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        try {
+          const started = await fetch(withToken("/api/scripts/inspect"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: selectedScriptId }),
+          }).then((r)=>r.json());
+          if(!started || !started.ok){
+            setScriptsHint("Inspect failed: " + ((started && started.error) || "unknown"));
+            return;
+          }
+          setPane1Tab("trace");
+          openPane1TraceStream(started.sessionId, true);
+          setScriptsHint("Refreshing knobs… watch Trace.");
+          const result = await pollScriptSession(started.sessionId, "inspect");
+          await loadScriptDetail(selectedScriptId, "knobs");
+          setScriptsHint("Knobs updated (" + ((result.script && result.script.knobCount) || 0) + ").");
+        } catch (err) {
+          setScriptsHint("Inspect failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function proposeSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        const intent = currentScriptIntent();
+        try {
+          const started = await fetch(withToken("/api/scripts/propose"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: selectedScriptId, intent: intent }),
+          }).then((r)=>r.json());
+          if(!started || !started.ok){
+            setScriptsHint("Propose failed: " + ((started && started.error) || "unknown"));
+            return;
+          }
+          setPane1Tab("trace");
+          openPane1TraceStream(started.sessionId, true);
+          setScriptsHint("Proposing command… confirm after Trace finishes.");
+          const result = await pollScriptSession(started.sessionId, "propose");
+          scriptProposal = result.proposed || null;
+          const preview = document.getElementById("scriptPreview");
+          if(preview){ preview.textContent = result.preview || JSON.stringify(scriptProposal, null, 2); }
+          await loadScriptDetail(selectedScriptId, "poll");
+          setScriptsHint("Review the command preview, then Run.");
+        } catch (err) {
+          setScriptsHint("Propose failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function runSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        if(!scriptProposal || !Array.isArray(scriptProposal.argv)){
+          setScriptsHint("Propose and confirm a command first.");
+          return;
+        }
+        const intent = currentScriptIntent();
+        try {
+          const data = await fetch(withToken("/api/scripts/run"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: selectedScriptId,
+              intent: intent,
+              argv: scriptProposal.argv,
+              cwd: scriptProposal.cwd,
+              env: scriptProposal.env,
+              notes: scriptProposal.notes,
+            }),
+          }).then((r)=>r.json());
+          if(!data || !data.ok){
+            setScriptsHint("Run failed: " + ((data && data.error) || "unknown"));
+            return;
+          }
+          activeScriptRunId = data.run && data.run.id;
+          setPane1Tab("trace");
+          if(data.sessionId){ openPane1TraceStream(data.sessionId, true); }
+          setScriptsHint("Running. Stop sends SIGINT first. Insight appears when it finishes.");
+          await loadScriptDetail(selectedScriptId, "poll");
+        } catch (err) {
+          setScriptsHint("Run failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function stopSelectedScript(){
+        if(!activeScriptRunId){ setScriptsHint("No active guided run."); return; }
+        try {
+          const data = await fetch(withToken("/api/scripts/runs/" + encodeURIComponent(activeScriptRunId) + "/stop"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }).then((r)=>r.json());
+          setScriptsHint(data && data.ok ? "Stop ladder started (SIGINT → TERM → KILL)." : ("Stop failed: " + ((data && data.error) || "unknown")));
+        } catch (err) {
+          setScriptsHint("Stop failed: " + ((err && err.message) ? err.message : String(err)));
+        }
       }
       async function refreshManagedProcesses(){
         const list = document.getElementById("procList");
@@ -4210,6 +4675,15 @@ export function buildMainTerminalHtml(token?: string): string {
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
       document.getElementById("pane2TabPlans")?.addEventListener("click",()=>setPane2Tab("plans"));
       document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
+      document.getElementById("pane2TabScripts")?.addEventListener("click",()=>setPane2Tab("scripts"));
+      document.getElementById("btnScriptsScan")?.addEventListener("click",()=>{ void refreshScripts(true); });
+      document.getElementById("btnScriptsRefresh")?.addEventListener("click",()=>{ void refreshScripts(false); });
+      document.getElementById("btnScriptsBack")?.addEventListener("click",()=>{ backToScriptList(); });
+      document.getElementById("scriptsFilter")?.addEventListener("input",()=>{ renderScriptList(); });
+      document.getElementById("btnScriptsInspect")?.addEventListener("click",()=>{ void inspectSelectedScript(); });
+      document.getElementById("btnScriptsPropose")?.addEventListener("click",()=>{ void proposeSelectedScript(); });
+      document.getElementById("btnScriptsRun")?.addEventListener("click",()=>{ void runSelectedScript(); });
+      document.getElementById("btnScriptsStop")?.addEventListener("click",()=>{ void stopSelectedScript(); });
       document.getElementById("btnProcStart")?.addEventListener("click",()=>{ void startManagedProcess(); });
       document.getElementById("btnProcRefresh")?.addEventListener("click",()=>{ void refreshManagedProcesses(); });
       document.getElementById("btnPlanCreate")?.addEventListener("click",()=>{ void createPlan(); });

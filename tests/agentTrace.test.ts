@@ -69,6 +69,19 @@ describe("pane 1 Trace HTML contract", () => {
     expect(html).toContain('id="pane1Trace"');
   });
 
+  it("includes a Scripts tab on pane 2", () => {
+    const html = buildMainTerminalHtml();
+    expect(html).toContain('data-pane2-tab="scripts"');
+    expect(html).toContain('data-scripts-step="list"');
+    expect(html).toContain('data-scripts-step="detail"');
+    expect(html).toContain('id="btnScriptsBack"');
+    expect(html).toContain('id="scriptKnobs"');
+    expect(html).toContain('id="scriptSampleCommand"');
+    expect(html).toContain("Adjustable parameters");
+    expect(html).toContain("Current knob values:\\n");
+    expect(html).not.toMatch(/Current knob values:\n/);
+  });
+
   it("posts the active session id to the parent from the agent window", () => {
     const html = buildAgentWindowPageHtml(undefined);
     expect(html).toContain("winnow-agent-session");

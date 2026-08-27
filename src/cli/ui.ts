@@ -110,6 +110,24 @@ import { buildAgentGraphContextPreamble } from "../graph/agentGraphSeed.js";
 import { ProjectGraphService } from "../graph/service.js";
 import { smokeTestProvider } from "../translator/providerSmoke.js";
 import { ExternalChatMessage, runExternalChatCompletion } from "../translator/externalChat.js";
+import {
+  rebuildAndWriteScriptIndex,
+  resolveScriptFilePath,
+} from "./scriptIndex.js";
+import {
+  SCRIPT_RUN_DEFAULTS,
+  buildInspectPrompt,
+  buildProposePrompt,
+  buildSpawnArgv,
+  buildSummarizePrompt,
+  formatCommandPreview,
+  mergeKnobs,
+  parseInspectedKnobs,
+  parseProposedCommand,
+  shouldStopForMaxRuntime,
+  shouldWarnStall,
+} from "./scriptGuide.js";
+import { ScriptStore } from "../data/scriptStore.js";
 
 function applyMode(config: WinnowConfig, mode: "zh" | "raw" | "dual"): WinnowConfig {
   if (mode === "zh") {
@@ -185,6 +203,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   let processManager = new ProcessManager(uiWorkspace.dir);
   let telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
   let planStore = new PlanStore(uiWorkspace.dir);
+  let scriptStore = new ScriptStore(uiWorkspace.dir);
 
   // Register current directory as a project
   await registerProject(winnowLaunchRoot);
@@ -226,6 +245,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     planStore = new PlanStore(uiWorkspace.dir);
     planStore.init();
     await planStore.backfillFromMarkdownFiles();
+    scriptStore = new ScriptStore(uiWorkspace.dir);
+    scriptStore.init();
     await ensureCursorWorkspaceLayout(uiWorkspace.dir);
     if (persist) {
       config = { ...config, uiWorkspaceDir: real };
@@ -246,6 +267,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   await telemetryStore.init();
   planStore.init();
   await planStore.backfillFromMarkdownFiles();
+  scriptStore.init();
 
   const cursorTranscriptDirForUi = (): string =>
     process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim()
@@ -1551,6 +1573,191 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return session;
   };
 
+  const liveScriptWatches = new Map<
+    string,
+    {
+      runId: string;
+      processId: string;
+      sessionId: string;
+      lastOutputAt: number;
+      startedAt: number;
+      stallMs: number;
+      maxRuntimeMs: number;
+      autoStopOnStall: boolean;
+      warnedStall: boolean;
+      timer: ReturnType<typeof setInterval>;
+    }
+  >();
+
+  const sessionAssistantText = (session: AgentSession): string => {
+    const fromEvents = session.events
+      .filter((event) => event.kind === "assistant")
+      .map((event) => event.content)
+      .join("");
+    return (fromEvents || session.output || "").trim();
+  };
+
+  const appendSessionTimeline = (sessionId: string, kind: AgentEvent["kind"], content: string): void => {
+    const session = sessions.get(sessionId);
+    if (!session || !content) {
+      return;
+    }
+    const event: AgentEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      kind,
+      content,
+    };
+    session.events.push(event);
+    if (session.events.length > 2000) {
+      session.events = session.events.slice(-2000);
+    }
+    if (kind === "assistant") {
+      session.output += content.endsWith("\n") ? content : `${content}\n`;
+    }
+    pushStreamEvent(sessionId, "timeline", { sessionId, event });
+    pushStreamEvent(sessionId, "status", { status: session.status, sessionId });
+  };
+
+  const ensureTimelineSession = (id: string): AgentSession => {
+    const existing = sessions.get(id);
+    if (existing) {
+      return existing;
+    }
+    const session: AgentSession = {
+      id,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      output: "",
+      errorOutput: "",
+      command: "script-run",
+      args: [],
+      events: [],
+    };
+    sessions.set(id, session);
+    return session;
+  };
+
+  const finishTimelineSession = (sessionId: string, status: AgentSession["status"]): void => {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.status = status;
+    session.endedAt = new Date().toISOString();
+    pushStreamEvent(sessionId, "status", { status, sessionId, endedAt: session.endedAt });
+    pushStreamEvent(sessionId, "done", { sessionId });
+    closeStreamClients(sessionId);
+  };
+
+  const clearScriptWatch = (runId: string): void => {
+    const watch = liveScriptWatches.get(runId);
+    if (watch) {
+      clearInterval(watch.timer);
+      liveScriptWatches.delete(runId);
+    }
+  };
+
+  const beginSummarize = async (runId: string): Promise<void> => {
+    const run = scriptStore.getRun(runId);
+    if (!run) {
+      return;
+    }
+    const script = scriptStore.get(run.scriptId);
+    let logTail = "";
+    if (run.logPath) {
+      try {
+        const raw = await readFile(run.logPath, "utf8");
+        logTail = raw.slice(-SCRIPT_RUN_DEFAULTS.summarizeLogTailChars);
+      } catch {
+        logTail = "";
+      }
+    }
+    const prompt = buildSummarizePrompt({
+      relPath: script?.relPath || run.scriptId,
+      argv: run.actualArgv,
+      intent: run.intent,
+      exitCode: run.exitCode,
+      stopped: run.status === "stopped" || run.status === "stalled",
+      stalled: run.stalled,
+      logTail,
+    });
+    try {
+      const session = await startAgentSession({
+        prompt,
+        graphSeed: false,
+        sessionId: run.agentSessionId || undefined,
+      });
+      scriptStore.updateRun(runId, { agentSessionId: session.id });
+      const poll = setInterval(() => {
+        const live = sessions.get(session.id);
+        if (!live || live.status === "running") {
+          return;
+        }
+        clearInterval(poll);
+        const summary = sessionAssistantText(live) || "(no summary)";
+        scriptStore.updateRun(runId, {
+          summaryMd: summary,
+        });
+      }, 800);
+    } catch (error) {
+      scriptStore.updateRun(runId, {
+        summaryMd: `Summary failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      if (run.agentSessionId) {
+        finishTimelineSession(run.agentSessionId, "error");
+      }
+    }
+  };
+
+  const startScriptWatch = (input: {
+    runId: string;
+    processId: string;
+    sessionId: string;
+    stallMs: number;
+    maxRuntimeMs: number;
+    autoStopOnStall: boolean;
+  }): void => {
+    const watch = {
+      ...input,
+      lastOutputAt: Date.now(),
+      startedAt: Date.now(),
+      warnedStall: false,
+      timer: setInterval(() => {
+        const rec = processManager.get(input.processId);
+        const now = Date.now();
+        if (!rec || rec.status !== "running") {
+          return;
+        }
+        if (shouldStopForMaxRuntime(watch.startedAt, now, input.maxRuntimeMs)) {
+          appendSessionTimeline(input.sessionId, "status", `⚠ max runtime reached — stopping`);
+          watch.warnedStall = true;
+          scriptStore.updateRun(input.runId, { stalled: true });
+          void processManager.stopLadder(input.processId, {
+            onStep: (signal) => appendSessionTimeline(input.sessionId, "status", `sent ${signal}`),
+          });
+          return;
+        }
+        const last = rec.lastOutputAt ? Date.parse(rec.lastOutputAt) : watch.lastOutputAt;
+        if (shouldWarnStall(last, now, input.stallMs) && !watch.warnedStall) {
+          watch.warnedStall = true;
+          appendSessionTimeline(
+            input.sessionId,
+            "status",
+            `⚠ no output for ${Math.round(input.stallMs / 1000)}s — possible hang or waiting for input`,
+          );
+          if (input.autoStopOnStall) {
+            scriptStore.updateRun(input.runId, { stalled: true });
+            void processManager.stopLadder(input.processId, {
+              onStep: (signal) => appendSessionTimeline(input.sessionId, "status", `sent ${signal}`),
+            });
+          }
+        }
+      }, 2000),
+    };
+    liveScriptWatches.set(input.runId, watch);
+  };
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
     if (!isAuthorized(url)) {
@@ -1834,6 +2041,298 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const tail = Number(url.searchParams.get("tail") ?? "200");
       const body = await processManager.readLog(id, Number.isFinite(tail) ? tail : 200);
       sendJson(res, body.ok ? 200 : 400, body);
+      return;
+    }
+
+    if (url.pathname === "/api/scripts" && req.method === "GET") {
+      try {
+        const includeIgnored = url.searchParams.get("ignored") === "1";
+        const scripts = scriptStore.list({ includeIgnored }).map((row) => ({
+          ...row,
+          knobCount: row.knobs.length,
+          yamlCount: row.linkedConfigs.length,
+        }));
+        sendJson(res, 200, { ok: true, scripts });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/scan" && req.method === "POST") {
+      try {
+        const index = await rebuildAndWriteScriptIndex(uiWorkspace.dir);
+        const scripts = scriptStore.upsertFromScan(index.files).map((row) => ({
+          ...row,
+          knobCount: row.knobs.length,
+          yamlCount: row.linkedConfigs.length,
+        }));
+        sendJson(res, 200, { ok: true, scannedAt: index.scannedAt, scripts });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/detail" && req.method === "GET") {
+      try {
+        const id = String(url.searchParams.get("id") || "").trim();
+        const row = scriptStore.get(id);
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          script: { ...row, knobCount: row.knobs.length, yamlCount: row.linkedConfigs.length },
+          runs: scriptStore.listRuns(row.id, 8),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/flags" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string; pinned?: boolean; ignored?: boolean };
+        const row = scriptStore.setFlags(String(payload.id || ""), {
+          pinned: payload.pinned,
+          ignored: payload.ignored,
+        });
+        sendJson(res, 200, { ok: true, script: { ...row, knobCount: row.knobs.length } });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/inspect" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const abs = resolveScriptFilePath(uiWorkspace.dir, row.relPath);
+        const source = await readFile(abs, "utf8").catch(() => "");
+        const session = await startAgentSession({
+          prompt: buildInspectPrompt(row.relPath, source, row.knobs),
+          graphSeed: false,
+        });
+        sendJson(res, 200, { ok: true, sessionId: session.id, scriptId: row.id });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/propose" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string; intent?: string };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const runs = scriptStore.listRuns(row.id, 5).map((run) => ({
+          intent: run.intent,
+          argv: run.actualArgv.length ? run.actualArgv : run.proposedArgv,
+          summary: run.summaryMd,
+          startedAt: run.startedAt,
+        }));
+        const session = await startAgentSession({
+          prompt: buildProposePrompt({
+            relPath: row.relPath,
+            blurb: row.blurb,
+            knobs: row.knobs,
+            intent: String(payload.intent || ""),
+            lastRuns: runs,
+            sampleCommand: row.sampleCommand,
+            linkedConfigs: row.linkedConfigs,
+          }),
+          graphSeed: false,
+        });
+        sendJson(res, 200, { ok: true, sessionId: session.id, scriptId: row.id });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/session-result" && req.method === "GET") {
+      try {
+        const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+        const kind = String(url.searchParams.get("kind") || "propose");
+        const scriptId = String(url.searchParams.get("scriptId") || "").trim();
+        const session = sessions.get(sessionId);
+        if (!session) {
+          sendJson(res, 404, { ok: false, error: "session not found" });
+          return;
+        }
+        if (session.status === "running") {
+          sendJson(res, 200, { ok: true, ready: false, status: session.status, sessionId });
+          return;
+        }
+        const text = sessionAssistantText(session);
+        if (kind === "inspect") {
+          const row = scriptStore.get(scriptId);
+          if (!row) {
+            sendJson(res, 404, { ok: false, error: "script not found" });
+            return;
+          }
+          const incoming = parseInspectedKnobs(text);
+          const merged = mergeKnobs(row.knobs, incoming, row.userEditedKnobIds);
+          const saved = scriptStore.saveKnobs(row.id, merged, false);
+          sendJson(res, 200, { ok: true, ready: true, script: { ...saved, knobCount: saved.knobs.length } });
+          return;
+        }
+        const proposed = parseProposedCommand(text);
+        if (scriptId) {
+          const row = scriptStore.get(scriptId);
+          if (row && proposed.knobs?.length) {
+            scriptStore.saveKnobs(row.id, mergeKnobs(row.knobs, proposed.knobs, row.userEditedKnobIds), false);
+          }
+        }
+        sendJson(res, 200, {
+          ok: true,
+          ready: true,
+          proposed,
+          preview: formatCommandPreview(proposed.argv),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/run" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as {
+          id?: string;
+          intent?: string;
+          argv?: string[];
+          cwd?: string;
+          env?: Record<string, string>;
+          notes?: string;
+        };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const spawnPlan = buildSpawnArgv(uiWorkspace.dir, {
+          argv: Array.isArray(payload.argv) ? payload.argv.map(String) : [],
+          cwd: payload.cwd || ".",
+          env: payload.env || {},
+          notes: payload.notes || "",
+        });
+        const run = scriptStore.createRun({
+          scriptId: row.id,
+          intent: String(payload.intent || ""),
+          knobs: row.knobs,
+          proposedArgv: [spawnPlan.file, ...spawnPlan.args],
+          actualArgv: [spawnPlan.file, ...spawnPlan.args],
+          env: spawnPlan.env,
+          cwd: spawnPlan.cwd,
+        });
+        const timelineId = `script-${run.id}`;
+        ensureTimelineSession(timelineId);
+        appendSessionTimeline(timelineId, "status", `Starting ${spawnPlan.preview}`);
+        const started = await processManager.startArgv({
+          file: spawnPlan.file,
+          args: spawnPlan.args,
+          cwd: spawnPlan.cwd,
+          env: spawnPlan.env,
+          label: row.title,
+          tags: [`script:${row.id}`],
+          onOutput: (chunk, stream) => {
+            const line = chunk.trim();
+            if (!line) {
+              return;
+            }
+            const clipped = line.length > 400 ? `${line.slice(0, 400)}…` : line;
+            appendSessionTimeline(timelineId, stream === "stderr" ? "stderr" : "status", clipped);
+            const watch = liveScriptWatches.get(run.id);
+            if (watch) {
+              watch.lastOutputAt = Date.now();
+              watch.warnedStall = false;
+            }
+          },
+          onClose: (code, signal) => {
+            clearScriptWatch(run.id);
+            const stalled = Boolean(scriptStore.getRun(run.id)?.stalled);
+            const stopped = Boolean(signal) || stalled;
+            const status = stalled ? "stalled" : stopped ? "stopped" : code === 0 ? "done" : "error";
+            scriptStore.updateRun(run.id, {
+              status,
+              exitCode: code,
+              endedAt: new Date().toISOString(),
+            });
+            appendSessionTimeline(
+              timelineId,
+              "status",
+              stalled
+                ? `Run stalled and stopped (exit=${code ?? "n/a"} signal=${signal || "none"})`
+                : `Script exited code=${code ?? "n/a"} signal=${signal || "none"}`,
+            );
+            void beginSummarize(run.id);
+          },
+        });
+        if (!started.ok) {
+          scriptStore.updateRun(run.id, { status: "error", summaryMd: started.error, endedAt: new Date().toISOString() });
+          sendJson(res, 400, started);
+          return;
+        }
+        scriptStore.updateRun(run.id, {
+          status: "running",
+          processId: started.process.id,
+          agentSessionId: timelineId,
+          logPath: started.process.logPath,
+          actualArgv: [spawnPlan.file, ...spawnPlan.args],
+        });
+        scriptStore.rememberRecipe(row.id, [spawnPlan.file, ...spawnPlan.args], spawnPlan.env);
+        startScriptWatch({
+          runId: run.id,
+          processId: started.process.id,
+          sessionId: timelineId,
+          stallMs: row.stallMs ?? SCRIPT_RUN_DEFAULTS.stallMs,
+          maxRuntimeMs: row.maxRuntimeMs ?? SCRIPT_RUN_DEFAULTS.maxRuntimeMs,
+          autoStopOnStall: row.autoStopOnStall,
+        });
+        sendJson(res, 200, {
+          ok: true,
+          run: scriptStore.getRun(run.id),
+          sessionId: timelineId,
+          preview: spawnPlan.preview,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/scripts/runs/") && url.pathname.endsWith("/stop") && req.method === "POST") {
+      const runId = decodeURIComponent(url.pathname.slice("/api/scripts/runs/".length, -"/stop".length)).trim();
+      const run = scriptStore.getRun(runId);
+      if (!run) {
+        sendJson(res, 404, { ok: false, error: "run not found" });
+        return;
+      }
+      if (!run.processId) {
+        sendJson(res, 200, { ok: true, stopped: false, message: "no process" });
+        return;
+      }
+      const sessionId = run.agentSessionId;
+      const result = await processManager.stopLadder(run.processId, {
+        onStep: (signal) => {
+          if (sessionId) {
+            appendSessionTimeline(sessionId, "status", `sent ${signal}`);
+          }
+        },
+      });
+      sendJson(res, result.ok ? 200 : 400, result);
       return;
     }
 
