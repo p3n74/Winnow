@@ -77,6 +77,13 @@ import {
   resolveStoredAttachments,
   saveAttachment,
 } from "../cursor/attachments.js";
+import {
+  extractLiveSubagentEvents,
+  listSubagentDefinitionFiles,
+  SUBAGENTS_HINT,
+  withBuiltinSubagents,
+  type LiveSubagentRow,
+} from "../cursor/subagents.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -1069,6 +1076,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         args,
         startedAt: existing.startedAt || new Date().toISOString(),
         events: existing.events ?? [],
+        liveSubagents: [],
       };
     } else {
       // Try loading from disk
@@ -1098,6 +1106,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         command: executionMode === "external" ? "external-provider" : cursorExe,
         args,
         events: diskEvents,
+        liveSubagents: [],
       };
     }
 
@@ -1159,6 +1168,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         session.events = session.events.slice(-2000);
       }
       pushStreamEvent(id, "timeline", { sessionId: id, event });
+    };
+
+    const upsertLiveSubagent = (row: LiveSubagentRow) => {
+      if (!session.liveSubagents) {
+        session.liveSubagents = [];
+      }
+      const idx = session.liveSubagents.findIndex((item) => item.id === row.id);
+      if (idx >= 0) {
+        session.liveSubagents[idx] = row;
+      } else {
+        session.liveSubagents.push(row);
+      }
     };
 
     const abortOrThrow = (): void => {
@@ -1375,6 +1396,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
+          const liveSubagent = extractLiveSubagentEvents(data);
+          if (liveSubagent) {
+            upsertLiveSubagent(liveSubagent);
+            pushEvent(
+              "system",
+              `subagent ${liveSubagent.name}: ${liveSubagent.status} ${liveSubagent.summary}`.trim(),
+            );
+          }
           if (data.type === "system" && data.subtype === "init") {
             const reportedLabel = typeof data.model === "string" ? data.model.trim() : "";
             if (!isGenericCursorModel(modelPreference) && expectedCursorLabel) {
@@ -2213,6 +2242,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/subagents" && req.method === "GET") {
+      const defined = listSubagentDefinitionFiles(uiWorkspace.dir, homedir());
+      sendJson(res, 200, {
+        ok: true,
+        agents: withBuiltinSubagents(defined),
+        hint: SUBAGENTS_HINT,
+      });
       return;
     }
 

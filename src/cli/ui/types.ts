@@ -59,6 +59,7 @@ export type AgentSession = {
   command: string;
   args: string[];
   events: AgentEvent[];
+  liveSubagents?: import("../../cursor/subagents.js").LiveSubagentRow[];
 };
 
 export type SessionStreamClient = {

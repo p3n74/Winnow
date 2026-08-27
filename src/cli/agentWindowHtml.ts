@@ -330,6 +330,43 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         color: var(--muted);
         font-style: italic;
       }
+      .subagents-panel {
+        flex-shrink: 0;
+        max-height: 120px;
+        overflow: auto;
+        margin: 6px 12px 0;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--panel2);
+      }
+      .subagents-head {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        font-weight: 700;
+        font-style: italic;
+      }
+      .subagents-hint {
+        font-size: 10px;
+        color: var(--muted);
+        margin: 4px 0 6px;
+        font-style: italic;
+      }
+      .subagent-row {
+        font-size: 11px;
+        line-height: 1.35;
+        margin-top: 2px;
+        color: var(--text);
+      }
+      .subagent-name {
+        font-weight: 700;
+        color: var(--text-neon);
+      }
+      .subagent-live {
+        color: var(--accent-soft);
+      }
       .composer {
         flex-shrink: 0;
         border-top: 1px solid var(--vscode-panel-border);
@@ -588,6 +625,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               </div>
             </div>
+            <section class="subagents-panel" id="agentSubagentsPanel" aria-label="Subagents">
+              <div class="subagents-head">Subagents</div>
+              <p class="subagents-hint" id="agentSubagentsHint"></p>
+              <div id="agentSubagentsDefined"></div>
+              <div id="agentSubagentsLive"></div>
+            </section>
             <div class="small muted agentThinkingLabel" style="padding: 6px 12px 0">Thinking trace</div>
             <pre id="agentThinking">No thinking trace yet.</pre>
             <div class="small muted" style="padding: 6px 12px 0">Conversation</div>
@@ -985,6 +1028,103 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
+      let definedSubagents = [];
+      let subagentsHint = "";
+      let liveSubagentMap = {};
+      function renderSubagentsPanel() {
+        const hintEl = document.getElementById("agentSubagentsHint");
+        const definedEl = document.getElementById("agentSubagentsDefined");
+        const liveEl = document.getElementById("agentSubagentsLive");
+        if (hintEl) {
+          hintEl.textContent = subagentsHint || "";
+        }
+        if (definedEl) {
+          definedEl.textContent = "";
+          if (!definedSubagents.length) {
+            const empty = document.createElement("div");
+            empty.className = "small muted";
+            empty.textContent = "No agent definitions found.";
+            definedEl.appendChild(empty);
+          } else {
+            definedSubagents.forEach((agent) => {
+              const row = document.createElement("div");
+              row.className = "subagent-row";
+              const nameEl = document.createElement("span");
+              nameEl.className = "subagent-name";
+              nameEl.textContent = String(agent.name || "");
+              const meta = document.createElement("span");
+              meta.className = "muted";
+              const bits = [agent.description, agent.model].filter(Boolean);
+              meta.textContent = bits.length ? " — " + bits.join(" · ") : "";
+              row.appendChild(nameEl);
+              row.appendChild(meta);
+              definedEl.appendChild(row);
+            });
+          }
+        }
+        if (liveEl) {
+          liveEl.textContent = "";
+          const rows = Object.keys(liveSubagentMap).map((key) => liveSubagentMap[key]);
+          if (rows.length) {
+            const label = document.createElement("div");
+            label.className = "small muted";
+            label.textContent = "Live";
+            liveEl.appendChild(label);
+            rows.forEach((row) => {
+              const el = document.createElement("div");
+              el.className = "subagent-row subagent-live";
+              const status = row.status ? " · " + row.status : "";
+              const summary = row.summary ? " — " + row.summary : "";
+              el.textContent = (row.name || row.id || "subagent") + status + summary;
+              liveEl.appendChild(el);
+            });
+          }
+        }
+      }
+      function applyLiveSubagents(rows) {
+        liveSubagentMap = {};
+        (rows || []).forEach((row) => {
+          if (!row) {
+            return;
+          }
+          const id = String(row.id || row.name || "");
+          if (!id) {
+            return;
+          }
+          liveSubagentMap[id] = row;
+        });
+        renderSubagentsPanel();
+      }
+      function noteLiveSubagentFromEvent(ev) {
+        const content = String((ev && ev.content) || "");
+        if (!content.startsWith("subagent ")) {
+          return;
+        }
+        const rest = content.slice("subagent ".length);
+        const colon = rest.indexOf(":");
+        if (colon < 0) {
+          return;
+        }
+        const name = rest.slice(0, colon).trim();
+        const after = rest.slice(colon + 1).trim();
+        const space = after.indexOf(" ");
+        const status = space < 0 ? after : after.slice(0, space);
+        const summary = space < 0 ? "" : after.slice(space + 1).trim();
+        const id = name || "subagent";
+        liveSubagentMap[id] = { id: id, name: name || id, status: status, summary: summary };
+        renderSubagentsPanel();
+      }
+      async function loadSubagentDefinitions() {
+        try {
+          const data = await fetch(withToken("/api/cursor/subagents")).then((r) => r.json());
+          if (!data || !data.ok) {
+            return;
+          }
+          definedSubagents = Array.isArray(data.agents) ? data.agents : [];
+          subagentsHint = data.hint || "";
+          renderSubagentsPanel();
+        } catch (_e) {}
+      }
       function estimateTokens(chars) {
         return Math.max(0, Math.ceil(chars / 4));
       }
@@ -1064,6 +1204,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         
         if (kind === "tool" || kind === "status" || kind === "system") {
           pushTrace(ev.content || "");
+          if (kind === "system") {
+            noteLiveSubagentFromEvent(ev);
+          }
           return;
         }
 
@@ -1220,6 +1363,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         document.getElementById("agentSessionInfo").textContent =
           "session=" + s.id + " status=" + s.status + (s.exitCode !== undefined ? " exit=" + s.exitCode : "");
         document.getElementById("agentStatusBadge").textContent = s.status;
+        if (Array.isArray(s.liveSubagents)) {
+          applyLiveSubagents(s.liveSubagents);
+        }
         agentMetrics.outputChars = (s.output || "").length + (s.errorOutput || "").length;
         refreshMetrics();
         const streamDead = !streamSource || streamSource.readyState !== 1;
@@ -1558,6 +1704,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         clearChat();
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
+        liveSubagentMap = {};
+        renderSubagentsPanel();
         const thinkingBlock = document.getElementById("agentThinking");
         if (thinkingBlock) {
           thinkingBlock.textContent = "";
@@ -1822,6 +1970,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       updateExecutionModeUi();
       refreshSessions();
       refreshPlans();
+      loadSubagentDefinitions();
       setInterval(refreshMetrics, 1000);
       if (EMBED_MODE) {
         document.body.classList.add("embed");
