@@ -136,6 +136,28 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         padding: 10px 12px;
         border-bottom: 1px solid var(--vscode-panel-border);
       }
+      #agentControls[hidden],
+      body.agent-controls-collapsed #agentControls {
+        display: none;
+      }
+      .agent-controls-compact {
+        margin-bottom: 8px;
+      }
+      body.agent-controls-collapsed .agent-controls-compact {
+        margin-bottom: 0;
+      }
+      #agentCollapsedModel {
+        display: none;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+        color: var(--text-neon);
+      }
+      body.agent-controls-collapsed #agentCollapsedModel {
+        display: inline;
+      }
       input, select, button, textarea {
         background: var(--vscode-input-background);
         border: 1px solid var(--line);
@@ -449,6 +471,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <span id="cursorAccountLine" class="small muted">Checking Cursor CLI…</span>
                 <button type="button" class="secondary" id="btnCursorLogin" style="display:none">Log in to Cursor</button>
               </div>
+              <div class="row small agent-controls-compact">
+                <button type="button" class="secondary" id="btnToggleAgentControls" aria-expanded="true" aria-controls="agentControls">Controls</button>
+                <span id="agentCollapsedModel" class="small muted"></span>
+                <span class="statusBadge" id="agentStatusBadge">idle</span>
+                <span id="agentSessionInfo">No active session.</span>
+              </div>
+              <div id="agentControls" data-agent-controls>
               <div class="row small">
                 <label>Mode</label>
                 <select id="agentExecutionMode">
@@ -508,16 +537,13 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" onclick="appendPrompt('Refactor this code for readability without changing behavior.')">Refactor</button>
                 <button type="button" class="secondary" onclick="clearPrompt()">Clear</button>
               </div>
-              <div class="small" style="margin-top: 8px">
-                <span class="statusBadge" id="agentStatusBadge">idle</span>
-                <span id="agentSessionInfo">No active session.</span>
-              </div>
               <div class="hint">Tip: pass <code>--resume &lt;sessionId&gt;</code> in Cursor args to continue a session.</div>
               <div class="metrics">
                 <div class="metric"><div class="metricLabel">Prompt tok (est)</div><div class="metricValue" id="metricPromptTokens">0</div></div>
                 <div class="metric"><div class="metricLabel">Output tok (est)</div><div class="metricValue" id="metricOutputTokens">0</div></div>
                 <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
                 <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
+              </div>
               </div>
             </div>
             <div class="small muted" style="padding: 6px 12px 0">Thinking trace</div>
@@ -550,6 +576,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const PAGE_PARAMS = new URLSearchParams(window.location.search);
       const EMBED_MODE = PAGE_PARAMS.get("embed") === "1";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
+      const AGENT_CONTROLS_COLLAPSED_KEY = "winnow.agentControlsCollapsed";
       function withToken(path) {
         if (!AUTH_TOKEN) {
           return path;
@@ -577,6 +604,51 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function openMainGrid() {
         window.location.assign(withToken("/main"));
+      }
+      function applyAgentControlsCollapsed(collapsed) {
+        const isCollapsed = Boolean(collapsed);
+        document.body.classList.toggle("agent-controls-collapsed", isCollapsed);
+        const wrap = document.getElementById("agentControls");
+        if (wrap) {
+          wrap.hidden = isCollapsed;
+        }
+        const btn = document.getElementById("btnToggleAgentControls");
+        if (btn) {
+          btn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+        }
+      }
+      function readAgentControlsCollapsed() {
+        try {
+          return localStorage.getItem(AGENT_CONTROLS_COLLAPSED_KEY) === "1";
+        } catch (_err) {
+          return false;
+        }
+      }
+      function persistAgentControlsCollapsed(collapsed) {
+        try {
+          localStorage.setItem(AGENT_CONTROLS_COLLAPSED_KEY, collapsed ? "1" : "0");
+        } catch (_err) {}
+      }
+      function syncCollapsedModelLabel() {
+        const select = document.getElementById("agentModelPref");
+        const label = document.getElementById("agentCollapsedModel");
+        if (!label) {
+          return;
+        }
+        const option = select && select.options[select.selectedIndex];
+        label.textContent = option ? String(option.textContent || "").trim() : "";
+      }
+      function initAgentControlsCollapse() {
+        applyAgentControlsCollapsed(readAgentControlsCollapsed());
+        syncCollapsedModelLabel();
+        const btn = document.getElementById("btnToggleAgentControls");
+        if (btn) {
+          btn.addEventListener("click", () => {
+            const next = !document.body.classList.contains("agent-controls-collapsed");
+            applyAgentControlsCollapsed(next);
+            persistAgentControlsCollapsed(next);
+          });
+        }
       }
       async function loadSelectableModels() {
         const select = document.getElementById("agentModelPref");
@@ -610,6 +682,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           select.value = ids.includes(previous) ? previous : (ids.includes("auto") ? "auto" : ids[0]);
         } catch {
           select.innerHTML = '<option value="">(failed to load models)</option>';
+        } finally {
+          syncCollapsedModelLabel();
         }
       }
       function renderCursorAccount(account) {
@@ -700,6 +774,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           select.value = rows.some((r) => r.value === previous) ? previous : String(rows[0].value || "");
         } catch {
           select.innerHTML = '<option value="">(failed to load external models)</option>';
+        } finally {
+          syncCollapsedModelLabel();
         }
       }
       function updateExecutionModeUi() {
@@ -1471,6 +1547,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       const sessionSelect = document.getElementById("agentSessionSelect");
       const modeSelect = document.getElementById("agentExecutionMode");
+      const modelPref = document.getElementById("agentModelPref");
+      if (modelPref) {
+        modelPref.addEventListener("change", syncCollapsedModelLabel);
+      }
       if (modeSelect) {
         modeSelect.addEventListener("change", async () => {
           const mode = modeSelect.value || "cursor";
@@ -1517,6 +1597,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       });
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
+      initAgentControlsCollapse();
       bootstrapCursorAndModels();
       document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
       updateExecutionModeUi();
