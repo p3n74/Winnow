@@ -765,7 +765,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(
           `\r\n[main-grid disabled: Node ${process.versions.node} is unsupported for PTY]\r\n` +
-            `[use Node 20+ and rerun: npm run setup]\r\n`,
+            `[use Node 22+ and rerun: npm run setup]\r\n`,
         );
       }
       ws.close(1011, "unsupported node version for pty");

@@ -128,6 +128,24 @@ npm run ui
 
 **Merge:** when the queue is complete and the user has tested, open a PR from `fix/audit-findings` into `feat/plans-github-sync` (or `main` if they choose). One PR, sixteen reviewable commits. Cherry-pick or revert any single SHA if a finding is wrong.
 
+## Post-audit checkpoint: Node 26 sqlite
+
+Saved **before** the model-picker work. Homebrew Node 26 (`NODE_MODULE_VERSION` 147) could not load `better-sqlite3` 11 (compiled for Node 22, ABI 127). Rebuilding 11 from source also fails on 26 (missing C++ `<source_location>`).
+
+**Fix:** upgrade to `better-sqlite3` 13 (N-API prebuilds, engines `>=22`). One binary loads on Node 22 and Node 26. `npm run ui` probes sqlite + `node-pty` and rebuilds with the **running** Node’s npm (bin dir prepended to `PATH`) if an ABI mismatch remains.
+
+**Requires Node 22+.** Do not commit `.winnow/*` or screenshots with this step.
+
+| Files | Why |
+| --- | --- |
+| `package.json`, `package-lock.json` | sqlite 13, engines `>=22` |
+| `scripts/run-ui.js`, `scripts/nativeAbi.mjs`, `scripts/native-modules-check.mjs` | ABI probe + same-Node rebuild |
+| `scripts/check-node-version.js`, `scripts/setup.sh`, `scripts/setup.ps1` | setup/runtime Node 22 |
+| `tests/nativeAbi.test.ts` | mismatch + PATH helper |
+| `src/cli/ui.ts`, `README.md` | Node 22 copy |
+
+**Next (not in this commit):** model dropdown currently shows Auto / Composer only; research Cursor CLI model list and wire the real options.
+
 ## Subagent status
 
 Parent chat fills this in as worktrees return.

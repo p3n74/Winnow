@@ -89,9 +89,9 @@ elif [ -s "/opt/homebrew/opt/nvm/nvm.sh" ]; then
   nvm use "${TARGET_NODE_MAJOR}"
 else
   current_major="$(node -p "process.versions.node.split('.')[0]")"
-  if [ "${current_major}" -lt 20 ]; then
+  if [ "${current_major}" -lt 22 ]; then
     echo "[winnow-setup] ERROR: Node version $(node -v) is unsupported and nvm is not available."
-    echo "[winnow-setup] Install nvm or upgrade to Node 20+, then rerun setup."
+    echo "[winnow-setup] Upgrade to Node 22+, then rerun setup."
     exit 1
   fi
 fi
@@ -101,8 +101,8 @@ install_system_dependencies
 ensure_cursor_agent_cli
 echo "[winnow-setup] Installing dependencies..."
 npm install
-echo "[winnow-setup] Rebuilding node-pty for local macOS toolchain..."
-npm rebuild node-pty --build-from-source
+echo "[winnow-setup] Rebuilding native modules (better-sqlite3, node-pty) for $(node -v)..."
+npm rebuild better-sqlite3 node-pty
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install_winnow_ui_launcher() {
