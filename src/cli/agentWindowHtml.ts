@@ -445,6 +445,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           </aside>
           <main class="main-panel">
             <div class="panel-toolbar">
+              <div class="row small" id="cursorAccountRow" style="margin-bottom: 6px; align-items: center; gap: 8px">
+                <span id="cursorAccountLine" class="small muted">Checking Cursor CLI…</span>
+                <button type="button" class="secondary" id="btnCursorLogin" style="display:none">Log in to Cursor</button>
+              </div>
               <div class="row small">
                 <label>Mode</label>
                 <select id="agentExecutionMode">
@@ -453,9 +457,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 </select>
                 <label>Model</label>
                 <select id="agentModelPref">
-                  <option value="default">default</option>
-                  <option value="auto">auto</option>
-                  <option value="composer">composer</option>
+                  <option value="">Loading models…</option>
                 </select>
                 <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
                 <label
@@ -581,22 +583,89 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (!select) {
           return;
         }
-        const previous = select.value || "default";
+        const previous = select.value || "";
         try {
           const data = await fetch(withToken("/api/models/selectable")).then((r) => r.json());
-          if (!data.ok || !Array.isArray(data.models)) {
+          if (!data.ok) {
             return;
           }
+          const items = Array.isArray(data.options) && data.options.length
+            ? data.options
+            : (Array.isArray(data.models) ? data.models.map((id) => ({ id, label: id })) : []);
           select.innerHTML = "";
-          data.models.forEach((model) => {
+          if (!items.length) {
             const option = document.createElement("option");
-            option.value = String(model || "");
-            option.textContent = String(model || "");
+            option.value = "";
+            option.textContent = data.warning || "(no models)";
+            select.appendChild(option);
+            return;
+          }
+          items.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = String(item.id || item || "");
+            option.textContent = String(item.label || item.id || item || "");
             select.appendChild(option);
           });
-          select.value = data.models.includes(previous) ? previous : "default";
+          const ids = items.map((item) => String(item.id || item || ""));
+          select.value = ids.includes(previous) ? previous : (ids.includes("auto") ? "auto" : ids[0]);
         } catch {
-          // fallback to default static options
+          select.innerHTML = '<option value="">(failed to load models)</option>';
+        }
+      }
+      function renderCursorAccount(account) {
+        const line = document.getElementById("cursorAccountLine");
+        const btn = document.getElementById("btnCursorLogin");
+        if (!line) {
+          return;
+        }
+        if (!account || account.ok === false) {
+          line.textContent = (account && account.error) ? account.error : "Could not reach Cursor Agent CLI.";
+          if (btn) { btn.style.display = ""; }
+          return;
+        }
+        if (account.loggedIn) {
+          const bits = [account.email || "Cursor account"];
+          if (account.subscriptionTier) { bits.push(account.subscriptionTier); }
+          if (account.cliVersion) { bits.push("CLI " + account.cliVersion); }
+          line.textContent = "Logged in as " + bits.join(" · ");
+          if (btn) { btn.style.display = "none"; }
+          return;
+        }
+        line.textContent = "Cursor Agent is not logged in.";
+        if (btn) { btn.style.display = ""; }
+      }
+      async function pollCursorAccount(timeoutMs) {
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const data = await fetch(withToken("/api/cursor/account")).then((r) => r.json());
+          renderCursorAccount(data);
+          if (data && data.loggedIn) { return data; }
+          await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
+        }
+        return null;
+      }
+      async function startCursorLoginFlow() {
+        const line = document.getElementById("cursorAccountLine");
+        if (line) { line.textContent = "Opening Cursor login…"; }
+        await fetch(withToken("/api/cursor/login"), { method: "POST" }).then((r) => r.json());
+        const account = await pollCursorAccount(180000);
+        if (account && account.loggedIn) {
+          await loadSelectableModels();
+        }
+      }
+      async function bootstrapCursorAndModels() {
+        const line = document.getElementById("cursorAccountLine");
+        if (line) { line.textContent = "Checking Cursor CLI update and login…"; }
+        try {
+          const boot = await fetch(withToken("/api/cursor/bootstrap")).then((r) => r.json());
+          renderCursorAccount(boot);
+          if (boot && boot.needsLogin) {
+            await startCursorLoginFlow();
+            return;
+          }
+          await loadSelectableModels();
+        } catch (err) {
+          if (line) { line.textContent = (err && err.message) ? err.message : String(err); }
         }
       }
       async function loadExternalSelectableModels() {
@@ -1448,7 +1517,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       });
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
-      loadSelectableModels();
+      bootstrapCursorAndModels();
+      document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
       updateExecutionModeUi();
       refreshSessions();
       refreshPlans();

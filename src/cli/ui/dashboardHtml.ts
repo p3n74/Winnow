@@ -1252,12 +1252,14 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         <div class="rightCol">
           <div class="panel">
             <div class="title">Agent Workspace (Cursor Native)</div>
+            <div class="row small" style="margin-bottom:8px;align-items:center;gap:8px">
+              <span id="cursorAccountLine" class="small muted">Checking Cursor CLI…</span>
+              <button type="button" id="btnCursorLogin" class="secondary" style="display:none">Log in to Cursor</button>
+            </div>
             <div class="runRow small">
               <label>Model Pref</label>
               <select id="agentModelPref">
-                <option value="default">default</option>
-                <option value="auto">auto</option>
-                <option value="composer">composer</option>
+                <option value="">Loading models…</option>
               </select>
               <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
               <label
@@ -2586,20 +2588,92 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       async function loadSelectableModels(){
         const select = document.getElementById('agentModelPref');
         if(!select){ return; }
-        const previous = select.value || 'default';
+        const previous = select.value || '';
         try{
           const data = await fetch(withToken('/api/models/selectable')).then((r) => r.json());
-          if(!data.ok || !Array.isArray(data.models)){ return; }
+          if(!data.ok){ return; }
+          const items = Array.isArray(data.options) && data.options.length
+            ? data.options
+            : (Array.isArray(data.models) ? data.models.map((id) => ({ id, label: id })) : []);
           select.innerHTML = '';
-          data.models.forEach((model) => {
+          if(!items.length){
             const o = document.createElement('option');
-            o.value = String(model || '');
-            o.textContent = String(model || '');
+            o.value = '';
+            o.textContent = data.warning || '(no models)';
+            select.appendChild(o);
+            return;
+          }
+          items.forEach((item) => {
+            const o = document.createElement('option');
+            o.value = String(item.id || item || '');
+            o.textContent = String(item.label || item.id || item || '');
             select.appendChild(o);
           });
-          select.value = data.models.includes(previous) ? previous : 'default';
+          const ids = items.map((item) => String(item.id || item || ''));
+          select.value = ids.includes(previous) ? previous : (ids.includes('auto') ? 'auto' : ids[0]);
         } catch(_e){
-          // keep default static options
+          select.innerHTML = '<option value="">(failed to load models)</option>';
+        }
+      }
+
+      function renderCursorAccount(account){
+        const line = document.getElementById('cursorAccountLine');
+        const btn = document.getElementById('btnCursorLogin');
+        if(!line){ return; }
+        if(!account || account.ok === false){
+          line.textContent = (account && account.error) ? account.error : 'Could not reach Cursor Agent CLI.';
+          if(btn){ btn.style.display = ''; }
+          return;
+        }
+        if(account.loggedIn){
+          const bits = [account.email || 'Cursor account'];
+          if(account.subscriptionTier){ bits.push(account.subscriptionTier); }
+          if(account.cliVersion){ bits.push('CLI ' + account.cliVersion); }
+          line.textContent = 'Logged in as ' + bits.join(' · ');
+          if(btn){ btn.style.display = 'none'; }
+          return;
+        }
+        line.textContent = 'Cursor Agent is not logged in.';
+        if(btn){ btn.style.display = ''; }
+      }
+
+      async function pollCursorAccount(timeoutMs){
+        const started = Date.now();
+        while(Date.now() - started < timeoutMs){
+          const data = await fetch(withToken('/api/cursor/account')).then((r)=>r.json());
+          renderCursorAccount(data);
+          if(data && data.loggedIn){ return data; }
+          await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
+        }
+        return null;
+      }
+
+      async function startCursorLoginFlow(){
+        const line = document.getElementById('cursorAccountLine');
+        if(line){ line.textContent = 'Opening Cursor login…'; }
+        const res = await fetch(withToken('/api/cursor/login'), { method: 'POST' }).then((r)=>r.json());
+        if(res && res.loginUrl && line){
+          line.textContent = 'Complete Cursor login in the browser.';
+        }
+        const account = await pollCursorAccount(180000);
+        if(account && account.loggedIn){
+          await loadSelectableModels();
+        }
+      }
+
+      async function bootstrapCursorAndModels(){
+        const line = document.getElementById('cursorAccountLine');
+        if(line){ line.textContent = 'Checking Cursor CLI update and login…'; }
+        try{
+          const boot = await fetch(withToken('/api/cursor/bootstrap')).then((r)=>r.json());
+          renderCursorAccount(boot);
+          if(boot && boot.needsLogin){
+            await startCursorLoginFlow();
+            return;
+          }
+          await loadSelectableModels();
+        } catch(err){
+          if(line){ line.textContent = (err && err.message) ? err.message : String(err); }
         }
       }
 
@@ -3111,7 +3185,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       refreshDir();
       refreshWorkspace();
       refreshSessions();
-      loadSelectableModels();
+      bootstrapCursorAndModels();
+      document.getElementById('btnCursorLogin')?.addEventListener('click', () => { void startCursorLoginFlow(); });
       document.querySelectorAll('.tab').forEach((tab) => {
         const targetView = tab.getAttribute('data-view');
         if(!targetView){ return; }

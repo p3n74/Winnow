@@ -59,6 +59,18 @@ import {
   listCursorSessionsForWorkspaceRoot,
   SessionSummary,
 } from "../cursor/sessionUtils.js";
+import {
+  parseCursorModelsOutput,
+  type CursorModelOption,
+} from "../cursor/modelCatalog.js";
+import {
+  extractLoginUrl,
+  mergeCursorAccount,
+  parseCursorAboutPayload,
+  parseCursorStatusPayload,
+  parseCursorUpdateOutput,
+  type CursorAccountSnapshot,
+} from "../cursor/cursorAccount.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -296,83 +308,134 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
    * `--model` and the model cursor-agent actually resolved.
    */
   let cursorModelLabelCache: Map<string, string> | undefined;
+  let cursorModelOptionsCache: CursorModelOption[] = [];
+  let cursorLoginChild: ChildProcess | null = null;
+  let cursorLoginOutput = "";
 
-  async function readCursorModelsRaw(): Promise<string> {
+  function spawnCursorCapture(args: string[], timeoutMs = 20000): Promise<string> {
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
-    return new Promise<string>((resolvePromise, rejectPromise) => {
-      const child = spawn(cursorExe, ["models"], {
+    return new Promise((resolvePromise) => {
+      const child = spawn(cursorExe, args, {
         stdio: ["ignore", "pipe", "pipe"],
         cwd: uiWorkspace.dir,
         env: process.env,
       });
       let stdout = "";
       let stderr = "";
+      const timer = setTimeout(() => {
+        child.kill("SIGTERM");
+      }, timeoutMs);
       child.stdout?.on("data", (buf: Buffer) => {
         stdout += buf.toString("utf8");
       });
       child.stderr?.on("data", (buf: Buffer) => {
         stderr += buf.toString("utf8");
       });
-      child.on("error", (error) => rejectPromise(error));
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolvePromise(stdout);
-          return;
-        }
-        rejectPromise(new Error(stderr || `cursor-agent models failed with code ${code ?? "unknown"}`));
+      const finish = () => {
+        clearTimeout(timer);
+        resolvePromise(`${stdout}\n${stderr}`.trim());
+      };
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        resolvePromise(error.message);
       });
+      child.on("close", finish);
     });
   }
 
-  function parseCursorModelLine(rawLine: string): { id: string; label: string } | null {
-    const trimmed = rawLine.trim();
-    if (!trimmed) {
-      return null;
+  async function readCursorAccount(): Promise<CursorAccountSnapshot> {
+    const statusRaw = await spawnCursorCapture(["status", "--format", "json"], 15000);
+    const aboutRaw = await spawnCursorCapture(["about", "--format", "json"], 15000);
+    return mergeCursorAccount({
+      status: parseCursorStatusPayload(statusRaw),
+      about: parseCursorAboutPayload(aboutRaw),
+    });
+  }
+
+  async function bootstrapCursorCli(): Promise<CursorAccountSnapshot> {
+    const updateRaw = await spawnCursorCapture(["update"], 45000);
+    const update = parseCursorUpdateOutput(updateRaw);
+    const account = await readCursorAccount();
+    return mergeCursorAccount({
+      status: {
+        loggedIn: account.loggedIn,
+        email: account.email,
+        userId: account.userId,
+      },
+      about: {
+        email: account.email,
+        subscriptionTier: account.subscriptionTier,
+        cliVersion: account.cliVersion,
+      },
+      update,
+    });
+  }
+
+  function stopCursorLogin(): void {
+    if (cursorLoginChild && cursorLoginChild.exitCode === null) {
+      cursorLoginChild.kill("SIGTERM");
     }
-    // cursor-agent formats lines as `<model-id> - <friendly label>`.
-    const dashed = trimmed.match(/^([A-Za-z0-9._-]+)\s+-\s+(.+?)\s*$/);
-    if (dashed?.[1]) {
-      let label = dashed[2] || dashed[1];
-      // Strip trailing parenthetical hints like `(current)` / `(default)`.
-      label = label.replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
-      return { id: dashed[1], label };
+    cursorLoginChild = null;
+  }
+
+  function startCursorLogin(): { started: boolean; alreadyRunning: boolean; loginUrl: string } {
+    if (cursorLoginChild && cursorLoginChild.exitCode === null) {
+      return { started: true, alreadyRunning: true, loginUrl: extractLoginUrl(cursorLoginOutput) };
     }
-    const bullet = trimmed.match(/^(?:[-*]\s+)?([A-Za-z0-9._-]+)$/);
-    if (bullet?.[1]) {
-      return { id: bullet[1], label: bullet[1] };
+    const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
+    cursorLoginOutput = "";
+    cursorLoginChild = spawn(cursorExe, ["login"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: uiWorkspace.dir,
+      env: process.env,
+    });
+    const child = cursorLoginChild;
+    child.stdout?.on("data", (buf: Buffer) => {
+      cursorLoginOutput += buf.toString("utf8");
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      cursorLoginOutput += buf.toString("utf8");
+    });
+    child.on("close", () => {
+      if (cursorLoginChild === child) {
+        cursorLoginChild = null;
+      }
+    });
+    child.on("error", () => {
+      if (cursorLoginChild === child) {
+        cursorLoginChild = null;
+      }
+    });
+    return { started: true, alreadyRunning: false, loginUrl: "" };
+  }
+
+  async function readCursorModelsRaw(): Promise<string> {
+    const fromFlag = await spawnCursorCapture(["--list-models"], 25000);
+    if (parseCursorModelsOutput(fromFlag).length > 0) {
+      return fromFlag;
     }
-    return null;
+    return spawnCursorCapture(["models"], 25000);
   }
 
   async function loadCursorModelLabels(refresh = false): Promise<Map<string, string>> {
     if (cursorModelLabelCache && !refresh) {
       return cursorModelLabelCache;
     }
+    const cliOutput = await readCursorModelsRaw();
+    const options = parseCursorModelsOutput(cliOutput);
     const map = new Map<string, string>();
-    map.set("default", "Default");
-    map.set("auto", "Auto");
-    map.set("composer", "Composer");
-    try {
-      const raw = await readCursorModelsRaw();
-      for (const line of raw.split("\n")) {
-        const lower = line.trim().toLowerCase();
-        if (!lower || lower.includes("available model") || lower.startsWith("tip:")) {
-          continue;
-        }
-        const parsed = parseCursorModelLine(line);
-        if (!parsed) continue;
-        map.set(parsed.id.toLowerCase(), parsed.label);
-      }
-    } catch {
-      // Keep the small fallback set if discovery fails.
+    for (const option of options) {
+      map.set(option.id.toLowerCase(), option.label);
+      map.set(option.id, option.label);
     }
+    cursorModelOptionsCache = options;
     cursorModelLabelCache = map;
     return map;
   }
 
-  async function listSelectableModels(): Promise<string[]> {
-    const labels = await loadCursorModelLabels(true);
-    return [...labels.keys()];
+  async function listSelectableModels(): Promise<CursorModelOption[]> {
+    await loadCursorModelLabels(true);
+    return cursorModelOptionsCache;
   }
 
   async function listExternalSelectableModels(): Promise<string[]> {
@@ -2130,10 +2193,67 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/cursor/bootstrap" && req.method === "GET") {
+      try {
+        const account = await bootstrapCursorCli();
+        sendJson(res, 200, { ok: true, ...account });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/account" && req.method === "GET") {
+      try {
+        const account = await readCursorAccount();
+        if (account.loggedIn) {
+          stopCursorLogin();
+        }
+        sendJson(res, 200, { ok: true, ...account });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/login" && req.method === "POST") {
+      try {
+        const current = await readCursorAccount();
+        if (current.loggedIn) {
+          stopCursorLogin();
+          sendJson(res, 200, { ok: true, alreadyLoggedIn: true, ...current, loginUrl: "" });
+          return;
+        }
+        const started = startCursorLogin();
+        await new Promise((resolveWait) => setTimeout(resolveWait, 1500));
+        const loginUrl = extractLoginUrl(cursorLoginOutput) || started.loginUrl;
+        sendJson(res, 200, {
+          ok: true,
+          alreadyLoggedIn: false,
+          started: started.started,
+          alreadyRunning: started.alreadyRunning,
+          loginUrl,
+          output: cursorLoginOutput.slice(-2000),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/models/selectable" && req.method === "GET") {
       try {
-        const models = await listSelectableModels();
-        sendJson(res, 200, { ok: true, models });
+        const options = await listSelectableModels();
+        const account = await readCursorAccount();
+        sendJson(res, 200, {
+          ok: true,
+          models: options.map((item) => item.id),
+          options,
+          loggedIn: account.loggedIn,
+          warning: account.loggedIn
+            ? (options.length ? "" : "Cursor CLI returned no models for this account.")
+            : "Log in to Cursor Agent to load the model list.",
+        });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
