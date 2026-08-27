@@ -22,7 +22,7 @@ function Test-NodeSupported {
         return $false
     }
     $major = [int](node -p "process.versions.node.split('.')[0]")
-    return ($major -ge 20)
+    return ($major -ge 22)
 }
 
 function Test-WingetAvailable {
@@ -65,7 +65,7 @@ if (-not (Test-NodeSupported)) {
 }
 
 if (-not (Test-NodeSupported)) {
-    Write-WinnowSetup "ERROR: Node.js is still missing or below v20 after install."
+    Write-WinnowSetup "ERROR: Node.js is still missing or below v22 after install."
     Write-WinnowSetup "Close this window, open a new PowerShell, and run this script again."
     exit 1
 }
@@ -114,8 +114,8 @@ npm install
 Write-WinnowSetup "Building TypeScript (dist/)..."
 npm run build
 
-Write-WinnowSetup "Rebuilding node-pty for this machine..."
-npm rebuild node-pty --build-from-source
+Write-WinnowSetup "Rebuilding native modules (better-sqlite3, node-pty) for $(node -v)..."
+npm rebuild better-sqlite3 node-pty
 
 function Install-WinnowUiLauncher {
     $binDir = Join-Path $env:USERPROFILE ".local\bin"

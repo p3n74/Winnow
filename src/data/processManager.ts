@@ -21,6 +21,7 @@ export type ManagedProcessRecord = {
   tags: string[];
   logPath: string;
   lastOutput: string;
+  lastOutputAt?: string;
 };
 
 export type ManagedProcessStartInput = {
@@ -28,6 +29,17 @@ export type ManagedProcessStartInput = {
   label?: string;
   cwd?: string;
   tags?: string[];
+};
+
+export type ManagedProcessArgvStartInput = {
+  file: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  label?: string;
+  tags?: string[];
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
+  onClose?: (code: number | null, signal: NodeJS.Signals | null) => void;
 };
 
 function nowIso(): string {
@@ -61,6 +73,13 @@ export class ProcessManager {
   private readonly logsDir: string;
   private readonly records = new Map<string, ManagedProcessRecord>();
   private readonly liveChildren = new Map<string, ChildProcess>();
+  private readonly outputHooks = new Map<
+    string,
+    {
+      onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
+      onClose?: (code: number | null, signal: NodeJS.Signals | null) => void;
+    }
+  >();
   private db: InstanceType<typeof Database> | null = null;
 
   constructor(projectRoot: string) {
@@ -151,13 +170,15 @@ export class ProcessManager {
     return this.records.get(id) ?? null;
   }
 
-  private async appendLog(record: ManagedProcessRecord, chunk: string): Promise<void> {
+  private async appendLog(record: ManagedProcessRecord, chunk: string, stream: "stdout" | "stderr" = "stdout"): Promise<void> {
     if (!chunk) {
       return;
     }
     record.lastOutput = safeTailLine(chunk) || record.lastOutput;
+    record.lastOutputAt = nowIso();
     await appendFile(record.logPath, chunk, "utf8").catch(() => {});
     this.persistOne(record);
+    this.outputHooks.get(record.id)?.onOutput?.(chunk, stream);
   }
 
   private persistOne(record: ManagedProcessRecord): void {
@@ -206,6 +227,40 @@ export class ProcessManager {
     }
   }
 
+  private bindChild(record: ManagedProcessRecord, child: ChildProcess): void {
+    const id = record.id;
+    child.stdout?.on("data", (buf: Buffer) => {
+      void this.appendLog(record, buf.toString("utf8"), "stdout");
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      void this.appendLog(record, buf.toString("utf8"), "stderr");
+    });
+    child.on("error", (error) => {
+      record.status = "error";
+      record.endedAt = nowIso();
+      record.exitCode = 1;
+      void this.appendLog(record, `\n[spawn error] ${error.message}\n`);
+      this.liveChildren.delete(id);
+      this.persistOne(record);
+      const hooks = this.outputHooks.get(id);
+      this.outputHooks.delete(id);
+      hooks?.onClose?.(1, null);
+    });
+    child.on("close", (code, signal) => {
+      if (record.status === "running") {
+        record.status = code === 0 ? "done" : "error";
+      }
+      record.endedAt = nowIso();
+      record.exitCode = typeof code === "number" ? code : null;
+      record.stopSignal = signal ?? undefined;
+      this.liveChildren.delete(id);
+      this.persistOne(record);
+      const hooks = this.outputHooks.get(id);
+      this.outputHooks.delete(id);
+      hooks?.onClose?.(typeof code === "number" ? code : null, signal ?? null);
+    });
+  }
+
   async start(input: ManagedProcessStartInput): Promise<{ ok: true; process: ManagedProcessRecord } | { ok: false; error: string }> {
     const command = String(input.command || "").trim();
     if (!command) {
@@ -244,37 +299,140 @@ export class ProcessManager {
       tags: normalizeTags(input.tags),
       logPath,
       lastOutput: "",
+      lastOutputAt: startedAt,
     };
     this.records.set(id, record);
     this.liveChildren.set(id, child);
     this.persistOne(record);
-
-    child.stdout?.on("data", (buf: Buffer) => {
-      void this.appendLog(record, buf.toString("utf8"));
-    });
-    child.stderr?.on("data", (buf: Buffer) => {
-      void this.appendLog(record, buf.toString("utf8"));
-    });
-    child.on("error", (error) => {
-      record.status = "error";
-      record.endedAt = nowIso();
-      record.exitCode = 1;
-      void this.appendLog(record, `\n[spawn error] ${error.message}\n`);
-      this.liveChildren.delete(id);
-      this.persistOne(record);
-    });
-    child.on("close", (code, signal) => {
-      if (record.status === "running") {
-        record.status = code === 0 ? "done" : "error";
-      }
-      record.endedAt = nowIso();
-      record.exitCode = typeof code === "number" ? code : null;
-      record.stopSignal = signal ?? undefined;
-      this.liveChildren.delete(id);
-      this.persistOne(record);
-    });
-
+    this.bindChild(record, child);
     return { ok: true, process: record };
+  }
+
+  async startArgv(
+    input: ManagedProcessArgvStartInput,
+  ): Promise<{ ok: true; process: ManagedProcessRecord } | { ok: false; error: string }> {
+    const file = String(input.file || "").trim();
+    if (!file) {
+      return { ok: false, error: "file is required" };
+    }
+    const args = Array.isArray(input.args) ? input.args.map((item) => String(item)) : [];
+    const cwd = resolve(this.projectRoot, String(input.cwd || "."));
+    const id = randomId();
+    const preview = [file, ...args].join(" ");
+    const label = String(input.label || "").trim() || basename(file);
+    const logPath = join(this.logsDir, `${id}.log`);
+    const startedAt = nowIso();
+    const env = { ...process.env, ...(input.env || {}) };
+    const child = spawn(file, args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+      windowsHide: platform() === "win32",
+    });
+    const record: ManagedProcessRecord = {
+      id,
+      projectRoot: this.projectRoot,
+      label,
+      command: preview,
+      cwd,
+      pid: child.pid ?? null,
+      startedAt,
+      status: "running",
+      tags: normalizeTags(input.tags),
+      logPath,
+      lastOutput: "",
+      lastOutputAt: startedAt,
+    };
+    this.records.set(id, record);
+    this.liveChildren.set(id, child);
+    this.outputHooks.set(id, { onOutput: input.onOutput, onClose: input.onClose });
+    this.persistOne(record);
+    this.bindChild(record, child);
+    return { ok: true, process: record };
+  }
+
+  isLive(id: string): boolean {
+    return this.liveChildren.has(id);
+  }
+
+  sendSignal(id: string, signal: NodeJS.Signals): { ok: true } | { ok: false; error: string } {
+    const record = this.records.get(id);
+    if (!record) {
+      return { ok: false, error: "process not found" };
+    }
+    const child = this.liveChildren.get(id);
+    const pid = child?.pid ?? record.pid;
+    if (!pid) {
+      return { ok: false, error: "missing process pid" };
+    }
+    try {
+      if (platform() === "win32") {
+        process.kill(pid, signal === "SIGINT" ? "SIGTERM" : signal);
+      } else {
+        process.kill(-pid, signal);
+      }
+      record.stopSignal = signal;
+      this.persistOne(record);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async stopLadder(
+    id: string,
+    opts?: { graceMs?: number; onStep?: (signal: NodeJS.Signals) => void },
+  ): Promise<{ ok: true; stopped: boolean; signal?: NodeJS.Signals } | { ok: false; error: string }> {
+    const record = this.records.get(id);
+    if (!record) {
+      return { ok: false, error: "process not found" };
+    }
+    if (record.status !== "running" && !this.liveChildren.has(id)) {
+      return { ok: true, stopped: false };
+    }
+    const graceMs = Math.max(250, opts?.graceMs ?? 8000);
+    const steps: NodeJS.Signals[] = platform() === "win32" ? ["SIGTERM", "SIGKILL"] : ["SIGINT", "SIGTERM", "SIGKILL"];
+    for (const signal of steps) {
+      if (!this.liveChildren.has(id)) {
+        break;
+      }
+      opts?.onStep?.(signal);
+      const sent = this.sendSignal(id, signal);
+      if (!sent.ok && signal !== "SIGKILL") {
+        continue;
+      }
+      const finished = await this.waitUntilGone(id, signal === "SIGKILL" ? 1500 : graceMs);
+      if (finished) {
+        if (record.status === "running") {
+          record.status = "stopped";
+          record.endedAt = nowIso();
+          this.persistOne(record);
+        }
+        return { ok: true, stopped: true, signal };
+      }
+    }
+    if (record.status === "running") {
+      record.status = "stopped";
+      record.endedAt = nowIso();
+      this.persistOne(record);
+    }
+    return { ok: true, stopped: true, signal: "SIGKILL" };
+  }
+
+  private waitUntilGone(id: string, timeoutMs: number): Promise<boolean> {
+    if (!this.liveChildren.has(id)) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolveWait) => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (!this.liveChildren.has(id) || Date.now() - started >= timeoutMs) {
+          clearInterval(timer);
+          resolveWait(!this.liveChildren.has(id));
+        }
+      }, 50);
+    });
   }
 
   stop(id: string): { ok: true; stopped: boolean; message?: string } | { ok: false; error: string } {

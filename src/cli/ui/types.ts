@@ -35,7 +35,11 @@ export type AgentStartRequest = {
   graphSeed?: boolean;
   planId?: string;
   sessionId?: string;
+  /** Cursor chat UUID to pass to `--resume` when continuing. */
+  cursorSessionId?: string;
   executionMode?: "cursor" | "external";
+  /** Filename stems (UUIDs) of files previously stored via POST /api/attachments. */
+  attachmentIds?: string[];
 };
 
 export type AgentEvent = {
@@ -57,6 +61,9 @@ export type AgentSession = {
   command: string;
   args: string[];
   events: AgentEvent[];
+  liveSubagents?: import("../../cursor/subagents.js").LiveSubagentRow[];
+  /** Cursor CLI chat UUID from `system.init.session_id` / `result.session_id`. */
+  cursorSessionId?: string;
 };
 
 export type SessionStreamClient = {
@@ -94,6 +101,7 @@ export type LocalSessionIndexEntry = {
   status: "running" | "done" | "error";
   preview: string;
   source: "winnow-local";
+  cursorSessionId?: string;
 };
 
 export type LocalSessionRecord = {
@@ -108,4 +116,5 @@ export type LocalSessionRecord = {
   output: string;
   errorOutput: string;
   events?: AgentEvent[];
+  cursorSessionId?: string;
 };

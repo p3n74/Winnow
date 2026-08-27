@@ -83,7 +83,11 @@ export function buildMainTerminalHtml(token?: string): string {
       .back:hover { background: var(--line-faint); color: var(--text-neon); }
       .root { display: grid; grid-template-columns: 45fr 55fr; gap: 16px; padding: 16px; min-width: 0; min-height: 0; }
       .left { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
+      .left.pane1Expanded { grid-template-rows: minmax(0, 1fr); }
       .leftBottom { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; min-width: 0; min-height: 0; }
+      .left.pane1Expanded .leftBottom {
+        display: none;
+      }
       .leftBottomLeft { display: grid; grid-template-rows: 60fr 40fr; gap: 16px; min-width: 0; min-height: 0; }
       .pane {
         min-width: 0;
@@ -94,15 +98,18 @@ export function buildMainTerminalHtml(token?: string): string {
         overflow: hidden;
         box-shadow: var(--shadow);
       }
-      .paneInner { width: 100%; height: 100%; display: grid; grid-template-rows: 38px 1fr; }
+      .paneInner { width: 100%; height: 100%; display: grid; grid-template-rows: auto 1fr; }
       .paneHead {
         border-bottom: 1px solid var(--line);
         color: var(--muted);
         font-size: 12px;
-        padding: 0 12px;
+        padding: 4px 12px;
+        min-height: 38px;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
         background: var(--panel);
       }
       .paneTitle { display: flex; align-items: center; gap: 8px; color: var(--text-strong); font-weight: 500; }
@@ -171,7 +178,43 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .pane2View:not(.isHidden) { z-index: 1; }
       .pane2View .cursorHost { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
-      .pane2DocsRoot { padding: 0 10px 10px; gap: 8px; }
+      .pane1Body {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .pane1View {
+        position: absolute;
+        inset: 0;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .pane1View.isHidden {
+        visibility: hidden;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .pane1View:not(.isHidden) { z-index: 1; }
+      .pane1View .term { flex: 1; min-height: 0; width: 100%; }
+      #pane1Trace {
+        flex: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 10px 12px;
+        overflow: auto;
+        background: var(--bg);
+        color: var(--text-neon);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .docsRoot { padding: 0 10px 10px; gap: 8px; }
       .docsToolbar {
         display: flex;
         flex-wrap: wrap;
@@ -293,6 +336,99 @@ export function buildMainTerminalHtml(token?: string): string {
         line-height: 1.45;
         font-family: var(--font-mono);
         white-space: pre-wrap;
+      }
+      .scriptsRoot {
+        padding: 8px 10px 10px;
+        gap: 8px;
+      }
+      .scriptsStep {
+        min-height: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .scriptsStep.isHidden { display: none !important; }
+      .scriptsLayout {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+        flex: 1;
+      }
+      .scriptsList {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        overflow: auto;
+        min-height: 0;
+        flex: 1;
+        padding: 6px;
+      }
+      .scriptRow {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: rgba(0,0,0,0.5);
+        color: inherit;
+        font-family: inherit;
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 10px 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+      }
+      .scriptRow:hover { border-color: var(--line); }
+      .scriptRow.selected { border-color: var(--accent); }
+      .scriptRowTitle { color: var(--text-neon); font-size: 13px; font-weight: 600; }
+      .scriptRowMeta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+      .scriptRowBlurb { color: var(--text); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+      .scriptDetail {
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: 1;
+      }
+      .scriptDetailHead {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .scriptKnobs {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .scriptKnob {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      .scriptKnobHead { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+      .scriptKnobSample { font-size: 11px; color: var(--text-neon); margin-top: 4px; font-family: var(--font-mono); }
+      .scriptKnobOrigin { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      .scriptKnobInput {
+        margin-top: 6px;
+        width: 100%;
+      }
+      .scriptRuns { display: flex; flex-direction: column; gap: 6px; }
+      .scriptRunCard {
+        border: 1px solid var(--line-faint);
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 11px;
+      }
+      .scriptPreview {
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        white-space: pre-wrap;
+        min-height: 42px;
       }
       .plansRoot { padding: 10px; gap: 10px; }
       .plansHero {
@@ -1031,17 +1167,53 @@ export function buildMainTerminalHtml(token?: string): string {
           <span class="brand">Winnow Main Grid</span>
         </div>
         <div class="toolbarRight">
-          <span class="chip">1 ranger</span>
-          <span class="chip">2 agent · shell · docs · graph · plans · processes</span>
+          <span class="chip">1 ranger · trace · docs</span>
+          <span class="chip">2 agent · shell · graph · plans · processes · scripts</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
         </div>
       </div>
       <div class="root">
-      <div class="left">
-        <div id="pane1Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span><button class="reconnect" data-pane="1">Reconnect</button></div><div id="pane1" class="term"></div></div></div>
-        <div class="leftBottom">
+      <div id="gridLeft" class="left">
+        <div id="pane1Wrap" class="pane">
+          <div class="paneInner">
+            <div class="paneHead">
+              <span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="paneTabs" role="tablist" aria-label="File browser, agent trace, and docs">
+                  <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="docs" id="pane1TabDocs">Docs</button>
+                </div>
+                <button type="button" class="reconnect" id="btnPane1Expand" aria-pressed="false" title="Hide panes 3, 4, and 5 and use their space">Fullscreen</button>
+                <button type="button" class="reconnect" id="reconnectPane1" data-pane="1">Reconnect</button>
+              </div>
+            </div>
+            <div class="pane1Body">
+              <div id="pane1Browser" class="pane1View" aria-hidden="false">
+                <div id="pane1" class="term"></div>
+              </div>
+              <div id="pane1TraceWrap" class="pane1View isHidden" aria-hidden="true">
+                <pre id="pane1Trace">No active agent session.</pre>
+              </div>
+              <div id="pane1Docs" class="pane1View isHidden docsRoot" aria-hidden="true">
+                <div class="docsToolbar">
+                  <button type="button" class="reconnect" id="btnDocsReindex">Refresh index</button>
+                  <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
+                    <option value="">(select file)</option>
+                  </select>
+                </div>
+                <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
+                <div class="docsBody">
+                  <article id="docsMdRendered" class="docsMdRendered isHidden"></article>
+                  <iframe id="docsPdfViewer" class="docsPdfViewer isHidden" title="PDF preview"></iframe>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="gridLeftBottom" class="leftBottom">
           <div class="leftBottomLeft">
             <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">htop</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
             <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">4 Network <span class="paneCmd">netwatch</span></span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
@@ -1054,13 +1226,13 @@ export function buildMainTerminalHtml(token?: string): string {
           <div class="paneHead">
             <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI, docs, graph, and system shell">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, graph, plans, processes, and scripts">
                 <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
-                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="docs" id="pane2TabDocs">Docs</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="plans" id="pane2TabPlans">Plans</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="processes" id="pane2TabProcesses">Processes</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="scripts" id="pane2TabScripts">Scripts</button>
               </div>
               <button type="button" class="reconnect" id="reconnectPane2" data-pane="2" hidden>Reconnect</button>
             </div>
@@ -1075,19 +1247,6 @@ export function buildMainTerminalHtml(token?: string): string {
             </div>
             <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
               <div id="pane2term" class="term"></div>
-            </div>
-            <div id="pane2Docs" class="pane2View isHidden pane2DocsRoot" aria-hidden="true">
-              <div class="docsToolbar">
-                <button type="button" class="reconnect" id="btnDocsReindex">Refresh index</button>
-                <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
-                  <option value="">(select file)</option>
-                </select>
-              </div>
-              <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
-              <div class="docsBody">
-                <article id="docsMdRendered" class="docsMdRendered isHidden"></article>
-                <iframe id="docsPdfViewer" class="docsPdfViewer isHidden" title="PDF preview"></iframe>
-              </div>
             </div>
             <div id="pane2Graph" class="pane2View isHidden graphRoot" aria-hidden="true">
               <div class="graphToolbar">
@@ -1163,6 +1322,47 @@ export function buildMainTerminalHtml(token?: string): string {
               <div id="procList" class="procList">Loading…</div>
               <div class="procHint">Selected process output (tail):</div>
               <pre id="procLogPreview" class="procLog">Select a process to inspect logs.</pre>
+            </div>
+            <div id="pane2Scripts" class="pane2View isHidden scriptsRoot" aria-hidden="true">
+              <div id="scriptsStepList" class="scriptsStep" data-scripts-step="list">
+                <div class="procToolbar">
+                  <button type="button" class="reconnect" id="btnScriptsScan">Scan</button>
+                  <button type="button" class="reconnect" id="btnScriptsRefresh">Refresh</button>
+                  <input id="scriptsFilter" class="procInput procCommand" placeholder="Filter scripts…" />
+                </div>
+                <p id="scriptsHint" class="procHint">Pick a script. Next page is knobs, intent, and run controls.</p>
+                <div id="scriptsList" class="scriptsList">Scan the repo to index scripts.</div>
+              </div>
+              <div id="scriptsStepDetail" class="scriptsStep isHidden" data-scripts-step="detail" aria-hidden="true">
+                <div class="procToolbar">
+                  <button type="button" class="reconnect" id="btnScriptsBack">Back to scripts</button>
+                  <button type="button" class="reconnect" id="btnScriptsInspect">Refresh knobs</button>
+                  <button type="button" class="reconnect" id="btnScriptsPropose">Propose</button>
+                  <button type="button" class="reconnect" id="btnScriptsRun">Run</button>
+                  <button type="button" class="reconnect" id="btnScriptsStop">Stop</button>
+                </div>
+                <p id="scriptsDetailHint" class="procHint">Adjust knobs, describe the run, then Propose and confirm.</p>
+                <div class="scriptDetail">
+                  <div class="scriptDetailHead">
+                    <div>
+                      <div id="scriptDetailTitle" class="scriptRowTitle">Select a script</div>
+                      <div id="scriptDetailBlurb" class="scriptRowMeta">Knobs and run history appear here.</div>
+                    </div>
+                  </div>
+                  <div class="small muted">Sample command</div>
+                  <pre id="scriptSampleCommand" class="scriptPreview">Scan to generate a sample usage.</pre>
+                  <div id="scriptLinkedYaml" class="scriptRowMeta">No linked YAML configs.</div>
+                  <div class="small muted">Adjustable parameters</div>
+                  <div id="scriptKnobs" class="scriptKnobs"><div class="scriptRowMeta">No script selected.</div></div>
+                  <textarea id="scriptIntent" class="procInput" placeholder="High-level intent: smaller batch, same seed, longer run…" style="min-height:64px;width:100%;resize:vertical"></textarea>
+                  <div class="small muted">Command preview (confirm before run)</div>
+                  <pre id="scriptPreview" class="scriptPreview">Propose a command first.</pre>
+                  <div class="small muted">Latest insight</div>
+                  <div id="scriptInsight" class="scriptRunCard">No runs yet.</div>
+                  <div class="small muted">History</div>
+                  <div id="scriptRuns" class="scriptRuns"></div>
+                </div>
+              </div>
             </div>
             <div id="pane2Plans" class="pane2View isHidden plansRoot" aria-hidden="true">
               <div class="plansHero">
@@ -1271,12 +1471,27 @@ export function buildMainTerminalHtml(token?: string): string {
       const AUTH_TOKEN = ${JSON.stringify(token ?? "")};
       let graphViewMode = "technical";
       let pane2Mode = "workspace";
+      let pane1Mode = "browser";
+      let pane1TraceSessionId = "";
+      let pane1TraceSource = null;
+      let pane1TraceTimer = null;
+      let pane1TraceLines = [];
+      let pane1TraceSeen = new Set();
+      let pane1Expanded = (function(){
+        try { return localStorage.getItem("winnow.pane1Expanded") === "1"; } catch { return false; }
+      })();
       let graphOverlayOpen = false;
       let graphSimulation = null;
       let processRefreshTimer = null;
       let plansRefreshTimer = null;
+      let scriptsRefreshTimer = null;
       let selectedManagedProcessId = null;
       let cachedManagedProcesses = [];
+      let selectedScriptId = "";
+      let scriptsStep = "list";
+      let cachedScripts = [];
+      let scriptProposal = null;
+      let activeScriptRunId = null;
       let selectedPlanId = "";
       let cachedPlans = [];
       let planGraphVisible = true;
@@ -1289,6 +1504,8 @@ export function buildMainTerminalHtml(token?: string): string {
         try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
       })();
       let graphNodeCache = { nodes: [], edges: [] };
+      let graphExpandedNodeIds = new Set();
+      let graphSummaryTotals = { nodes: 0, edges: 0 };
       let graphViewBox = { x: 0, y: 0, w: 1200, h: 600, baseW: 1200, baseH: 600 };
       let graphDrag = { active: false, startX: 0, startY: 0, initX: 0, initY: 0 };
       let graphFocusState = {
@@ -1359,6 +1576,7 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       function resizeAll(){
         panes.forEach((paneId)=>{
+          if(pane1Expanded && (paneId === "3" || paneId === "4" || paneId === "5")){ return; }
           const current = paneState.get(paneId);
           if(!current){ return; }
           current.fit.fit();
@@ -1374,58 +1592,199 @@ export function buildMainTerminalHtml(token?: string): string {
           }
         }
       }
+      function formatPane1TraceTime(ts){
+        const d = ts ? new Date(ts) : new Date();
+        if(Number.isNaN(d.getTime())){
+          return new Date().toTimeString().slice(0, 8);
+        }
+        return d.toTimeString().slice(0, 8);
+      }
+      function closePane1TraceStream(){
+        if(pane1TraceSource){
+          pane1TraceSource.close();
+          pane1TraceSource = null;
+        }
+      }
+      function renderPane1Trace(){
+        const pre = document.getElementById("pane1Trace");
+        if(!pre){ return; }
+        if(!pane1TraceSessionId){
+          pre.textContent = "No active agent session.";
+          return;
+        }
+        if(pane1TraceLines.length === 0){
+          pre.textContent = "No tool/status events yet.";
+          return;
+        }
+        pre.textContent = pane1TraceLines.join("\\n");
+        pre.scrollTop = pre.scrollHeight;
+      }
+      function appendPane1TraceEvent(ev){
+        if(!ev){ return; }
+        const kind = String(ev.kind || "");
+        if(kind !== "tool" && kind !== "status" && kind !== "system"){ return; }
+        const id = String(ev.id || "");
+        if(id){
+          if(pane1TraceSeen.has(id)){ return; }
+          pane1TraceSeen.add(id);
+        }
+        pane1TraceLines.push("[" + formatPane1TraceTime(ev.ts) + "] " + String(ev.content || ""));
+        if(pane1TraceLines.length > 500){
+          pane1TraceLines = pane1TraceLines.slice(-500);
+        }
+        renderPane1Trace();
+      }
+      function openPane1TraceStream(sessionId, force){
+        if(!sessionId){ return; }
+        if(sessionId === pane1TraceSessionId && !force){
+          if(pane1TraceSource && pane1TraceSource.readyState !== 2){ return; }
+          if(!pane1TraceSource){ return; }
+        }
+        if(sessionId !== pane1TraceSessionId){
+          pane1TraceSessionId = sessionId;
+          pane1TraceLines = [];
+          pane1TraceSeen = new Set();
+          renderPane1Trace();
+        }
+        closePane1TraceStream();
+        pane1TraceSessionId = sessionId;
+        pane1TraceSource = new EventSource(withToken("/api/agent/" + sessionId + "/stream"));
+        pane1TraceSource.addEventListener("timeline",(evt)=>{
+          try {
+            const data = JSON.parse(evt.data || "{}");
+            appendPane1TraceEvent(data.event);
+          } catch(_e) {}
+        });
+        pane1TraceSource.addEventListener("done",()=>{
+          closePane1TraceStream();
+        });
+      }
+      async function pollPane1TraceActive(){
+        try {
+          const res = await fetch(withToken("/api/agent/active")).then((r)=>r.json());
+          if(!res || !res.ok){ return; }
+          const session = res.session;
+          if(!session || !session.id){
+            if(!pane1TraceSessionId){ renderPane1Trace(); }
+            return;
+          }
+          openPane1TraceStream(session.id);
+        } catch(_e) {}
+      }
+      function startPane1TracePolling(){
+        if(pane1TraceTimer){ return; }
+        void pollPane1TraceActive();
+        pane1TraceTimer = setInterval(pollPane1TraceActive, 2000);
+      }
+      function setPane1Tab(mode){
+        pane1Mode = mode === "trace" ? "trace" : mode === "docs" ? "docs" : "browser";
+        const isBrowser = pane1Mode === "browser";
+        const isTrace = pane1Mode === "trace";
+        const isDocs = pane1Mode === "docs";
+        const browserEl = document.getElementById("pane1Browser");
+        const traceEl = document.getElementById("pane1TraceWrap");
+        const docsEl = document.getElementById("pane1Docs");
+        const tb = document.getElementById("pane1TabBrowser");
+        const tt = document.getElementById("pane1TabTrace");
+        const td = document.getElementById("pane1TabDocs");
+        const recon = document.getElementById("reconnectPane1");
+        if(browserEl && traceEl && docsEl){
+          browserEl.classList.toggle("isHidden", !isBrowser);
+          traceEl.classList.toggle("isHidden", !isTrace);
+          docsEl.classList.toggle("isHidden", !isDocs);
+          browserEl.setAttribute("aria-hidden", isBrowser ? "false" : "true");
+          traceEl.setAttribute("aria-hidden", isTrace ? "false" : "true");
+          docsEl.setAttribute("aria-hidden", isDocs ? "false" : "true");
+        }
+        if(tb && tt && td){
+          tb.classList.toggle("paneTabActive", isBrowser);
+          tt.classList.toggle("paneTabActive", isTrace);
+          td.classList.toggle("paneTabActive", isDocs);
+          tb.setAttribute("aria-selected", String(isBrowser));
+          tt.setAttribute("aria-selected", String(isTrace));
+          td.setAttribute("aria-selected", String(isDocs));
+        }
+        if(recon){ recon.hidden = !isBrowser; }
+        if(isBrowser){
+          requestAnimationFrame(resizeAll);
+        }
+        if(isTrace){
+          void pollPane1TraceActive();
+        }
+        if(isDocs){
+          void refreshDocsIndex(false);
+        }
+      }
+      function setPane1Expanded(next){
+        pane1Expanded = Boolean(next);
+        const left = document.getElementById("gridLeft");
+        const bottom = document.getElementById("gridLeftBottom");
+        const btn = document.getElementById("btnPane1Expand");
+        if(left){ left.classList.toggle("pane1Expanded", pane1Expanded); }
+        if(bottom){ bottom.setAttribute("aria-hidden", pane1Expanded ? "true" : "false"); }
+        if(btn){
+          btn.textContent = pane1Expanded ? "Restore" : "Fullscreen";
+          btn.setAttribute("aria-pressed", pane1Expanded ? "true" : "false");
+          btn.title = pane1Expanded ? "Show panes 3, 4, and 5 again" : "Hide panes 3, 4, and 5 and use their space";
+        }
+        try { localStorage.setItem("winnow.pane1Expanded", pane1Expanded ? "1" : "0"); } catch {}
+        requestAnimationFrame(()=>{
+          resizeAll();
+          setTimeout(resizeAll, 80);
+        });
+      }
       function setPane2Tab(mode){
         pane2Mode = mode;
         const wsEl = document.getElementById("pane2Workspace");
         const tsEl = document.getElementById("pane2TerminalWrap");
-        const docEl = document.getElementById("pane2Docs");
         const graphEl = document.getElementById("pane2Graph");
         const plansEl = document.getElementById("pane2Plans");
         const procEl = document.getElementById("pane2Processes");
+        const scriptsEl = document.getElementById("pane2Scripts");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
         const tt = document.getElementById("pane2TabTerminal");
-        const td = document.getElementById("pane2TabDocs");
         const tg = document.getElementById("pane2TabGraph");
         const tplans = document.getElementById("pane2TabPlans");
         const tp = document.getElementById("pane2TabProcesses");
+        const ts = document.getElementById("pane2TabScripts");
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
         const isTerm = mode === "terminal";
-        const isDoc = mode === "docs";
         const isGraph = mode === "graph";
         const isPlans = mode === "plans";
         const isProc = mode === "processes";
-        if(wsEl && tsEl && docEl && graphEl && plansEl && procEl){
+        const isScripts = mode === "scripts";
+        if(wsEl && tsEl && graphEl && plansEl && procEl && scriptsEl){
           wsEl.classList.toggle("isHidden", !isWs);
           tsEl.classList.toggle("isHidden", !isTerm);
-          docEl.classList.toggle("isHidden", !isDoc);
           graphEl.classList.toggle("isHidden", !isGraph);
           plansEl.classList.toggle("isHidden", !isPlans);
           procEl.classList.toggle("isHidden", !isProc);
+          scriptsEl.classList.toggle("isHidden", !isScripts);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
-          docEl.setAttribute("aria-hidden", isDoc ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
           plansEl.setAttribute("aria-hidden", isPlans ? "false" : "true");
           procEl.setAttribute("aria-hidden", isProc ? "false" : "true");
+          scriptsEl.setAttribute("aria-hidden", isScripts ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isDoc ? "md · pdf" : isGraph ? "project graph" : isPlans ? "plan board" : "managed processes";
+          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
         }
-        if(tw && tt && td && tg && tplans && tp){
+        if(tw && tt && tg && tplans && tp && ts){
           tw.classList.toggle("paneTabActive", isWs);
           tt.classList.toggle("paneTabActive", isTerm);
-          td.classList.toggle("paneTabActive", isDoc);
           tg.classList.toggle("paneTabActive", isGraph);
           tplans.classList.toggle("paneTabActive", isPlans);
           tp.classList.toggle("paneTabActive", isProc);
+          ts.classList.toggle("paneTabActive", isScripts);
           tw.setAttribute("aria-selected", isWs.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
-          td.setAttribute("aria-selected", isDoc.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
           tplans.setAttribute("aria-selected", isPlans.toString());
           tp.setAttribute("aria-selected", isProc.toString());
+          ts.setAttribute("aria-selected", isScripts.toString());
         }
         if(recon){ recon.hidden = !isTerm; }
         if(processRefreshTimer){
@@ -1436,6 +1795,10 @@ export function buildMainTerminalHtml(token?: string): string {
           clearInterval(plansRefreshTimer);
           plansRefreshTimer = null;
         }
+        if(scriptsRefreshTimer){
+          clearInterval(scriptsRefreshTimer);
+          scriptsRefreshTimer = null;
+        }
         if(isTerm){
           openPane2Terminal();
           requestAnimationFrame(()=>{
@@ -1444,12 +1807,7 @@ export function buildMainTerminalHtml(token?: string): string {
             if(cur && cur.term){ cur.term.focus(); }
           });
         }
-        if(isDoc){
-          void refreshDocsIndex(false);
-        }
         if(isGraph){
-          void refreshGraphSummary();
-          void refreshGraphRecaps();
           void refreshGraphErd();
         }
         if(isProc){
@@ -1459,6 +1817,12 @@ export function buildMainTerminalHtml(token?: string): string {
             if(selectedManagedProcessId){
               void refreshManagedProcessLog(selectedManagedProcessId);
             }
+          }, 4000);
+        }
+        if(isScripts){
+          void refreshScripts(false);
+          scriptsRefreshTimer = setInterval(function(){
+            if(scriptsStep === "detail" && selectedScriptId){ void loadScriptDetail(selectedScriptId, "poll"); }
           }, 4000);
         }
         if(isPlans){
@@ -2181,6 +2545,313 @@ export function buildMainTerminalHtml(token?: string): string {
         await refreshManagedProcesses();
         await refreshManagedProcessLog(id);
       }
+      function setScriptsHint(text){
+        const hint = document.getElementById(scriptsStep === "detail" ? "scriptsDetailHint" : "scriptsHint");
+        if(hint){ hint.textContent = text; }
+      }
+      function showScriptsStep(step){
+        scriptsStep = step === "detail" ? "detail" : "list";
+        const listEl = document.getElementById("scriptsStepList");
+        const detailEl = document.getElementById("scriptsStepDetail");
+        if(listEl){
+          listEl.classList.toggle("isHidden", scriptsStep !== "list");
+          listEl.setAttribute("aria-hidden", scriptsStep === "list" ? "false" : "true");
+        }
+        if(detailEl){
+          detailEl.classList.toggle("isHidden", scriptsStep !== "detail");
+          detailEl.setAttribute("aria-hidden", scriptsStep === "detail" ? "false" : "true");
+        }
+      }
+      function collectScriptKnobValues(){
+        const inputs = document.querySelectorAll("#scriptKnobs [data-knob-id]");
+        const lines = [];
+        inputs.forEach((input)=>{
+          const flag = decodeURIComponent(input.getAttribute("data-knob-flag") || "");
+          const id = decodeURIComponent(input.getAttribute("data-knob-id") || "");
+          const value = String(input.value || "").trim();
+          const origin = input.getAttribute("data-knob-origin") || "cli";
+          const yamlFile = decodeURIComponent(input.getAttribute("data-yaml-file") || "");
+          const yamlKey = decodeURIComponent(input.getAttribute("data-yaml-key") || "");
+          if(origin === "yaml" && (yamlFile || yamlKey)){
+            lines.push((yamlFile || "config.yaml") + " → " + (yamlKey || flag || id) + "=" + (value || "(empty)"));
+          } else if(flag || id){
+            lines.push((flag || id) + "=" + (value || "(empty)"));
+          }
+        });
+        return lines;
+      }
+      function currentScriptIntent(){
+        const typed = String(document.getElementById("scriptIntent")?.value || "").trim();
+        const knobs = collectScriptKnobValues();
+        if(!knobs.length){ return typed; }
+        const block = "Current knob values:\\n" + knobs.join("\\n");
+        return typed ? typed + "\\n\\n" + block : block;
+      }
+      function escapeHtml(value){
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function renderScriptList(){
+        const list = document.getElementById("scriptsList");
+        if(!list){ return; }
+        const filter = String(document.getElementById("scriptsFilter")?.value || "").trim().toLowerCase();
+        const rows = cachedScripts.filter((row)=>{
+          if(!filter){ return true; }
+          const hay = [row.title, row.relPath, row.blurb, String(row.knobCount || ""), row.sampleCommand, ...(row.linkedConfigs || []).map((item)=>item.relPath)].join(" ").toLowerCase();
+          return hay.includes(filter);
+        });
+        if(!cachedScripts.length){
+          list.innerHTML = '<div class="scriptRowMeta">No scripts indexed yet. Click Scan.</div>';
+          return;
+        }
+        if(!rows.length){
+          list.innerHTML = '<div class="scriptRowMeta">No scripts match that filter.</div>';
+          return;
+        }
+        list.innerHTML = rows.map((row)=>{
+          const count = Number(row.knobCount || (row.knobs || []).length || 0);
+          const yamlCount = Number(row.yamlCount || (row.linkedConfigs || []).length || 0);
+          const badge = count <= 0 ? "no knobs" : (count === 1 ? "1 knob" : count + " knobs");
+          const yamlBadge = yamlCount > 0 ? " · " + yamlCount + " yaml" : "";
+          const blurb = String(row.blurb || "").trim() || "No description yet. Open it to inspect knobs.";
+          return '<button type="button" class="scriptRow" data-script-id="' + encodeURIComponent(row.id) + '">' +
+            '<div class="scriptRowTitle">' + escapeHtml(row.title || row.relPath) + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(row.relPath) + ' · ' + escapeHtml(badge) + escapeHtml(yamlBadge) + '</div>' +
+            '<div class="scriptRowBlurb">' + escapeHtml(blurb) + '</div>' +
+            '</button>';
+        }).join("");
+        list.querySelectorAll("[data-script-id]").forEach((btn)=>{
+          btn.addEventListener("click", ()=>{
+            const id = decodeURIComponent(btn.getAttribute("data-script-id") || "");
+            void openScriptDetail(id);
+          });
+        });
+      }
+      function renderScriptKnobs(knobs){
+        const root = document.getElementById("scriptKnobs");
+        if(!root){ return; }
+        const rows = Array.isArray(knobs) ? knobs : [];
+        if(!rows.length){
+          root.innerHTML = '<div class="scriptRowMeta">No adjustable parameters.</div>';
+          return;
+        }
+        root.innerHTML = rows.map((knob)=>{
+          const last = knob.lastValue || knob.default || "";
+          const id = knob.id || knob.flag || "";
+          const origin = knob.origin === "yaml" ? "yaml" : "cli";
+          const originLabel = origin === "yaml" ? "yaml · " + (knob.yamlFile || "config") : "cli";
+          const sample = knob.sampleUsage || "";
+          return '<div class="scriptKnob">' +
+            '<div class="scriptKnobHead"><strong>' + escapeHtml(knob.label || knob.flag) + '</strong><span class="scriptKnobOrigin">' + escapeHtml(originLabel) + '</span></div>' +
+            '<div class="scriptKnobDesc">' + escapeHtml(knob.description || "No description yet. Use Refresh knobs.") + '</div>' +
+            (sample ? '<div class="scriptKnobSample">' + escapeHtml(sample) + '</div>' : '') +
+            '<div class="scriptRowMeta">kind ' + escapeHtml(knob.kind || "text") + ' · default ' + escapeHtml(knob.default || "—") + '</div>' +
+            '<input class="procInput scriptKnobInput" data-knob-id="' + encodeURIComponent(id) + '" data-knob-flag="' + encodeURIComponent(knob.flag || "") + '" data-knob-origin="' + origin + '" data-yaml-file="' + encodeURIComponent(knob.yamlFile || "") + '" data-yaml-key="' + encodeURIComponent(knob.yamlKey || "") + '" value="' + escapeHtml(last) + '" placeholder="value" />' +
+            '</div>';
+        }).join("");
+      }
+      function renderScriptRuns(runs){
+        const root = document.getElementById("scriptRuns");
+        const insight = document.getElementById("scriptInsight");
+        const rows = Array.isArray(runs) ? runs : [];
+        if(insight){
+          const latest = rows[0];
+          insight.textContent = latest && latest.summaryMd ? latest.summaryMd : "No insight yet. Run a script to generate a summary.";
+        }
+        if(!root){ return; }
+        if(!rows.length){
+          root.innerHTML = '<div class="scriptRowMeta">No runs yet.</div>';
+          return;
+        }
+        root.innerHTML = rows.map((run)=>{
+          const cmd = (run.actualArgv && run.actualArgv.length ? run.actualArgv : run.proposedArgv || []).join(" ");
+          return '<div class="scriptRunCard"><div><strong>' + escapeHtml(run.status) + '</strong> · ' + escapeHtml(run.startedAt || "") + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(run.intent || "(no intent)") + '</div>' +
+            '<div class="scriptRowMeta">' + escapeHtml(cmd) + '</div></div>';
+        }).join("");
+      }
+      async function refreshScripts(scan){
+        try {
+          if(scan){
+            const scanned = await fetch(withToken("/api/scripts/scan"), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then((r)=>r.json());
+            if(!scanned || scanned.ok === false){
+              setScriptsHint("Scan failed: " + ((scanned && scanned.error) || "unknown"));
+              return;
+            }
+            cachedScripts = scanned.scripts || [];
+            setScriptsHint("Indexed " + cachedScripts.length + " scripts.");
+          } else {
+            const data = await fetch(withToken("/api/scripts")).then((r)=>r.json());
+            cachedScripts = (data && data.scripts) || [];
+            if(!cachedScripts.length){
+              setScriptsHint("No catalog yet. Click Scan.");
+            }
+          }
+          renderScriptList();
+          if(scriptsStep === "detail" && selectedScriptId){
+            await loadScriptDetail(selectedScriptId, "poll");
+          } else {
+            showScriptsStep("list");
+          }
+        } catch (err) {
+          setScriptsHint("Scripts failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function openScriptDetail(id){
+        showScriptsStep("detail");
+        await loadScriptDetail(id, "open");
+      }
+      function backToScriptList(){
+        showScriptsStep("list");
+        renderScriptList();
+        setScriptsHint("Pick a script. Next page is knobs, intent, and run controls.");
+      }
+      async function loadScriptDetail(id, mode){
+        selectedScriptId = id;
+        showScriptsStep("detail");
+        try {
+          const data = await fetch(withToken("/api/scripts/detail?id=" + encodeURIComponent(id))).then((r)=>r.json());
+          if(!data || data.ok === false){
+            setScriptsHint((data && data.error) || "script not found");
+            return;
+          }
+          const script = data.script || {};
+          const title = document.getElementById("scriptDetailTitle");
+          const blurb = document.getElementById("scriptDetailBlurb");
+          if(title){ title.textContent = script.title || script.relPath || id; }
+          if(blurb){ blurb.textContent = (script.blurb || "No description yet.") + " · " + (script.knobCount || 0) + " knobs"; }
+          const sampleEl = document.getElementById("scriptSampleCommand");
+          if(sampleEl){ sampleEl.textContent = script.sampleCommand || "No sample command yet. Scan again after knobs are known."; }
+          const yamlEl = document.getElementById("scriptLinkedYaml");
+          if(yamlEl){
+            const linked = Array.isArray(script.linkedConfigs) ? script.linkedConfigs : [];
+            yamlEl.textContent = linked.length
+              ? ("Linked YAML: " + linked.map((item)=>item.relPath).join(", "))
+              : "No linked YAML configs.";
+          }
+          if(mode !== "poll"){
+            renderScriptKnobs(script.knobs || []);
+          }
+          renderScriptRuns(data.runs || []);
+          if(mode === "open"){
+            scriptProposal = null;
+            const preview = document.getElementById("scriptPreview");
+            if(preview){ preview.textContent = "Propose a command first."; }
+          }
+        } catch (err) {
+          setScriptsHint("Detail failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function pollScriptSession(sessionId, kind){
+        for(let i = 0; i < 180; i += 1){
+          const data = await fetch(withToken("/api/scripts/session-result?kind=" + encodeURIComponent(kind) + "&sessionId=" + encodeURIComponent(sessionId) + "&scriptId=" + encodeURIComponent(selectedScriptId))).then((r)=>r.json());
+          if(data && data.ready){
+            return data;
+          }
+          if(data && data.ok === false){
+            throw new Error(data.error || "session failed");
+          }
+          await new Promise((resolve)=>setTimeout(resolve, 1000));
+        }
+        throw new Error("timed out waiting for the agent");
+      }
+      async function inspectSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        try {
+          const started = await fetch(withToken("/api/scripts/inspect"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: selectedScriptId }),
+          }).then((r)=>r.json());
+          if(!started || !started.ok){
+            setScriptsHint("Inspect failed: " + ((started && started.error) || "unknown"));
+            return;
+          }
+          setPane1Tab("trace");
+          openPane1TraceStream(started.sessionId, true);
+          setScriptsHint("Refreshing knobs… watch Trace.");
+          const result = await pollScriptSession(started.sessionId, "inspect");
+          await loadScriptDetail(selectedScriptId, "knobs");
+          setScriptsHint("Knobs updated (" + ((result.script && result.script.knobCount) || 0) + ").");
+        } catch (err) {
+          setScriptsHint("Inspect failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function proposeSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        const intent = currentScriptIntent();
+        try {
+          const started = await fetch(withToken("/api/scripts/propose"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: selectedScriptId, intent: intent }),
+          }).then((r)=>r.json());
+          if(!started || !started.ok){
+            setScriptsHint("Propose failed: " + ((started && started.error) || "unknown"));
+            return;
+          }
+          setPane1Tab("trace");
+          openPane1TraceStream(started.sessionId, true);
+          setScriptsHint("Proposing command… confirm after Trace finishes.");
+          const result = await pollScriptSession(started.sessionId, "propose");
+          scriptProposal = result.proposed || null;
+          const preview = document.getElementById("scriptPreview");
+          if(preview){ preview.textContent = result.preview || JSON.stringify(scriptProposal, null, 2); }
+          await loadScriptDetail(selectedScriptId, "poll");
+          setScriptsHint("Review the command preview, then Run.");
+        } catch (err) {
+          setScriptsHint("Propose failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function runSelectedScript(){
+        if(!selectedScriptId){ setScriptsHint("Select a script first."); return; }
+        if(!scriptProposal || !Array.isArray(scriptProposal.argv)){
+          setScriptsHint("Propose and confirm a command first.");
+          return;
+        }
+        const intent = currentScriptIntent();
+        try {
+          const data = await fetch(withToken("/api/scripts/run"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: selectedScriptId,
+              intent: intent,
+              argv: scriptProposal.argv,
+              cwd: scriptProposal.cwd,
+              env: scriptProposal.env,
+              notes: scriptProposal.notes,
+            }),
+          }).then((r)=>r.json());
+          if(!data || !data.ok){
+            setScriptsHint("Run failed: " + ((data && data.error) || "unknown"));
+            return;
+          }
+          activeScriptRunId = data.run && data.run.id;
+          setPane1Tab("trace");
+          if(data.sessionId){ openPane1TraceStream(data.sessionId, true); }
+          setScriptsHint("Running. Stop sends SIGINT first. Insight appears when it finishes.");
+          await loadScriptDetail(selectedScriptId, "poll");
+        } catch (err) {
+          setScriptsHint("Run failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
+      async function stopSelectedScript(){
+        if(!activeScriptRunId){ setScriptsHint("No active guided run."); return; }
+        try {
+          const data = await fetch(withToken("/api/scripts/runs/" + encodeURIComponent(activeScriptRunId) + "/stop"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          }).then((r)=>r.json());
+          setScriptsHint(data && data.ok ? "Stop ladder started (SIGINT → TERM → KILL)." : ("Stop failed: " + ((data && data.error) || "unknown")));
+        } catch (err) {
+          setScriptsHint("Stop failed: " + ((err && err.message) ? err.message : String(err)));
+        }
+      }
       async function refreshManagedProcesses(){
         const list = document.getElementById("procList");
         const pre = document.getElementById("procLogPreview");
@@ -2692,6 +3363,7 @@ export function buildMainTerminalHtml(token?: string): string {
               window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
               const svgNode = document.querySelector('[data-node-id="' + CSS.escape(nodeId) + '"]');
               if(svgNode){ svgNode.classList.toggle("graphNodeFocus"); }
+              void expandGraphNeighborhood(nodeId);
             }
           });
           btn.addEventListener("dblclick",(event)=>{
@@ -2703,20 +3375,77 @@ export function buildMainTerminalHtml(token?: string): string {
         });
       }
       async function ensureGraphNodeNeighbors(nodeId){
-        const node = (graphNodeCache.nodes || []).find((n)=>n.id === nodeId);
-        if(!node || node.kind !== "File"){ return; }
+        if(!nodeId){ return { ok: false, nodes: [], edges: [] }; }
+        if(graphExpandedNodeIds.has(nodeId)){
+          return { ok: true, nodes: graphNodeCache.nodes || [], edges: graphNodeCache.edges || [] };
+        }
         try{
           const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nodeId) + "/neighbors")).then((r)=>r.json());
-          if(!res || !res.ok){ return; }
-          const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
-          (res.nodes || []).forEach((n)=>{ if(n && n.id && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
-          const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id || (e.fromId + "::" + e.kind + "::" + e.toId)));
-          (res.edges || []).forEach((e)=>{
-            if(!e){ return; }
-            const key = e.id || (e.fromId + "::" + e.kind + "::" + e.toId);
-            if(!existingEdgeIds.has(key)){ graphNodeCache.edges.push({ ...e, id: key }); }
-          });
-        } catch(_err){}
+          if(!res || !res.ok){ return res || { ok: false, nodes: [], edges: [] }; }
+          const merged = mergeGraphData(graphNodeCache.nodes, graphNodeCache.edges, res.nodes || [], res.edges || []);
+          graphNodeCache = { nodes: merged.nodes, edges: merged.edges };
+          graphExpandedNodeIds.add(nodeId);
+          return res;
+        } catch(_err){
+          return { ok: false, nodes: [], edges: [] };
+        }
+      }
+      function formatGraphSummaryHint(loadedNodes, loadedEdges){
+        const total = graphSummaryTotals.nodes
+          ? " Graph has " + graphSummaryTotals.nodes + " node(s) and " + graphSummaryTotals.edges + " edge(s) total."
+          : "";
+        return "Showing neighborhood of " + loadedNodes + " node(s) and " + loadedEdges + " edge(s)." + total + " Click a node to expand; double-click to isolate connections.";
+      }
+      async function expandGraphNeighborhood(nodeId){
+        if(!nodeId){ return; }
+        await ensureGraphNodeNeighbors(nodeId);
+        renderTechnicalIndexTree(graphNodeCache.nodes, graphNodeCache.edges);
+        if(!graphFocusState.functionNodeId){
+          renderGraphErd(graphNodeCache.nodes, graphNodeCache.edges);
+        }
+        const hint = document.getElementById("graphHint");
+        if(hint){
+          hint.textContent = formatGraphSummaryHint((graphNodeCache.nodes || []).length, (graphNodeCache.edges || []).length);
+        }
+      }
+      async function loadTechnicalGraphSeed(){
+        graphSummaryTotals = { nodes: 0, edges: 0 };
+        const summaryRes = await fetch(withToken("/api/graph/summary")).then((r)=>r.json());
+        if(summaryRes && summaryRes.ok && summaryRes.summary){
+          graphSummaryTotals = {
+            nodes: Number(summaryRes.summary.nodesTotal) || 0,
+            edges: Number(summaryRes.summary.edgesTotal) || 0,
+          };
+        } else if(!summaryRes || !summaryRes.ok){
+          return { ok: false, nodes: [], edges: [], error: (summaryRes && summaryRes.error) || "summary unavailable" };
+        }
+        const projectRes = await fetch(withToken("/api/graph/nodes?kind=Project&limit=5")).then((r)=>r.json());
+        let seedNode = (projectRes && projectRes.ok && (projectRes.nodes || [])[0]) || null;
+        if(!seedNode){
+          const moduleRes = await fetch(withToken("/api/graph/nodes?kind=Module&limit=1")).then((r)=>r.json());
+          seedNode = (moduleRes && moduleRes.ok && (moduleRes.nodes || [])[0]) || null;
+        }
+        if(!seedNode){
+          return { ok: true, nodes: [], edges: [], error: null };
+        }
+        const hop1 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(seedNode.id) + "/neighbors")).then((r)=>r.json());
+        if(!hop1 || !hop1.ok){
+          return { ok: true, nodes: [seedNode], edges: [], error: null };
+        }
+        graphExpandedNodeIds.add(seedNode.id);
+        let nodes = (hop1.nodes && hop1.nodes.length) ? hop1.nodes : [seedNode];
+        let edges = hop1.edges || [];
+        const nextModule = nodes.find((n)=>n && n.kind === "Module" && n.id !== seedNode.id);
+        if(nextModule){
+          const hop2 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nextModule.id) + "/neighbors")).then((r)=>r.json());
+          if(hop2 && hop2.ok){
+            const merged = mergeGraphData(nodes, edges, hop2.nodes || [], hop2.edges || []);
+            nodes = merged.nodes;
+            edges = merged.edges;
+            graphExpandedNodeIds.add(nextModule.id);
+          }
+        }
+        return { ok: true, nodes: nodes, edges: edges, error: null };
       }
       function collectNodeConnectionGraph(nodeId){
         const allNodes = graphNodeCache.nodes || [];
@@ -2979,22 +3708,13 @@ export function buildMainTerminalHtml(token?: string): string {
         list.innerHTML = "";
         if(filter){ filter.value = ""; }
         try{
-          const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(fileNodeId) + "/neighbors")).then((r)=>r.json());
+          const res = await ensureGraphNodeNeighbors(fileNodeId);
           if(!res.ok){
             if(hint){ hint.textContent = "Failed to load file functions: " + (res.error || "unknown"); }
             return;
           }
-          const nodes = res.nodes || [];
-          const edges = res.edges || [];
-
-          // Merge into global cache for focus view lookup
-          const existingNodeIds = new Set((graphNodeCache.nodes || []).map((n)=>n.id));
-          nodes.forEach((n)=>{ if(n && !existingNodeIds.has(n.id)){ graphNodeCache.nodes.push(n); } });
-          const existingEdgeIds = new Set((graphNodeCache.edges || []).map((e)=>e.id));
-          edges.forEach((e)=>{ if(e && !existingEdgeIds.has(e.id)){ graphNodeCache.edges.push(e); } });
-
-          const byId = new Map(nodes.map((n)=>[n.id, n]));
-          const functions = edges
+          const byId = new Map((graphNodeCache.nodes || []).map((n)=>[n.id, n]));
+          const functions = (graphNodeCache.edges || [])
             .filter((e)=>e.kind === "contains" && e.fromId === fileNodeId)
             .map((e)=>byId.get(e.toId))
             .filter((n)=>n && n.kind === "Symbol");
@@ -3757,8 +4477,12 @@ export function buildMainTerminalHtml(token?: string): string {
                 hoverCard.style.top = (event.offsetY + 14) + "px";
                 window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
                 applyHighlight(nodeId);
-                if(graphViewMode === "technical" && nodeKind === "File" && nodeId){
-                  void loadFunctionsForFile(nodeId, nodeName);
+                if(graphViewMode === "technical" && nodeId){
+                  if(nodeKind === "File"){
+                    void loadFunctionsForFile(nodeId, nodeName);
+                  } else {
+                    void expandGraphNeighborhood(nodeId);
+                  }
                 }
               });
               el.addEventListener("dblclick",(event)=>{
@@ -3805,20 +4529,26 @@ export function buildMainTerminalHtml(token?: string): string {
             }
           } else {
             stopGraphSimulation();
-            const nodesRes = await fetch(withToken("/api/graph/nodes?limit=2000")).then((r)=>r.json());
-            const edgesRes = await fetch(withToken("/api/graph/edges?limit=4000")).then((r)=>r.json());
-            if(!nodesRes.ok || !edgesRes.ok){
-              if(hint){ hint.textContent = "Graph visualization unavailable: " + ((nodesRes.error || edgesRes.error || "unknown")); }
+            graphExpandedNodeIds = new Set();
+            const seed = await loadTechnicalGraphSeed();
+            if(!seed.ok){
+              if(hint){ hint.textContent = "Graph visualization unavailable: " + (seed.error || "unknown"); }
+              graphNodeCache = { nodes: [], edges: [] };
+              renderTechnicalIndexTree([], []);
               renderGraphErd([], []);
               return;
             }
-            const sourceNodes = nodesRes.nodes || [];
-            const sourceEdges = edgesRes.edges || [];
+            const sourceNodes = seed.nodes || [];
+            const sourceEdges = seed.edges || [];
             graphNodeCache = { nodes: sourceNodes, edges: sourceEdges };
             renderTechnicalIndexTree(sourceNodes, sourceEdges);
             renderGraphErd(sourceNodes, sourceEdges);
             if(hint){
-              hint.textContent = "Technical full graph rendered with " + sourceNodes.length + " node(s) and " + sourceEdges.length + " edge(s). Click to select; double-click nodes or index rows for isolated connections.";
+              hint.textContent = sourceNodes.length
+                ? formatGraphSummaryHint(sourceNodes.length, sourceEdges.length)
+                : (graphSummaryTotals.nodes
+                  ? "Graph has " + graphSummaryTotals.nodes + " node(s). Rebuild if the neighborhood is empty."
+                  : "Graph is empty. Rebuild to index the project.");
             }
             if(graphFocusState.fileNodeId && graphFocusState.functionNodeId){
               await renderTechnicalFocusGraph();
@@ -3961,12 +4691,30 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(hint){ hint.textContent = relPath; }
       }
+      document.getElementById("pane1TabBrowser")?.addEventListener("click",()=>setPane1Tab("browser"));
+      document.getElementById("pane1TabTrace")?.addEventListener("click",()=>setPane1Tab("trace"));
+      document.getElementById("pane1TabDocs")?.addEventListener("click",()=>setPane1Tab("docs"));
+      document.getElementById("btnPane1Expand")?.addEventListener("click",()=>setPane1Expanded(!pane1Expanded));
+      window.addEventListener("message",(event)=>{
+        const data = event.data;
+        if(!data || data.type !== "winnow-agent-session"){ return; }
+        const sessionId = data.sessionId ? String(data.sessionId) : "";
+        if(sessionId){ openPane1TraceStream(sessionId, true); }
+      });
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
-      document.getElementById("pane2TabDocs")?.addEventListener("click",()=>setPane2Tab("docs"));
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
       document.getElementById("pane2TabPlans")?.addEventListener("click",()=>setPane2Tab("plans"));
       document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
+      document.getElementById("pane2TabScripts")?.addEventListener("click",()=>setPane2Tab("scripts"));
+      document.getElementById("btnScriptsScan")?.addEventListener("click",()=>{ void refreshScripts(true); });
+      document.getElementById("btnScriptsRefresh")?.addEventListener("click",()=>{ void refreshScripts(false); });
+      document.getElementById("btnScriptsBack")?.addEventListener("click",()=>{ backToScriptList(); });
+      document.getElementById("scriptsFilter")?.addEventListener("input",()=>{ renderScriptList(); });
+      document.getElementById("btnScriptsInspect")?.addEventListener("click",()=>{ void inspectSelectedScript(); });
+      document.getElementById("btnScriptsPropose")?.addEventListener("click",()=>{ void proposeSelectedScript(); });
+      document.getElementById("btnScriptsRun")?.addEventListener("click",()=>{ void runSelectedScript(); });
+      document.getElementById("btnScriptsStop")?.addEventListener("click",()=>{ void stopSelectedScript(); });
       document.getElementById("btnProcStart")?.addEventListener("click",()=>{ void startManagedProcess(); });
       document.getElementById("btnProcRefresh")?.addEventListener("click",()=>{ void refreshManagedProcesses(); });
       document.getElementById("btnPlanCreate")?.addEventListener("click",()=>{ void createPlan(); });
@@ -4323,10 +5071,17 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(event.key === "Escape" && graphOverlayOpen){
           closeGraphOverlay();
+          return;
+        }
+        if(event.key === "Escape" && pane1Expanded){
+          setPane1Expanded(false);
         }
       });
       initGraphCanvasInteractions();
       panes.forEach((paneId)=>openPane(paneId));
+      setPane1Tab("browser");
+      setPane1Expanded(pane1Expanded);
+      startPane1TracePolling();
       setPane2Tab("workspace");
       setPlanGraphVisibility(true);
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{

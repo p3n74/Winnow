@@ -58,7 +58,35 @@ import {
   listCursorSessions,
   listCursorSessionsForWorkspaceRoot,
   SessionSummary,
+  isCursorChatSessionId,
+  resolveCursorResumeId,
 } from "../cursor/sessionUtils.js";
+import {
+  parseCursorModelsOutput,
+  type CursorModelOption,
+} from "../cursor/modelCatalog.js";
+import {
+  extractLoginUrl,
+  mergeCursorAccount,
+  parseCursorAboutPayload,
+  parseCursorStatusPayload,
+  parseCursorUpdateOutput,
+  type CursorAccountSnapshot,
+} from "../cursor/cursorAccount.js";
+import {
+  MAX_ATTACHMENTS_PER_SEND,
+  buildAttachmentPromptBlock,
+  resolveStoredAttachments,
+  saveAttachment,
+} from "../cursor/attachments.js";
+import {
+  extractLiveSubagentEvents,
+  listSubagentDefinitionFiles,
+  SUBAGENTS_HINT,
+  withBuiltinSubagents,
+  type LiveSubagentRow,
+} from "../cursor/subagents.js";
+import { assistantTextFromStreamEvent, shouldAppendAssistantStreamEvent } from "../cursor/streamJson.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -78,12 +106,31 @@ import {
 } from "./ui/types.js";
 import { sendJson, readJsonBody } from "./ui/httpUtil.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
+import { pickActiveAgentSession } from "./ui/agentTrace.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
 import { buildAgentGraphContextPreamble } from "../graph/agentGraphSeed.js";
 import { ProjectGraphService } from "../graph/service.js";
 import { smokeTestProvider } from "../translator/providerSmoke.js";
 import { ExternalChatMessage, runExternalChatCompletion } from "../translator/externalChat.js";
+import {
+  rebuildAndWriteScriptIndex,
+  resolveScriptFilePath,
+} from "./scriptIndex.js";
+import {
+  SCRIPT_RUN_DEFAULTS,
+  buildInspectPrompt,
+  buildProposePrompt,
+  buildSpawnArgv,
+  buildSummarizePrompt,
+  formatCommandPreview,
+  mergeKnobs,
+  parseInspectedKnobs,
+  parseProposedCommand,
+  shouldStopForMaxRuntime,
+  shouldWarnStall,
+} from "./scriptGuide.js";
+import { ScriptStore } from "../data/scriptStore.js";
 
 function applyMode(config: WinnowConfig, mode: "zh" | "raw" | "dual"): WinnowConfig {
   if (mode === "zh") {
@@ -159,6 +206,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   let processManager = new ProcessManager(uiWorkspace.dir);
   let telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
   let planStore = new PlanStore(uiWorkspace.dir);
+  let scriptStore = new ScriptStore(uiWorkspace.dir);
 
   // Register current directory as a project
   await registerProject(winnowLaunchRoot);
@@ -200,6 +248,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     planStore = new PlanStore(uiWorkspace.dir);
     planStore.init();
     await planStore.backfillFromMarkdownFiles();
+    scriptStore = new ScriptStore(uiWorkspace.dir);
+    scriptStore.init();
     await ensureCursorWorkspaceLayout(uiWorkspace.dir);
     if (persist) {
       config = { ...config, uiWorkspaceDir: real };
@@ -220,6 +270,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   await telemetryStore.init();
   planStore.init();
   await planStore.backfillFromMarkdownFiles();
+  scriptStore.init();
 
   const cursorTranscriptDirForUi = (): string =>
     process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim()
@@ -296,83 +347,134 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
    * `--model` and the model cursor-agent actually resolved.
    */
   let cursorModelLabelCache: Map<string, string> | undefined;
+  let cursorModelOptionsCache: CursorModelOption[] = [];
+  let cursorLoginChild: ChildProcess | null = null;
+  let cursorLoginOutput = "";
 
-  async function readCursorModelsRaw(): Promise<string> {
+  function spawnCursorCapture(args: string[], timeoutMs = 20000): Promise<string> {
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
-    return new Promise<string>((resolvePromise, rejectPromise) => {
-      const child = spawn(cursorExe, ["models"], {
+    return new Promise((resolvePromise) => {
+      const child = spawn(cursorExe, args, {
         stdio: ["ignore", "pipe", "pipe"],
         cwd: uiWorkspace.dir,
         env: process.env,
       });
       let stdout = "";
       let stderr = "";
+      const timer = setTimeout(() => {
+        child.kill("SIGTERM");
+      }, timeoutMs);
       child.stdout?.on("data", (buf: Buffer) => {
         stdout += buf.toString("utf8");
       });
       child.stderr?.on("data", (buf: Buffer) => {
         stderr += buf.toString("utf8");
       });
-      child.on("error", (error) => rejectPromise(error));
-      child.on("close", (code) => {
-        if (code === 0) {
-          resolvePromise(stdout);
-          return;
-        }
-        rejectPromise(new Error(stderr || `cursor-agent models failed with code ${code ?? "unknown"}`));
+      const finish = () => {
+        clearTimeout(timer);
+        resolvePromise(`${stdout}\n${stderr}`.trim());
+      };
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        resolvePromise(error.message);
       });
+      child.on("close", finish);
     });
   }
 
-  function parseCursorModelLine(rawLine: string): { id: string; label: string } | null {
-    const trimmed = rawLine.trim();
-    if (!trimmed) {
-      return null;
+  async function readCursorAccount(): Promise<CursorAccountSnapshot> {
+    const statusRaw = await spawnCursorCapture(["status", "--format", "json"], 15000);
+    const aboutRaw = await spawnCursorCapture(["about", "--format", "json"], 15000);
+    return mergeCursorAccount({
+      status: parseCursorStatusPayload(statusRaw),
+      about: parseCursorAboutPayload(aboutRaw),
+    });
+  }
+
+  async function bootstrapCursorCli(): Promise<CursorAccountSnapshot> {
+    const updateRaw = await spawnCursorCapture(["update"], 45000);
+    const update = parseCursorUpdateOutput(updateRaw);
+    const account = await readCursorAccount();
+    return mergeCursorAccount({
+      status: {
+        loggedIn: account.loggedIn,
+        email: account.email,
+        userId: account.userId,
+      },
+      about: {
+        email: account.email,
+        subscriptionTier: account.subscriptionTier,
+        cliVersion: account.cliVersion,
+      },
+      update,
+    });
+  }
+
+  function stopCursorLogin(): void {
+    if (cursorLoginChild && cursorLoginChild.exitCode === null) {
+      cursorLoginChild.kill("SIGTERM");
     }
-    // cursor-agent formats lines as `<model-id> - <friendly label>`.
-    const dashed = trimmed.match(/^([A-Za-z0-9._-]+)\s+-\s+(.+?)\s*$/);
-    if (dashed?.[1]) {
-      let label = dashed[2] || dashed[1];
-      // Strip trailing parenthetical hints like `(current)` / `(default)`.
-      label = label.replace(/\s*\((?:current|default)\)\s*$/i, "").trim();
-      return { id: dashed[1], label };
+    cursorLoginChild = null;
+  }
+
+  function startCursorLogin(): { started: boolean; alreadyRunning: boolean; loginUrl: string } {
+    if (cursorLoginChild && cursorLoginChild.exitCode === null) {
+      return { started: true, alreadyRunning: true, loginUrl: extractLoginUrl(cursorLoginOutput) };
     }
-    const bullet = trimmed.match(/^(?:[-*]\s+)?([A-Za-z0-9._-]+)$/);
-    if (bullet?.[1]) {
-      return { id: bullet[1], label: bullet[1] };
+    const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
+    cursorLoginOutput = "";
+    cursorLoginChild = spawn(cursorExe, ["login"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: uiWorkspace.dir,
+      env: process.env,
+    });
+    const child = cursorLoginChild;
+    child.stdout?.on("data", (buf: Buffer) => {
+      cursorLoginOutput += buf.toString("utf8");
+    });
+    child.stderr?.on("data", (buf: Buffer) => {
+      cursorLoginOutput += buf.toString("utf8");
+    });
+    child.on("close", () => {
+      if (cursorLoginChild === child) {
+        cursorLoginChild = null;
+      }
+    });
+    child.on("error", () => {
+      if (cursorLoginChild === child) {
+        cursorLoginChild = null;
+      }
+    });
+    return { started: true, alreadyRunning: false, loginUrl: "" };
+  }
+
+  async function readCursorModelsRaw(): Promise<string> {
+    const fromFlag = await spawnCursorCapture(["--list-models"], 25000);
+    if (parseCursorModelsOutput(fromFlag).length > 0) {
+      return fromFlag;
     }
-    return null;
+    return spawnCursorCapture(["models"], 25000);
   }
 
   async function loadCursorModelLabels(refresh = false): Promise<Map<string, string>> {
     if (cursorModelLabelCache && !refresh) {
       return cursorModelLabelCache;
     }
+    const cliOutput = await readCursorModelsRaw();
+    const options = parseCursorModelsOutput(cliOutput);
     const map = new Map<string, string>();
-    map.set("default", "Default");
-    map.set("auto", "Auto");
-    map.set("composer", "Composer");
-    try {
-      const raw = await readCursorModelsRaw();
-      for (const line of raw.split("\n")) {
-        const lower = line.trim().toLowerCase();
-        if (!lower || lower.includes("available model") || lower.startsWith("tip:")) {
-          continue;
-        }
-        const parsed = parseCursorModelLine(line);
-        if (!parsed) continue;
-        map.set(parsed.id.toLowerCase(), parsed.label);
-      }
-    } catch {
-      // Keep the small fallback set if discovery fails.
+    for (const option of options) {
+      map.set(option.id.toLowerCase(), option.label);
+      map.set(option.id, option.label);
     }
+    cursorModelOptionsCache = options;
     cursorModelLabelCache = map;
     return map;
   }
 
-  async function listSelectableModels(): Promise<string[]> {
-    const labels = await loadCursorModelLabels(true);
-    return [...labels.keys()];
+  async function listSelectableModels(): Promise<CursorModelOption[]> {
+    await loadCursorModelLabels(true);
+    return cursorModelOptionsCache;
   }
 
   async function listExternalSelectableModels(): Promise<string[]> {
@@ -567,6 +669,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             status: record.status,
             preview: (record.prompt || record.output || "").slice(0, 160),
             source: "winnow-local",
+            cursorSessionId: record.cursorSessionId,
           };
           byId.set(id, entry);
         } catch {
@@ -634,10 +737,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       file: localSessionRecordPath(entry.id),
       updatedAt: entry.updatedAt,
       preview: entry.preview,
+      cursorSessionId: entry.cursorSessionId,
     }));
   }
 
-  async function readLocalSession(id: string): Promise<{ id: string; messages: SessionMessage[] }> {
+  async function readLocalSession(
+    id: string,
+  ): Promise<{ id: string; messages: SessionMessage[]; cursorSessionId?: string }> {
     const content = await readFile(localSessionRecordPath(id), "utf8");
     const record = JSON.parse(content) as LocalSessionRecord;
     if (Array.isArray(record.events) && record.events.length > 0) {
@@ -647,7 +753,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         content: event.content,
         timestamp: event.ts,
       }));
-      return { id, messages };
+      return { id, messages, cursorSessionId: record.cursorSessionId };
     }
     const messages: SessionMessage[] = [
       { id: "init-prompt", role: "user", content: record.prompt, timestamp: record.startedAt },
@@ -658,7 +764,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (record.errorOutput?.trim()) {
       messages.push({ id: "init-error", role: "stderr", content: record.errorOutput, timestamp: record.endedAt });
     }
-    return { id, messages };
+    return { id, messages, cursorSessionId: record.cursorSessionId };
   }
 
   const sessions = new Map<string, AgentSession>();
@@ -765,7 +871,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(
           `\r\n[main-grid disabled: Node ${process.versions.node} is unsupported for PTY]\r\n` +
-            `[use Node 20+ and rerun: npm run setup]\r\n`,
+            `[use Node 22+ and rerun: npm run setup]\r\n`,
         );
       }
       ws.close(1011, "unsupported node version for pty");
@@ -892,14 +998,6 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     return next;
   };
-  /**
-   * Looks like a Cursor chat session id (UUID-style) reported by `cursor-agent`.
-   * Anything else (e.g. Winnow's internal `<timestamp>-<rand>` ids) must not be
-   * passed to `--resume`, since cursor-agent silently falls back to the `Auto`
-   * model when given an unknown id, which produces false-positive runs.
-   */
-  const isLikelyCursorSessionId = (value: string): boolean =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
   const stripResumeArgs = (args: string[]): { stripped: string[]; removed: string[] } => {
     const stripped: string[] = [];
     const removed: string[] = [];
@@ -977,16 +1075,43 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const baseArgs = baseArgsNoResume;
     const autonomyEnabled = payload.autonomyMode !== false;
     const requestedResumeId = (payload.sessionId || "").trim();
-    const resumeSessionId = isLikelyCursorSessionId(requestedResumeId) ? requestedResumeId : "";
-    const droppedResumeIds = [
-      ...removedResumeIds.filter((value) => !isLikelyCursorSessionId(value)),
-      ...(requestedResumeId && !resumeSessionId ? [requestedResumeId] : []),
-    ];
+    const existing = sessions.get(id);
+
+    let diskEvents: AgentEvent[] = [];
+    let diskOutput = "";
+    let diskErrorOutput = "";
+    let diskStartedAt = new Date().toISOString();
+    let diskCursorSessionId = "";
+    if (!existing) {
+      try {
+        const recordPath = localSessionRecordPath(id);
+        const content = readFileSync(recordPath, "utf8");
+        const record = JSON.parse(content) as LocalSessionRecord;
+        diskEvents = record.events || [];
+        diskOutput = record.output || "";
+        diskErrorOutput = record.errorOutput || "";
+        diskStartedAt = record.startedAt || diskStartedAt;
+        diskCursorSessionId = record.cursorSessionId || "";
+      } catch {
+        // New session or failed to read
+      }
+    }
+    const storedCursorSessionId = existing?.cursorSessionId || diskCursorSessionId || "";
+    let { resumeId: resumeSessionId, droppedArgIds: droppedResumeIds } = resolveCursorResumeId({
+      payloadSessionId: requestedResumeId,
+      payloadCursorSessionId: String(payload.cursorSessionId || "").trim(),
+      storedCursorSessionId,
+      resumeArgIds: removedResumeIds,
+    });
+    if (requestedResumeId && executionMode === "cursor" && !resumeSessionId) {
+      throw new Error(
+        "Continue needs a Cursor chat UUID so the model can load native thread context. Uncheck continue to start a new chat, or run this session once so Winnow can store the id from cursor-agent.",
+      );
+    }
     const args =
       executionMode === "cursor"
         ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, resumeSessionId)
         : [];
-    const existing = sessions.get(id);
     let session: AgentSession;
 
     if (existing) {
@@ -999,26 +1124,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         args,
         startedAt: existing.startedAt || new Date().toISOString(),
         events: existing.events ?? [],
+        liveSubagents: [],
+        cursorSessionId: existing.cursorSessionId || storedCursorSessionId || undefined,
       };
     } else {
-      // Try loading from disk
-      let diskEvents: AgentEvent[] = [];
-      let diskOutput = "";
-      let diskErrorOutput = "";
-      let diskStartedAt = new Date().toISOString();
-
-      try {
-        const recordPath = localSessionRecordPath(id);
-        const content = readFileSync(recordPath, "utf8");
-        const record = JSON.parse(content) as LocalSessionRecord;
-        diskEvents = record.events || [];
-        diskOutput = record.output || "";
-        diskErrorOutput = record.errorOutput || "";
-        diskStartedAt = record.startedAt || diskStartedAt;
-      } catch {
-        // New session or failed to read
-      }
-
       session = {
         id,
         status: "running",
@@ -1028,17 +1137,25 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         command: executionMode === "external" ? "external-provider" : cursorExe,
         args,
         events: diskEvents,
+        liveSubagents: [],
+        cursorSessionId: storedCursorSessionId || undefined,
       };
     }
 
     sessions.set(id, session);
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
-    const prompt = payload.prompt;
+    const attachmentIds = Array.isArray(payload.attachmentIds)
+      ? payload.attachmentIds.slice(0, MAX_ATTACHMENTS_PER_SEND).map((value) => String(value))
+      : [];
+    const attachmentBlock = buildAttachmentPromptBlock(
+      resolveStoredAttachments(uiWorkspace.dir, attachmentIds).map((item) => item.absPath),
+    );
+    const prompt = attachmentBlock ? `${payload.prompt}\n\n${attachmentBlock}` : payload.prompt;
     const planId = String(payload.planId || "").trim();
-    const graphSeedEnabled = payload.graphSeed !== false;
+    const graphSeedEnabled = payload.graphSeed !== false && !resumeSessionId;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
-    const planContext = planId ? await readPlanMarkdown(planId) : null;
+    const planContext = planId && !resumeSessionId ? await readPlanMarkdown(planId) : null;
     let selectedModelError: string | undefined;
     let initModelVerified = false;
     // Preload the id→label map so we can validate `system.init` synchronously below.
@@ -1069,6 +1186,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         output: session.output,
         errorOutput: session.errorOutput,
         events: session.events,
+        cursorSessionId: session.cursorSessionId,
       });
 
     const pushEvent = (kind: AgentEvent["kind"], content: string) => {
@@ -1083,6 +1201,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         session.events = session.events.slice(-2000);
       }
       pushStreamEvent(id, "timeline", { sessionId: id, event });
+    };
+
+    const upsertLiveSubagent = (row: LiveSubagentRow) => {
+      if (!session.liveSubagents) {
+        session.liveSubagents = [];
+      }
+      const idx = session.liveSubagents.findIndex((item) => item.id === row.id);
+      if (idx >= 0) {
+        session.liveSubagents[idx] = row;
+      } else {
+        session.liveSubagents.push(row);
+      }
     };
 
     const abortOrThrow = (): void => {
@@ -1102,6 +1232,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         status: "error",
         preview: prompt.slice(0, 160),
         source: "winnow-local",
+        cursorSessionId: session.cursorSessionId,
       });
       closeStreamClients(id);
       sessions.delete(id);
@@ -1115,15 +1246,21 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (planPreamble.trim().length > 0) {
       const scopedPlanName = planContext && planContext.ok ? planContext.title : planId;
       pushEvent("status", `Plan scope: prepended context from plan "${scopedPlanName}".`);
-    } else if (planId) {
+    } else if (planId && !resumeSessionId) {
       pushEvent("status", `Plan scope: selected plan "${planId}" was unavailable.`);
     }
     if (droppedResumeIds.length > 0) {
       pushEvent(
         "status",
-        `Dropped invalid --resume id(s): ${droppedResumeIds.join(", ")}. ` +
-          "These are not Cursor chat ids; cursor-agent would silently fall back to the Auto model.",
+        `Dropped invalid --resume id(s) from extra args: ${droppedResumeIds.join(", ")}. ` +
+          "cursor-agent --resume only accepts Cursor chat UUIDs.",
       );
+    }
+    if (resumeSessionId) {
+      if (!session.cursorSessionId) {
+        session.cursorSessionId = resumeSessionId;
+      }
+      pushEvent("status", `Resuming Cursor chat ${resumeSessionId} (native thread, no local history dump).`);
     }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
@@ -1135,6 +1272,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       status: session.status,
       preview: prompt.slice(0, 160),
       source: "winnow-local",
+      cursorSessionId: session.cursorSessionId,
     });
 
     upsertRunStart({
@@ -1177,6 +1315,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: "error",
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushDone();
       };
@@ -1260,6 +1399,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: "done",
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushDone();
       } catch (error) {
@@ -1299,7 +1439,21 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
+          const liveSubagent = extractLiveSubagentEvents(data);
+          if (liveSubagent) {
+            upsertLiveSubagent(liveSubagent);
+            pushEvent(
+              "system",
+              `subagent ${liveSubagent.name}: ${liveSubagent.status} ${liveSubagent.summary}`.trim(),
+            );
+          }
           if (data.type === "system" && data.subtype === "init") {
+            const cursorChatId = typeof data.session_id === "string" ? data.session_id.trim() : "";
+            if (isCursorChatSessionId(cursorChatId) && session.cursorSessionId !== cursorChatId) {
+              session.cursorSessionId = cursorChatId;
+              pushEvent("status", `Cursor chat id ${cursorChatId}`);
+              void persistRecord();
+            }
             const reportedLabel = typeof data.model === "string" ? data.model.trim() : "";
             if (!isGenericCursorModel(modelPreference) && expectedCursorLabel) {
               const expected = expectedCursorLabel.trim().toLowerCase();
@@ -1324,11 +1478,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               }
             }
           } else if (data.type === "assistant" && data.message?.content) {
-            // Only process partial stream chunks to avoid double-printing full collapsed blocks
-            if (!data.model_call_id) {
-              const text = data.message.content.map((c: any) => c.text).join("");
-              session.output += text;
-              pushEvent("assistant", text);
+            // stream-partial-output: append only timestamped deltas. Skip the
+            // pre-tool-call flush (model_call_id) and the final turn flush (no timestamp_ms).
+            if (shouldAppendAssistantStreamEvent(data)) {
+              const text = assistantTextFromStreamEvent(data);
+              if (text) {
+                session.output += text;
+                pushEvent("assistant", text);
+              }
             }
           } else if (data.type === "tool_call") {
             const toolType = Object.keys(data.tool_call || {})[0] || "tool";
@@ -1354,6 +1511,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               session.output += "\n";
             }
           } else if (data.type === "result") {
+            const resultChatId = typeof data.session_id === "string" ? data.session_id.trim() : "";
+            if (isCursorChatSessionId(resultChatId) && session.cursorSessionId !== resultChatId) {
+              session.cursorSessionId = resultChatId;
+              pushEvent("status", `Cursor chat id ${resultChatId}`);
+              void persistRecord();
+            }
             if (data.subtype === "success") {
               const reportedModel = typeof data.model === "string" ? data.model.trim() : "";
               // Only the `system.init` event reliably contains the resolved model.
@@ -1432,6 +1595,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           status: session.status,
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
+          cursorSessionId: session.cursorSessionId,
         });
         pushStreamEvent(id, "status", {
           status: session.status,
@@ -1444,6 +1608,191 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
 
     return session;
+  };
+
+  const liveScriptWatches = new Map<
+    string,
+    {
+      runId: string;
+      processId: string;
+      sessionId: string;
+      lastOutputAt: number;
+      startedAt: number;
+      stallMs: number;
+      maxRuntimeMs: number;
+      autoStopOnStall: boolean;
+      warnedStall: boolean;
+      timer: ReturnType<typeof setInterval>;
+    }
+  >();
+
+  const sessionAssistantText = (session: AgentSession): string => {
+    const fromEvents = session.events
+      .filter((event) => event.kind === "assistant")
+      .map((event) => event.content)
+      .join("");
+    return (fromEvents || session.output || "").trim();
+  };
+
+  const appendSessionTimeline = (sessionId: string, kind: AgentEvent["kind"], content: string): void => {
+    const session = sessions.get(sessionId);
+    if (!session || !content) {
+      return;
+    }
+    const event: AgentEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ts: new Date().toISOString(),
+      kind,
+      content,
+    };
+    session.events.push(event);
+    if (session.events.length > 2000) {
+      session.events = session.events.slice(-2000);
+    }
+    if (kind === "assistant") {
+      session.output += content.endsWith("\n") ? content : `${content}\n`;
+    }
+    pushStreamEvent(sessionId, "timeline", { sessionId, event });
+    pushStreamEvent(sessionId, "status", { status: session.status, sessionId });
+  };
+
+  const ensureTimelineSession = (id: string): AgentSession => {
+    const existing = sessions.get(id);
+    if (existing) {
+      return existing;
+    }
+    const session: AgentSession = {
+      id,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      output: "",
+      errorOutput: "",
+      command: "script-run",
+      args: [],
+      events: [],
+    };
+    sessions.set(id, session);
+    return session;
+  };
+
+  const finishTimelineSession = (sessionId: string, status: AgentSession["status"]): void => {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.status = status;
+    session.endedAt = new Date().toISOString();
+    pushStreamEvent(sessionId, "status", { status, sessionId, endedAt: session.endedAt });
+    pushStreamEvent(sessionId, "done", { sessionId });
+    closeStreamClients(sessionId);
+  };
+
+  const clearScriptWatch = (runId: string): void => {
+    const watch = liveScriptWatches.get(runId);
+    if (watch) {
+      clearInterval(watch.timer);
+      liveScriptWatches.delete(runId);
+    }
+  };
+
+  const beginSummarize = async (runId: string): Promise<void> => {
+    const run = scriptStore.getRun(runId);
+    if (!run) {
+      return;
+    }
+    const script = scriptStore.get(run.scriptId);
+    let logTail = "";
+    if (run.logPath) {
+      try {
+        const raw = await readFile(run.logPath, "utf8");
+        logTail = raw.slice(-SCRIPT_RUN_DEFAULTS.summarizeLogTailChars);
+      } catch {
+        logTail = "";
+      }
+    }
+    const prompt = buildSummarizePrompt({
+      relPath: script?.relPath || run.scriptId,
+      argv: run.actualArgv,
+      intent: run.intent,
+      exitCode: run.exitCode,
+      stopped: run.status === "stopped" || run.status === "stalled",
+      stalled: run.stalled,
+      logTail,
+    });
+    try {
+      const session = await startAgentSession({
+        prompt,
+        graphSeed: false,
+        sessionId: run.agentSessionId || undefined,
+      });
+      scriptStore.updateRun(runId, { agentSessionId: session.id });
+      const poll = setInterval(() => {
+        const live = sessions.get(session.id);
+        if (!live || live.status === "running") {
+          return;
+        }
+        clearInterval(poll);
+        const summary = sessionAssistantText(live) || "(no summary)";
+        scriptStore.updateRun(runId, {
+          summaryMd: summary,
+        });
+      }, 800);
+    } catch (error) {
+      scriptStore.updateRun(runId, {
+        summaryMd: `Summary failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      if (run.agentSessionId) {
+        finishTimelineSession(run.agentSessionId, "error");
+      }
+    }
+  };
+
+  const startScriptWatch = (input: {
+    runId: string;
+    processId: string;
+    sessionId: string;
+    stallMs: number;
+    maxRuntimeMs: number;
+    autoStopOnStall: boolean;
+  }): void => {
+    const watch = {
+      ...input,
+      lastOutputAt: Date.now(),
+      startedAt: Date.now(),
+      warnedStall: false,
+      timer: setInterval(() => {
+        const rec = processManager.get(input.processId);
+        const now = Date.now();
+        if (!rec || rec.status !== "running") {
+          return;
+        }
+        if (shouldStopForMaxRuntime(watch.startedAt, now, input.maxRuntimeMs)) {
+          appendSessionTimeline(input.sessionId, "status", `⚠ max runtime reached — stopping`);
+          watch.warnedStall = true;
+          scriptStore.updateRun(input.runId, { stalled: true });
+          void processManager.stopLadder(input.processId, {
+            onStep: (signal) => appendSessionTimeline(input.sessionId, "status", `sent ${signal}`),
+          });
+          return;
+        }
+        const last = rec.lastOutputAt ? Date.parse(rec.lastOutputAt) : watch.lastOutputAt;
+        if (shouldWarnStall(last, now, input.stallMs) && !watch.warnedStall) {
+          watch.warnedStall = true;
+          appendSessionTimeline(
+            input.sessionId,
+            "status",
+            `⚠ no output for ${Math.round(input.stallMs / 1000)}s — possible hang or waiting for input`,
+          );
+          if (input.autoStopOnStall) {
+            scriptStore.updateRun(input.runId, { stalled: true });
+            void processManager.stopLadder(input.processId, {
+              onStep: (signal) => appendSessionTimeline(input.sessionId, "status", `sent ${signal}`),
+            });
+          }
+        }
+      }, 2000),
+    };
+    liveScriptWatches.set(input.runId, watch);
   };
 
   const server = createServer(async (req, res) => {
@@ -1729,6 +2078,298 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const tail = Number(url.searchParams.get("tail") ?? "200");
       const body = await processManager.readLog(id, Number.isFinite(tail) ? tail : 200);
       sendJson(res, body.ok ? 200 : 400, body);
+      return;
+    }
+
+    if (url.pathname === "/api/scripts" && req.method === "GET") {
+      try {
+        const includeIgnored = url.searchParams.get("ignored") === "1";
+        const scripts = scriptStore.list({ includeIgnored }).map((row) => ({
+          ...row,
+          knobCount: row.knobs.length,
+          yamlCount: row.linkedConfigs.length,
+        }));
+        sendJson(res, 200, { ok: true, scripts });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/scan" && req.method === "POST") {
+      try {
+        const index = await rebuildAndWriteScriptIndex(uiWorkspace.dir);
+        const scripts = scriptStore.upsertFromScan(index.files).map((row) => ({
+          ...row,
+          knobCount: row.knobs.length,
+          yamlCount: row.linkedConfigs.length,
+        }));
+        sendJson(res, 200, { ok: true, scannedAt: index.scannedAt, scripts });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/detail" && req.method === "GET") {
+      try {
+        const id = String(url.searchParams.get("id") || "").trim();
+        const row = scriptStore.get(id);
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          script: { ...row, knobCount: row.knobs.length, yamlCount: row.linkedConfigs.length },
+          runs: scriptStore.listRuns(row.id, 8),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/flags" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string; pinned?: boolean; ignored?: boolean };
+        const row = scriptStore.setFlags(String(payload.id || ""), {
+          pinned: payload.pinned,
+          ignored: payload.ignored,
+        });
+        sendJson(res, 200, { ok: true, script: { ...row, knobCount: row.knobs.length } });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/inspect" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const abs = resolveScriptFilePath(uiWorkspace.dir, row.relPath);
+        const source = await readFile(abs, "utf8").catch(() => "");
+        const session = await startAgentSession({
+          prompt: buildInspectPrompt(row.relPath, source, row.knobs),
+          graphSeed: false,
+        });
+        sendJson(res, 200, { ok: true, sessionId: session.id, scriptId: row.id });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/propose" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as { id?: string; intent?: string };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const runs = scriptStore.listRuns(row.id, 5).map((run) => ({
+          intent: run.intent,
+          argv: run.actualArgv.length ? run.actualArgv : run.proposedArgv,
+          summary: run.summaryMd,
+          startedAt: run.startedAt,
+        }));
+        const session = await startAgentSession({
+          prompt: buildProposePrompt({
+            relPath: row.relPath,
+            blurb: row.blurb,
+            knobs: row.knobs,
+            intent: String(payload.intent || ""),
+            lastRuns: runs,
+            sampleCommand: row.sampleCommand,
+            linkedConfigs: row.linkedConfigs,
+          }),
+          graphSeed: false,
+        });
+        sendJson(res, 200, { ok: true, sessionId: session.id, scriptId: row.id });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/session-result" && req.method === "GET") {
+      try {
+        const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+        const kind = String(url.searchParams.get("kind") || "propose");
+        const scriptId = String(url.searchParams.get("scriptId") || "").trim();
+        const session = sessions.get(sessionId);
+        if (!session) {
+          sendJson(res, 404, { ok: false, error: "session not found" });
+          return;
+        }
+        if (session.status === "running") {
+          sendJson(res, 200, { ok: true, ready: false, status: session.status, sessionId });
+          return;
+        }
+        const text = sessionAssistantText(session);
+        if (kind === "inspect") {
+          const row = scriptStore.get(scriptId);
+          if (!row) {
+            sendJson(res, 404, { ok: false, error: "script not found" });
+            return;
+          }
+          const incoming = parseInspectedKnobs(text);
+          const merged = mergeKnobs(row.knobs, incoming, row.userEditedKnobIds);
+          const saved = scriptStore.saveKnobs(row.id, merged, false);
+          sendJson(res, 200, { ok: true, ready: true, script: { ...saved, knobCount: saved.knobs.length } });
+          return;
+        }
+        const proposed = parseProposedCommand(text);
+        if (scriptId) {
+          const row = scriptStore.get(scriptId);
+          if (row && proposed.knobs?.length) {
+            scriptStore.saveKnobs(row.id, mergeKnobs(row.knobs, proposed.knobs, row.userEditedKnobIds), false);
+          }
+        }
+        sendJson(res, 200, {
+          ok: true,
+          ready: true,
+          proposed,
+          preview: formatCommandPreview(proposed.argv),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/scripts/run" && req.method === "POST") {
+      try {
+        const payload = (await readJsonBody(req)) as {
+          id?: string;
+          intent?: string;
+          argv?: string[];
+          cwd?: string;
+          env?: Record<string, string>;
+          notes?: string;
+        };
+        const row = scriptStore.get(String(payload.id || ""));
+        if (!row) {
+          sendJson(res, 404, { ok: false, error: "script not found" });
+          return;
+        }
+        const spawnPlan = buildSpawnArgv(uiWorkspace.dir, {
+          argv: Array.isArray(payload.argv) ? payload.argv.map(String) : [],
+          cwd: payload.cwd || ".",
+          env: payload.env || {},
+          notes: payload.notes || "",
+        });
+        const run = scriptStore.createRun({
+          scriptId: row.id,
+          intent: String(payload.intent || ""),
+          knobs: row.knobs,
+          proposedArgv: [spawnPlan.file, ...spawnPlan.args],
+          actualArgv: [spawnPlan.file, ...spawnPlan.args],
+          env: spawnPlan.env,
+          cwd: spawnPlan.cwd,
+        });
+        const timelineId = `script-${run.id}`;
+        ensureTimelineSession(timelineId);
+        appendSessionTimeline(timelineId, "status", `Starting ${spawnPlan.preview}`);
+        const started = await processManager.startArgv({
+          file: spawnPlan.file,
+          args: spawnPlan.args,
+          cwd: spawnPlan.cwd,
+          env: spawnPlan.env,
+          label: row.title,
+          tags: [`script:${row.id}`],
+          onOutput: (chunk, stream) => {
+            const line = chunk.trim();
+            if (!line) {
+              return;
+            }
+            const clipped = line.length > 400 ? `${line.slice(0, 400)}…` : line;
+            appendSessionTimeline(timelineId, stream === "stderr" ? "stderr" : "status", clipped);
+            const watch = liveScriptWatches.get(run.id);
+            if (watch) {
+              watch.lastOutputAt = Date.now();
+              watch.warnedStall = false;
+            }
+          },
+          onClose: (code, signal) => {
+            clearScriptWatch(run.id);
+            const stalled = Boolean(scriptStore.getRun(run.id)?.stalled);
+            const stopped = Boolean(signal) || stalled;
+            const status = stalled ? "stalled" : stopped ? "stopped" : code === 0 ? "done" : "error";
+            scriptStore.updateRun(run.id, {
+              status,
+              exitCode: code,
+              endedAt: new Date().toISOString(),
+            });
+            appendSessionTimeline(
+              timelineId,
+              "status",
+              stalled
+                ? `Run stalled and stopped (exit=${code ?? "n/a"} signal=${signal || "none"})`
+                : `Script exited code=${code ?? "n/a"} signal=${signal || "none"}`,
+            );
+            void beginSummarize(run.id);
+          },
+        });
+        if (!started.ok) {
+          scriptStore.updateRun(run.id, { status: "error", summaryMd: started.error, endedAt: new Date().toISOString() });
+          sendJson(res, 400, started);
+          return;
+        }
+        scriptStore.updateRun(run.id, {
+          status: "running",
+          processId: started.process.id,
+          agentSessionId: timelineId,
+          logPath: started.process.logPath,
+          actualArgv: [spawnPlan.file, ...spawnPlan.args],
+        });
+        scriptStore.rememberRecipe(row.id, [spawnPlan.file, ...spawnPlan.args], spawnPlan.env);
+        startScriptWatch({
+          runId: run.id,
+          processId: started.process.id,
+          sessionId: timelineId,
+          stallMs: row.stallMs ?? SCRIPT_RUN_DEFAULTS.stallMs,
+          maxRuntimeMs: row.maxRuntimeMs ?? SCRIPT_RUN_DEFAULTS.maxRuntimeMs,
+          autoStopOnStall: row.autoStopOnStall,
+        });
+        sendJson(res, 200, {
+          ok: true,
+          run: scriptStore.getRun(run.id),
+          sessionId: timelineId,
+          preview: spawnPlan.preview,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/scripts/runs/") && url.pathname.endsWith("/stop") && req.method === "POST") {
+      const runId = decodeURIComponent(url.pathname.slice("/api/scripts/runs/".length, -"/stop".length)).trim();
+      const run = scriptStore.getRun(runId);
+      if (!run) {
+        sendJson(res, 404, { ok: false, error: "run not found" });
+        return;
+      }
+      if (!run.processId) {
+        sendJson(res, 200, { ok: true, stopped: false, message: "no process" });
+        return;
+      }
+      const sessionId = run.agentSessionId;
+      const result = await processManager.stopLadder(run.processId, {
+        onStep: (signal) => {
+          if (sessionId) {
+            appendSessionTimeline(sessionId, "status", `sent ${signal}`);
+          }
+        },
+      });
+      sendJson(res, result.ok ? 200 : 400, result);
       return;
     }
 
@@ -2130,10 +2771,77 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/cursor/bootstrap" && req.method === "GET") {
+      try {
+        const account = await bootstrapCursorCli();
+        sendJson(res, 200, { ok: true, ...account });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/subagents" && req.method === "GET") {
+      const defined = listSubagentDefinitionFiles(uiWorkspace.dir, homedir());
+      sendJson(res, 200, {
+        ok: true,
+        agents: withBuiltinSubagents(defined),
+        hint: SUBAGENTS_HINT,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/account" && req.method === "GET") {
+      try {
+        const account = await readCursorAccount();
+        if (account.loggedIn) {
+          stopCursorLogin();
+        }
+        sendJson(res, 200, { ok: true, ...account });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/cursor/login" && req.method === "POST") {
+      try {
+        const current = await readCursorAccount();
+        if (current.loggedIn) {
+          stopCursorLogin();
+          sendJson(res, 200, { ok: true, alreadyLoggedIn: true, ...current, loginUrl: "" });
+          return;
+        }
+        const started = startCursorLogin();
+        await new Promise((resolveWait) => setTimeout(resolveWait, 1500));
+        const loginUrl = extractLoginUrl(cursorLoginOutput) || started.loginUrl;
+        sendJson(res, 200, {
+          ok: true,
+          alreadyLoggedIn: false,
+          started: started.started,
+          alreadyRunning: started.alreadyRunning,
+          loginUrl,
+          output: cursorLoginOutput.slice(-2000),
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/models/selectable" && req.method === "GET") {
       try {
-        const models = await listSelectableModels();
-        sendJson(res, 200, { ok: true, models });
+        const options = await listSelectableModels();
+        const account = await readCursorAccount();
+        sendJson(res, 200, {
+          ok: true,
+          models: options.map((item) => item.id),
+          options,
+          loggedIn: account.loggedIn,
+          warning: account.loggedIn
+            ? (options.length ? "" : "Cursor CLI returned no models for this account.")
+            : "Log in to Cursor Agent to load the model list.",
+        });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
@@ -2260,7 +2968,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         }
         const merged = [...byId.values()]
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-          .slice(0, max);
+          .slice(0, max)
+          .map((s) =>
+            s.cursorSessionId || !isCursorChatSessionId(s.id)
+              ? s
+              : { ...s, cursorSessionId: s.id },
+          );
         sendJson(res, 200, {
           sessions: merged,
           dir: transcriptDirLabel,
@@ -2277,7 +2990,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const id = url.pathname.replace("/api/sessions/", "").trim();
         const explicitDir = url.searchParams.get("dir") ?? undefined;
         const envTranscripts = Boolean(process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim());
-        let session: { id: string; messages: SessionMessage[] };
+        let session: { id: string; messages: SessionMessage[]; cursorSessionId?: string };
         try {
           session = await readLocalSession(id);
         } catch {
@@ -2289,7 +3002,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             session = await readCursorSession(id, undefined, uiWorkspace.dir);
           }
         }
-        sendJson(res, 200, session);
+        sendJson(res, 200, {
+          ...session,
+          cursorSessionId: session.cursorSessionId || (isCursorChatSessionId(id) ? id : undefined),
+        });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
       }
@@ -2314,6 +3030,20 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/attachments" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as { mime?: string; dataBase64?: string };
+        const saved = await saveAttachment(uiWorkspace.dir, {
+          mime: String(body.mime ?? ""),
+          dataBase64: String(body.dataBase64 ?? ""),
+        });
+        sendJson(res, 200, { ok: true, id: saved.id, relPath: saved.relPath, absPath: saved.absPath });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/agent/start" && req.method === "POST") {
       const abortFromDisconnect = new AbortController();
       // Do not use req "close" — it fires when the *incoming* request stream ends (e.g. after the
@@ -2332,7 +3062,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           return;
         }
         const session = await startAgentSession(payload, { signal: abortFromDisconnect.signal });
-        sendJson(res, 200, { ok: true, sessionId: session.id });
+        sendJson(res, 200, { ok: true, sessionId: session.id, cursorSessionId: session.cursorSessionId || null });
       } catch (error) {
         const aborted =
           error instanceof DOMException && error.name === "AbortError"
@@ -2376,6 +3106,25 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/agent/active" && req.method === "GET") {
+      const picked = pickActiveAgentSession(sessions.values());
+      if (!picked) {
+        sendJson(res, 200, { ok: true, session: null });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        session: {
+          id: picked.id,
+          status: picked.status,
+          startedAt: picked.startedAt,
+          endedAt: picked.endedAt,
+          events: (picked.events ?? []).slice(-500),
+        },
+      });
       return;
     }
 

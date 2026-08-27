@@ -82,6 +82,7 @@ Winnow closes that gap:
 
 Recent highlights (newest first; use `git log` for the full story):
 
+- **Node 22+ / N-API sqlite** — `better-sqlite3` 13 loads on Homebrew Node 26 without an ABI rebuild; `npm run ui` still probes `better-sqlite3` and `node-pty` and rebuilds them with the running Node if needed.
 - **Heuristic Engine** — graph-derived concept, workflow, file, and symbol hints are ranked against the user prompt, then prepended as a compact navigation seed. This guides the agent toward likely-relevant code paths first, reducing discovery time and making large-codebase workflows more targeted.
 - **Project graph** — HTTP APIs plus an interactive graph in the main grid (technical / business layers, neighborhood drill-down, corrections workflow).
 - **Planning and execution** — agent-managed plan boards, timeline/tree graph views, GitHub issue mapping, and a managed process runner are available from the main grid companion.
@@ -107,7 +108,7 @@ Pane 4 defaults to a `netwatch` command if present on your `PATH`; that is a sep
 
 On Windows, `npm run setup` runs `scripts/setup.ps1`, which uses **winget** for Node.js LTS and Git for Windows, then installs the **Cursor Agent CLI** from [cursor.com/install?win32=true](https://cursor.com/install?win32=true) (not the Cursor desktop app). It also writes **`%USERPROFILE%\.local\bin\winnow-ui.cmd`** with the same behavior; add that folder to your user `PATH` if it is not already there.
 
-Native modules need a local build toolchain (Visual Studio Build Tools with “Desktop development with C++”, or the standalone MSVC toolchain) if `npm rebuild node-pty` fails.
+`npm run ui` rebuilds `better-sqlite3` and `node-pty` for the Node.js that is currently on `PATH` when those addons were compiled for a different version. Native modules still need a local C++ toolchain (Xcode Command Line Tools, or Visual Studio Build Tools with “Desktop development with C++”) if that rebuild fails.
 
 If you prefer manual setup:
 
@@ -115,7 +116,7 @@ If you prefer manual setup:
 npm install
 ```
 
-Use **Node.js 20 or newer** (current or LTS is fine).
+Use **Node.js 22 or newer**.
 
 ### 2) Run CLI
 

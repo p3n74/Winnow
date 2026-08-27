@@ -136,6 +136,28 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         padding: 10px 12px;
         border-bottom: 1px solid var(--vscode-panel-border);
       }
+      #agentControls[hidden],
+      body.agent-controls-collapsed #agentControls {
+        display: none;
+      }
+      .agent-controls-compact {
+        margin-bottom: 8px;
+      }
+      body.agent-controls-collapsed .agent-controls-compact {
+        margin-bottom: 0;
+      }
+      #agentCollapsedModel {
+        display: none;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+        color: var(--text-neon);
+      }
+      body.agent-controls-collapsed #agentCollapsedModel {
+        display: inline;
+      }
       input, select, button, textarea {
         background: var(--vscode-input-background);
         border: 1px solid var(--line);
@@ -200,6 +222,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         max-width: 920px;
         background: var(--bg);
       }
+      .chatMsg[data-role="user"] {
+        border-color: var(--accent);
+        background: var(--panel2);
+      }
+      .chatMsg[data-role="user"] .chatRole { color: var(--text-neon); }
       .chatRole { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; font-weight: 700; font-style: italic; }
       .chatText {
         white-space: pre-wrap;
@@ -289,6 +316,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       #btnAgentRunCancel {
         min-width: 120px;
       }
+      .agentThinkingLabel,
+      #agentThinking {
+        display: none !important;
+      }
       #agentThinking {
         flex-shrink: 0;
         max-height: 100px;
@@ -304,11 +335,87 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         color: var(--muted);
         font-style: italic;
       }
+      .subagents-panel {
+        display: none !important;
+        flex-shrink: 0;
+        max-height: 120px;
+        overflow: auto;
+        margin: 6px 12px 0;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--panel2);
+      }
+      .subagents-head {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        font-weight: 700;
+        font-style: italic;
+      }
+      .subagents-hint {
+        font-size: 10px;
+        color: var(--muted);
+        margin: 4px 0 6px;
+        font-style: italic;
+      }
+      .subagent-row {
+        font-size: 11px;
+        line-height: 1.35;
+        margin-top: 2px;
+        color: var(--text);
+      }
+      .subagent-name {
+        font-weight: 700;
+        color: var(--text-neon);
+      }
+      .subagent-live {
+        color: var(--accent-soft);
+      }
       .composer {
         flex-shrink: 0;
         border-top: 1px solid var(--vscode-panel-border);
         padding: 10px 12px 12px;
         background: var(--bg);
+      }
+      #agentAttachmentStrip {
+        display: none;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      #agentAttachmentStrip:not([hidden]) {
+        display: flex;
+      }
+      .attachment-chip {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        overflow: hidden;
+        background: var(--panel2);
+        flex-shrink: 0;
+      }
+      .attachment-chip img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .attachment-chip .attachment-remove {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        padding: 0 5px;
+        min-width: 0;
+        line-height: 16px;
+        font-size: 11px;
+      }
+      .composer.is-drop-target #agentPrompt,
+      .composer.is-drop-target #agentAttachmentStrip {
+        border-color: var(--accent);
       }
       #agentPrompt { width: 100%; min-height: 88px; resize: vertical; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; }
       .composer-actions {
@@ -445,6 +552,17 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           </aside>
           <main class="main-panel">
             <div class="panel-toolbar">
+              <div class="row small" id="cursorAccountRow" style="margin-bottom: 6px; align-items: center; gap: 8px">
+                <span id="cursorAccountLine" class="small muted">Checking Cursor CLI…</span>
+                <button type="button" class="secondary" id="btnCursorLogin" style="display:none">Log in to Cursor</button>
+              </div>
+              <div class="row small agent-controls-compact">
+                <button type="button" class="secondary" id="btnToggleAgentControls" aria-expanded="true" aria-controls="agentControls">Controls</button>
+                <span id="agentCollapsedModel" class="small muted"></span>
+                <span class="statusBadge" id="agentStatusBadge">idle</span>
+                <span id="agentSessionInfo">No active session.</span>
+              </div>
+              <div id="agentControls" data-agent-controls>
               <div class="row small">
                 <label>Mode</label>
                 <select id="agentExecutionMode">
@@ -453,9 +571,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 </select>
                 <label>Model</label>
                 <select id="agentModelPref">
-                  <option value="default">default</option>
-                  <option value="auto">auto</option>
-                  <option value="composer">composer</option>
+                  <option value="">Loading models…</option>
                 </select>
                 <label><input id="autonomyMode" type="checkbox" checked /> autonomous</label>
                 <label
@@ -506,24 +622,29 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" onclick="appendPrompt('Refactor this code for readability without changing behavior.')">Refactor</button>
                 <button type="button" class="secondary" onclick="clearPrompt()">Clear</button>
               </div>
-              <div class="small" style="margin-top: 8px">
-                <span class="statusBadge" id="agentStatusBadge">idle</span>
-                <span id="agentSessionInfo">No active session.</span>
-              </div>
-              <div class="hint">Tip: pass <code>--resume &lt;sessionId&gt;</code> in Cursor args to continue a session.</div>
+              <div class="hint">Continue uses Cursor <code>--resume</code> with the stored chat UUID so the model keeps native thread context. Winnow does not paste local history into the prompt.</div>
               <div class="metrics">
                 <div class="metric"><div class="metricLabel">Prompt tok (est)</div><div class="metricValue" id="metricPromptTokens">0</div></div>
                 <div class="metric"><div class="metricLabel">Output tok (est)</div><div class="metricValue" id="metricOutputTokens">0</div></div>
                 <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
                 <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
               </div>
+              </div>
             </div>
-            <div class="small muted" style="padding: 6px 12px 0">Thinking trace</div>
+            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagents">
+              <div class="subagents-head">Subagents</div>
+              <p class="subagents-hint" id="agentSubagentsHint"></p>
+              <div id="agentSubagentsDefined"></div>
+              <div id="agentSubagentsLive"></div>
+            </section>
+            <div class="small muted agentThinkingLabel" style="padding: 6px 12px 0">Thinking trace</div>
             <pre id="agentThinking">No thinking trace yet.</pre>
             <div class="small muted" style="padding: 6px 12px 0">Conversation</div>
             <div class="chat-scroll"><div id="chatHistory"></div></div>
             <div class="composer">
+              <div id="agentAttachmentStrip" hidden></div>
               <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
+              <input type="file" id="agentAttachInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
               <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
                 <div class="agent-run-loading-top">
                   <span class="agent-run-spinner-lg" aria-hidden="true"></span>
@@ -533,6 +654,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               <div class="composer-actions">
                 <span class="small muted">cwd: <span id="agentCwdLabel">…</span></span>
+                <button type="button" class="secondary" id="btnAgentAttach" title="Attach screenshot">Attach</button>
                 <span class="agent-run-wrap">
                   <button type="button" data-agent-run="1" onclick="startAgentRun()">Run</button>
                   <span class="agent-run-overlay-spinner" aria-hidden="true"></span>
@@ -548,6 +670,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const PAGE_PARAMS = new URLSearchParams(window.location.search);
       const EMBED_MODE = PAGE_PARAMS.get("embed") === "1";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
+      const AGENT_CONTROLS_COLLAPSED_KEY = "winnow.agentControlsCollapsed";
       function withToken(path) {
         if (!AUTH_TOKEN) {
           return path;
@@ -576,27 +699,141 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       function openMainGrid() {
         window.location.assign(withToken("/main"));
       }
+      function applyAgentControlsCollapsed(collapsed) {
+        const isCollapsed = Boolean(collapsed);
+        document.body.classList.toggle("agent-controls-collapsed", isCollapsed);
+        const wrap = document.getElementById("agentControls");
+        if (wrap) {
+          wrap.hidden = isCollapsed;
+        }
+        const btn = document.getElementById("btnToggleAgentControls");
+        if (btn) {
+          btn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+        }
+      }
+      function readAgentControlsCollapsed() {
+        try {
+          return localStorage.getItem(AGENT_CONTROLS_COLLAPSED_KEY) === "1";
+        } catch (_err) {
+          return false;
+        }
+      }
+      function persistAgentControlsCollapsed(collapsed) {
+        try {
+          localStorage.setItem(AGENT_CONTROLS_COLLAPSED_KEY, collapsed ? "1" : "0");
+        } catch (_err) {}
+      }
+      function syncCollapsedModelLabel() {
+        const select = document.getElementById("agentModelPref");
+        const label = document.getElementById("agentCollapsedModel");
+        if (!label) {
+          return;
+        }
+        const option = select && select.options[select.selectedIndex];
+        label.textContent = option ? String(option.textContent || "").trim() : "";
+      }
+      function initAgentControlsCollapse() {
+        applyAgentControlsCollapsed(readAgentControlsCollapsed());
+        syncCollapsedModelLabel();
+        const btn = document.getElementById("btnToggleAgentControls");
+        if (btn) {
+          btn.addEventListener("click", () => {
+            const next = !document.body.classList.contains("agent-controls-collapsed");
+            applyAgentControlsCollapsed(next);
+            persistAgentControlsCollapsed(next);
+          });
+        }
+      }
       async function loadSelectableModels() {
         const select = document.getElementById("agentModelPref");
         if (!select) {
           return;
         }
-        const previous = select.value || "default";
+        const previous = select.value || "";
         try {
           const data = await fetch(withToken("/api/models/selectable")).then((r) => r.json());
-          if (!data.ok || !Array.isArray(data.models)) {
+          if (!data.ok) {
             return;
           }
+          const items = Array.isArray(data.options) && data.options.length
+            ? data.options
+            : (Array.isArray(data.models) ? data.models.map((id) => ({ id, label: id })) : []);
           select.innerHTML = "";
-          data.models.forEach((model) => {
+          if (!items.length) {
             const option = document.createElement("option");
-            option.value = String(model || "");
-            option.textContent = String(model || "");
+            option.value = "";
+            option.textContent = data.warning || "(no models)";
+            select.appendChild(option);
+            return;
+          }
+          items.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = String(item.id || item || "");
+            option.textContent = String(item.label || item.id || item || "");
             select.appendChild(option);
           });
-          select.value = data.models.includes(previous) ? previous : "default";
+          const ids = items.map((item) => String(item.id || item || ""));
+          select.value = ids.includes(previous) ? previous : (ids.includes("auto") ? "auto" : ids[0]);
         } catch {
-          // fallback to default static options
+          select.innerHTML = '<option value="">(failed to load models)</option>';
+        } finally {
+          syncCollapsedModelLabel();
+        }
+      }
+      function renderCursorAccount(account) {
+        const line = document.getElementById("cursorAccountLine");
+        const btn = document.getElementById("btnCursorLogin");
+        if (!line) {
+          return;
+        }
+        if (!account || account.ok === false) {
+          line.textContent = (account && account.error) ? account.error : "Could not reach Cursor Agent CLI.";
+          if (btn) { btn.style.display = ""; }
+          return;
+        }
+        if (account.loggedIn) {
+          const bits = [account.email || "Cursor account"];
+          if (account.subscriptionTier) { bits.push(account.subscriptionTier); }
+          if (account.cliVersion) { bits.push("CLI " + account.cliVersion); }
+          line.textContent = "Logged in as " + bits.join(" · ");
+          if (btn) { btn.style.display = "none"; }
+          return;
+        }
+        line.textContent = "Cursor Agent is not logged in.";
+        if (btn) { btn.style.display = ""; }
+      }
+      async function pollCursorAccount(timeoutMs) {
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const data = await fetch(withToken("/api/cursor/account")).then((r) => r.json());
+          renderCursorAccount(data);
+          if (data && data.loggedIn) { return data; }
+          await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
+        }
+        return null;
+      }
+      async function startCursorLoginFlow() {
+        const line = document.getElementById("cursorAccountLine");
+        if (line) { line.textContent = "Opening Cursor login…"; }
+        await fetch(withToken("/api/cursor/login"), { method: "POST" }).then((r) => r.json());
+        const account = await pollCursorAccount(180000);
+        if (account && account.loggedIn) {
+          await loadSelectableModels();
+        }
+      }
+      async function bootstrapCursorAndModels() {
+        const line = document.getElementById("cursorAccountLine");
+        if (line) { line.textContent = "Checking Cursor CLI update and login…"; }
+        try {
+          const boot = await fetch(withToken("/api/cursor/bootstrap")).then((r) => r.json());
+          renderCursorAccount(boot);
+          if (boot && boot.needsLogin) {
+            await startCursorLoginFlow();
+            return;
+          }
+          await loadSelectableModels();
+        } catch (err) {
+          if (line) { line.textContent = (err && err.message) ? err.message : String(err); }
         }
       }
       async function loadExternalSelectableModels() {
@@ -631,6 +868,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           select.value = rows.some((r) => r.value === previous) ? previous : String(rows[0].value || "");
         } catch {
           select.innerHTML = '<option value="">(failed to load external models)</option>';
+        } finally {
+          syncCollapsedModelLabel();
         }
       }
       function updateExecutionModeUi() {
@@ -734,6 +973,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let agentStartAbort = null;
       let agentStartInFlight = false;
       let agentSessionRunning = false;
+      const ALLOWED_ATTACH_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+      const MAX_ATTACHMENTS_PER_SEND = 8;
+      const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+      const agentAttachments = [];
       let agentNavLockInstalled = false;
       let agentFlavorTimer = null;
       let agentFlavorIndex = 0;
@@ -786,11 +1029,123 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       let selectedSyncedSession = null;
       let selectedSyncedMessages = [];
       let selectedResumeSessionId = null;
+      let lastCursorSessionId = "";
+      const CURSOR_CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      function isCursorChatId(value) {
+        return CURSOR_CHAT_ID_RE.test(String(value || "").trim());
+      }
+      function rememberCursorSessionId(id, explicit) {
+        const hint = String(explicit || "").trim();
+        if (isCursorChatId(hint)) {
+          lastCursorSessionId = hint;
+          return;
+        }
+        if (isCursorChatId(id)) {
+          lastCursorSessionId = String(id).trim();
+        }
+      }
       let cachedSessionRows = [];
       let agentMetrics = { startedAtMs: 0, promptChars: 0, outputChars: 0, chunkCount: 0 };
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
+      let definedSubagents = [];
+      let subagentsHint = "";
+      let liveSubagentMap = {};
+      function renderSubagentsPanel() {
+        const hintEl = document.getElementById("agentSubagentsHint");
+        const definedEl = document.getElementById("agentSubagentsDefined");
+        const liveEl = document.getElementById("agentSubagentsLive");
+        if (hintEl) {
+          hintEl.textContent = subagentsHint || "";
+        }
+        if (definedEl) {
+          definedEl.textContent = "";
+          if (!definedSubagents.length) {
+            const empty = document.createElement("div");
+            empty.className = "small muted";
+            empty.textContent = "No agent definitions found.";
+            definedEl.appendChild(empty);
+          } else {
+            definedSubagents.forEach((agent) => {
+              const row = document.createElement("div");
+              row.className = "subagent-row";
+              const nameEl = document.createElement("span");
+              nameEl.className = "subagent-name";
+              nameEl.textContent = String(agent.name || "");
+              const meta = document.createElement("span");
+              meta.className = "muted";
+              const bits = [agent.description, agent.model].filter(Boolean);
+              meta.textContent = bits.length ? " — " + bits.join(" · ") : "";
+              row.appendChild(nameEl);
+              row.appendChild(meta);
+              definedEl.appendChild(row);
+            });
+          }
+        }
+        if (liveEl) {
+          liveEl.textContent = "";
+          const rows = Object.keys(liveSubagentMap).map((key) => liveSubagentMap[key]);
+          if (rows.length) {
+            const label = document.createElement("div");
+            label.className = "small muted";
+            label.textContent = "Live";
+            liveEl.appendChild(label);
+            rows.forEach((row) => {
+              const el = document.createElement("div");
+              el.className = "subagent-row subagent-live";
+              const status = row.status ? " · " + row.status : "";
+              const summary = row.summary ? " — " + row.summary : "";
+              el.textContent = (row.name || row.id || "subagent") + status + summary;
+              liveEl.appendChild(el);
+            });
+          }
+        }
+      }
+      function applyLiveSubagents(rows) {
+        liveSubagentMap = {};
+        (rows || []).forEach((row) => {
+          if (!row) {
+            return;
+          }
+          const id = String(row.id || row.name || "");
+          if (!id) {
+            return;
+          }
+          liveSubagentMap[id] = row;
+        });
+        renderSubagentsPanel();
+      }
+      function noteLiveSubagentFromEvent(ev) {
+        const content = String((ev && ev.content) || "");
+        if (!content.startsWith("subagent ")) {
+          return;
+        }
+        const rest = content.slice("subagent ".length);
+        const colon = rest.indexOf(":");
+        if (colon < 0) {
+          return;
+        }
+        const name = rest.slice(0, colon).trim();
+        const after = rest.slice(colon + 1).trim();
+        const space = after.indexOf(" ");
+        const status = space < 0 ? after : after.slice(0, space);
+        const summary = space < 0 ? "" : after.slice(space + 1).trim();
+        const id = name || "subagent";
+        liveSubagentMap[id] = { id: id, name: name || id, status: status, summary: summary };
+        renderSubagentsPanel();
+      }
+      async function loadSubagentDefinitions() {
+        try {
+          const data = await fetch(withToken("/api/cursor/subagents")).then((r) => r.json());
+          if (!data || !data.ok) {
+            return;
+          }
+          definedSubagents = Array.isArray(data.agents) ? data.agents : [];
+          subagentsHint = data.hint || "";
+          renderSubagentsPanel();
+        } catch (_e) {}
+      }
       function estimateTokens(chars) {
         return Math.max(0, Math.ceil(chars / 4));
       }
@@ -824,22 +1179,33 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (!root) {
           return;
         }
-        
         const lastMsg = root.lastElementChild;
-        if (lastMsg) {
-          const roleEl = lastMsg.querySelector(".chatRole");
-          if (roleEl && roleEl.textContent === role) {
-            const textEl = lastMsg.querySelector(".chatText");
-            if (textEl) {
-              textEl.textContent += text;
-              scrollToBottom();
-              return;
-            }
+        const lastRoleEl = lastMsg ? lastMsg.querySelector(".chatRole") : null;
+        const lastTextEl = lastMsg ? lastMsg.querySelector(".chatText") : null;
+        const lastRole = lastRoleEl ? String(lastRoleEl.textContent || "") : "";
+        const lastText = lastTextEl ? String(lastTextEl.textContent || "") : "";
+        if (role === "user") {
+          if (shouldReplaceUserText(lastRole, lastText, text) && lastTextEl) {
+            lastTextEl.textContent = text;
+            scrollToBottom();
+            return;
           }
+          if (shouldSkipDuplicateUser(lastRole, lastText, text)) {
+            return;
+          }
+        } else if (role === "assistant" && lastRole === "assistant" && lastTextEl) {
+          lastTextEl.textContent += text;
+          scrollToBottom();
+          return;
+        } else if (lastMsg && lastRole === role && role !== "user" && lastTextEl) {
+          lastTextEl.textContent += text;
+          scrollToBottom();
+          return;
         }
 
         const msg = document.createElement("div");
         msg.className = "chatMsg";
+        msg.setAttribute("data-role", role);
         const roleEl = document.createElement("div");
         roleEl.className = "chatRole";
         roleEl.textContent = role;
@@ -850,6 +1216,34 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         msg.appendChild(textEl);
         root.appendChild(msg);
         scrollToBottom();
+      }
+      function shouldSkipDuplicateUser(lastRole, lastText, incoming) {
+        if (lastRole !== "user") {
+          return false;
+        }
+        const previous = String(lastText || "");
+        const next = String(incoming || "");
+        if (!next) {
+          return true;
+        }
+        if (previous === next) {
+          return true;
+        }
+        if (previous && next.startsWith(previous)) {
+          return true;
+        }
+        if (next && previous.startsWith(next)) {
+          return true;
+        }
+        return false;
+      }
+      function shouldReplaceUserText(lastRole, lastText, incoming) {
+        if (lastRole !== "user") {
+          return false;
+        }
+        const previous = String(lastText || "");
+        const next = String(incoming || "");
+        return Boolean(previous && next && next.startsWith(previous) && next.length > previous.length);
       }
       function clearChat() {
         const root = document.getElementById("chatHistory");
@@ -870,6 +1264,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         
         if (kind === "tool" || kind === "status" || kind === "system") {
           pushTrace(ev.content || "");
+          if (kind === "system") {
+            noteLiveSubagentFromEvent(ev);
+          }
           return;
         }
 
@@ -897,25 +1294,30 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           if (msg.id) {
             seenTimelineIds.add(msg.id);
           }
-          const role = String(msg.role || "entry").toLowerCase();
-
+          const role = String(msg.kind || msg.role || "").toLowerCase();
+          if (!role || role === "entry") {
+            continue;
+          }
           if (role === "tool" || role === "status" || role === "system") {
             pushTrace(msg.content || "");
             continue;
           }
 
-          let lane = "assistant";
+          let lane = "";
           if (role === "user" || role.includes("user") || role.includes("human")) {
             lane = "user";
+          } else if (role === "assistant") {
+            lane = "assistant";
           } else if (role === "stderr" || role.includes("stderr") || role.includes("error")) {
             lane = "stderr";
-          } else if (role === "status" || role.includes("system") || role.includes("event")) {
-            lane = "system";
+          }
+          if (!lane) {
+            continue;
           }
           appendChat(lane, msg.content || "");
         }
         const thinkingBlock = document.getElementById("agentThinking");
-        if (thinkingEvents.length === 0) {
+        if (thinkingEvents.length === 0 && thinkingBlock) {
           thinkingBlock.textContent = "No thinking trace found in this session history.";
         }
         scrollToBottom();
@@ -943,6 +1345,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function startFreshSession() {
         selectedResumeSessionId = null;
+        lastCursorSessionId = "";
         const select = document.getElementById("agentSessionSelect");
         if (select) {
           select.value = "";
@@ -953,6 +1356,17 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       function traceNow() {
         return new Date().toTimeString().slice(0, 8);
       }
+      function notifyParentAgentSession(sessionId) {
+        if (!sessionId) {
+          return;
+        }
+        if (!EMBED_MODE && window.parent === window) {
+          return;
+        }
+        try {
+          window.parent.postMessage({ type: "winnow-agent-session", sessionId: sessionId }, "*");
+        } catch (_e) {}
+      }
       function pushTrace(line) {
         if (!line) {
           return;
@@ -962,6 +1376,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           thinkingEvents = thinkingEvents.slice(-120);
         }
         const block = document.getElementById("agentThinking");
+        if (!block) {
+          lastTraceAtMs = Date.now();
+          return;
+        }
         block.textContent = thinkingEvents.join("\\n");
         block.scrollTop = block.scrollHeight;
         lastTraceAtMs = Date.now();
@@ -1008,17 +1426,16 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           return;
         }
         const s = res.session;
+        rememberCursorSessionId(s.id, s.cursorSessionId);
         document.getElementById("agentSessionInfo").textContent =
           "session=" + s.id + " status=" + s.status + (s.exitCode !== undefined ? " exit=" + s.exitCode : "");
         document.getElementById("agentStatusBadge").textContent = s.status;
+        if (Array.isArray(s.liveSubagents)) {
+          applyLiveSubagents(s.liveSubagents);
+        }
         agentMetrics.outputChars = (s.output || "").length + (s.errorOutput || "").length;
         refreshMetrics();
-        const streamDead = !streamSource || streamSource.readyState !== 1;
-        if (streamDead && Array.isArray(s.events)) {
-          for (const ev of s.events) {
-            appendFromTimelineEvent(ev);
-          }
-        }
+        backfillConversationEvents(s.events);
         if (s.status !== "running" && pollTimer) {
           clearInterval(pollTimer);
           pollTimer = null;
@@ -1032,6 +1449,14 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           applyAgentRunUi();
         }
       }
+      function backfillConversationEvents(events) {
+        if (!Array.isArray(events)) {
+          return;
+        }
+        for (const ev of events) {
+          appendFromTimelineEvent(ev);
+        }
+      }
       function closeStream() {
         if (streamSource) {
           streamSource.close();
@@ -1040,6 +1465,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       function attachStream(sessionId) {
         closeStream();
+        notifyParentAgentSession(sessionId);
         streamSource = new EventSource(withToken("/api/agent/" + sessionId + "/stream"));
         streamSource.addEventListener("timeline", (evt) => {
           try {
@@ -1172,6 +1598,102 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           }
         }
       }
+      function renderAttachmentStrip() {
+        const strip = document.getElementById("agentAttachmentStrip");
+        if (!strip) {
+          return;
+        }
+        strip.innerHTML = "";
+        if (!agentAttachments.length) {
+          strip.hidden = true;
+          return;
+        }
+        strip.hidden = false;
+        agentAttachments.forEach((item, index) => {
+          const chip = document.createElement("div");
+          chip.className = "attachment-chip";
+          const img = document.createElement("img");
+          img.src = item.previewUrl;
+          img.alt = "Attached image " + (index + 1);
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "secondary attachment-remove";
+          remove.setAttribute("aria-label", "Remove attachment");
+          remove.textContent = "×";
+          remove.onclick = () => removeAttachment(index);
+          chip.appendChild(img);
+          chip.appendChild(remove);
+          strip.appendChild(chip);
+        });
+      }
+      function removeAttachment(index) {
+        const item = agentAttachments[index];
+        if (item && item.previewUrl) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+        agentAttachments.splice(index, 1);
+        renderAttachmentStrip();
+      }
+      function clearAttachments() {
+        agentAttachments.forEach((item) => {
+          if (item && item.previewUrl) {
+            URL.revokeObjectURL(item.previewUrl);
+          }
+        });
+        agentAttachments.length = 0;
+        renderAttachmentStrip();
+      }
+      function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || "");
+            const comma = result.indexOf(",");
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+          };
+          reader.onerror = () => reject(reader.error || new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+      }
+      async function attachImageFiles(fileList) {
+        const files = Array.from(fileList || []).filter(Boolean);
+        for (const file of files) {
+          if (agentAttachments.length >= MAX_ATTACHMENTS_PER_SEND) {
+            appendChat("system", "At most 8 attachments per send.");
+            break;
+          }
+          const mime = String(file.type || "");
+          if (!ALLOWED_ATTACH_MIMES.includes(mime)) {
+            appendChat("system", "Skipped non-image file" + (file.name ? " (" + file.name + ")" : "") + ".");
+            continue;
+          }
+          if (file.size > MAX_ATTACHMENT_BYTES) {
+            appendChat("system", "Attachment too large (max 8 MB).");
+            continue;
+          }
+          try {
+            const dataBase64 = await fileToBase64(file);
+            const httpRes = await fetch(withToken("/api/attachments"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mime: mime, dataBase64: dataBase64 }),
+            });
+            const data = await httpRes.json();
+            if (!data || data.ok !== true) {
+              appendChat("system", "Attach failed: " + JSON.stringify(data));
+              continue;
+            }
+            agentAttachments.push({
+              id: data.id,
+              absPath: data.absPath,
+              previewUrl: URL.createObjectURL(file),
+            });
+            renderAttachmentStrip();
+          } catch (err) {
+            appendChat("system", "Attach failed: " + (err && err.message ? err.message : String(err)));
+          }
+        }
+      }
       async function startAgentRun() {
         const prompt = document.getElementById("agentPrompt").value.trim();
         if (!prompt) {
@@ -1186,26 +1708,21 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         const select = document.getElementById("agentSessionSelect");
         const pickedSession = (select?.value || selectedResumeSessionId || "").trim();
         const localSessionId = continueMode ? pickedSession || selectedResumeSessionId || activeSessionId || "" : "";
-        // Only forward UUID-style Cursor chat ids to cursor-agent resume.
-        // Winnow session ids are still valid for local transcript continuation.
-        const isCursorChatId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localSessionId);
-        const resumeSessionId = isCursorChatId ? localSessionId : "";
         const baseArgs = (document.getElementById("agentArgs").value || "").trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\\s)--resume\\s+\\S+/g, "").trim();
-        const effectiveArgs = resumeSessionId
-          ? cleanedArgs
-            ? cleanedArgs + " --resume " + resumeSessionId
-            : "--resume " + resumeSessionId
-          : cleanedArgs;
         const payload = {
           prompt,
-          args: effectiveArgs,
+          args: cleanedArgs,
           modelPreference: document.getElementById("agentModelPref").value,
           autonomyMode: document.getElementById("autonomyMode").checked,
           graphSeed: document.getElementById("graphSeedMode").checked,
           planId: document.getElementById("agentPlanSelect")?.value || undefined,
           sessionId: localSessionId || undefined,
+          cursorSessionId: continueMode
+            ? lastCursorSessionId || (isCursorChatId(localSessionId) ? localSessionId : undefined)
+            : undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
+          attachmentIds: agentAttachments.map((item) => item.id),
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -1242,14 +1759,24 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           return;
         }
         activeSessionId = res.sessionId;
+        rememberCursorSessionId(res.sessionId, res.cursorSessionId);
+        notifyParentAgentSession(activeSessionId);
         clearPrompt();
+        clearAttachments();
         if (continueMode) {
           selectedResumeSessionId = activeSessionId;
+        } else {
+          clearChat();
+          thinkingEvents = [];
+          lastTraceAtMs = Date.now();
+          liveSubagentMap = {};
+          renderSubagentsPanel();
+          const thinkingBlock = document.getElementById("agentThinking");
+          if (thinkingBlock) {
+            thinkingBlock.textContent = "";
+          }
         }
-        clearChat();
-        thinkingEvents = [];
-        lastTraceAtMs = Date.now();
-        document.getElementById("agentThinking").textContent = "";
+        appendChat("user", prompt);
         pushTrace("session started");
         document.getElementById("agentStatusBadge").textContent = "running";
         document.getElementById("agentSessionInfo").textContent = "session=" + activeSessionId + " status=running";
@@ -1308,7 +1835,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         document.querySelectorAll(".sync-session").forEach((el) => {
           el.onclick = () => loadSession(el.getAttribute("data-session-id"));
         });
-        if (selectedResumeSessionId) {
+        if (selectedResumeSessionId && !agentSessionRunning) {
           await loadSession(selectedResumeSessionId);
         }
       }
@@ -1316,16 +1843,23 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (!id) {
           return;
         }
+        const data = await fetch(withToken("/api/sessions/" + id)).then((r) => r.json());
+        if (!data || data.error || !Array.isArray(data.messages)) {
+          return;
+        }
         selectedSyncedSession = id;
         selectedResumeSessionId = id;
-        activeSessionId = id;
-        updateArgsResume(id);
         const select = document.getElementById("agentSessionSelect");
         if (select) {
           select.value = id;
         }
-        const data = await fetch(withToken("/api/sessions/" + id)).then((r) => r.json());
-        selectedSyncedMessages = data.messages || [];
+        selectedSyncedMessages = data.messages;
+        rememberCursorSessionId(id, data.cursorSessionId);
+        if (agentSessionRunning) {
+          return;
+        }
+        activeSessionId = id;
+        updateArgsResume(id);
         loadHistoryIntoPanels(selectedSyncedMessages);
         const preview = selectedSyncedMessages
           .slice(-8)
@@ -1402,6 +1936,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       }
       const sessionSelect = document.getElementById("agentSessionSelect");
       const modeSelect = document.getElementById("agentExecutionMode");
+      const modelPref = document.getElementById("agentModelPref");
+      if (modelPref) {
+        modelPref.addEventListener("change", syncCollapsedModelLabel);
+      }
       if (modeSelect) {
         modeSelect.addEventListener("change", async () => {
           const mode = modeSelect.value || "cursor";
@@ -1446,9 +1984,63 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           startAgentRun();
         }
       });
+      document.getElementById("agentPrompt").addEventListener("paste", (evt) => {
+        const items = evt.clipboardData && evt.clipboardData.items;
+        if (!items) {
+          return;
+        }
+        const files = [];
+        for (const item of items) {
+          if (item.kind === "file" && ALLOWED_ATTACH_MIMES.includes(item.type)) {
+            const file = item.getAsFile();
+            if (file) {
+              files.push(file);
+            }
+          }
+        }
+        if (files.length) {
+          evt.preventDefault();
+          void attachImageFiles(files);
+        }
+      });
+      function bindAttachmentDropTarget(el) {
+        if (!el) {
+          return;
+        }
+        el.addEventListener("dragover", (evt) => {
+          evt.preventDefault();
+          el.closest(".composer")?.classList.add("is-drop-target");
+        });
+        el.addEventListener("dragleave", () => {
+          el.closest(".composer")?.classList.remove("is-drop-target");
+        });
+        el.addEventListener("drop", (evt) => {
+          evt.preventDefault();
+          el.closest(".composer")?.classList.remove("is-drop-target");
+          const files = evt.dataTransfer && evt.dataTransfer.files;
+          if (files && files.length) {
+            void attachImageFiles(files);
+          }
+        });
+      }
+      bindAttachmentDropTarget(document.getElementById("agentPrompt"));
+      bindAttachmentDropTarget(document.getElementById("agentAttachmentStrip"));
+      const attachInput = document.getElementById("agentAttachInput");
+      const attachBtn = document.getElementById("btnAgentAttach");
+      if (attachBtn && attachInput) {
+        attachBtn.addEventListener("click", () => attachInput.click());
+        attachInput.addEventListener("change", () => {
+          if (attachInput.files && attachInput.files.length) {
+            void attachImageFiles(attachInput.files);
+          }
+          attachInput.value = "";
+        });
+      }
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
-      loadSelectableModels();
+      initAgentControlsCollapse();
+      bootstrapCursorAndModels();
+      document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
       updateExecutionModeUi();
       refreshSessions();
       refreshPlans();
