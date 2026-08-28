@@ -105,7 +105,15 @@ import {
   type ManagedProcessStartRequest,
   type UiOptions,
 } from "./ui/types.js";
-import { sendJson, readJsonBody, sendHandlerError } from "./ui/httpUtil.js";
+import { sendJson, readJsonBody, sendHandlerError, applySecurityHeaders, applyNoStore } from "./ui/httpUtil.js";
+import {
+  authorizeAccess,
+  buildUiAccessCookie,
+  isForwardedHttps,
+  isPublicHealthRequest,
+  shouldSetAccessCookie,
+  UI_HEALTH_PAYLOAD,
+} from "./ui/accessAuth.js";
 import { agentStartRequestSchema, graphCorrectionsBodySchema, planCreateBodySchema } from "./ui/apiSchemas.js";
 import {
   AgentStartBlockedError,
@@ -860,13 +868,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
   const supportsPty = nodeMajor >= 20;
 
-  const requireToken = Boolean(options.token);
-  const isAuthorized = (url: URL): boolean => {
-    if (!requireToken) {
-      return true;
-    }
-    return url.searchParams.get("token") === options.token;
-  };
+  const corsOrigin = options.corsOrigin?.trim() || undefined;
 
   const paneCommands: Record<PaneId, string> = {
     ...DEFAULT_PANE_COMMANDS,
@@ -1971,9 +1973,33 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const server = createServer(async (req, res) => {
     try {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
-    if (!isAuthorized(url)) {
+    applySecurityHeaders(res, { corsOrigin });
+
+    if (isPublicHealthRequest(url.pathname, req.method)) {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      applyNoStore(res);
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      res.end(JSON.stringify(UI_HEALTH_PAYLOAD));
+      return;
+    }
+
+    if (req.method === "OPTIONS" && corsOrigin) {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    const auth = authorizeAccess(options.token, url, req.headers);
+    if (!auth.ok) {
       sendJson(res, 401, { ok: false, error: "unauthorized: invalid or missing token" });
       return;
+    }
+    if (shouldSetAccessCookie(auth.via) && options.token) {
+      res.setHeader("Set-Cookie", buildUiAccessCookie(options.token, isForwardedHttps(req.headers)));
     }
 
     if (url.pathname === "/api/workspace/cwd" && req.method === "GET") {
@@ -3490,6 +3516,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/main" && req.method === "GET") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      applyNoStore(res);
       res.end(buildMainTerminalHtml(options.token));
       return;
     }
@@ -3497,6 +3524,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/agent" && req.method === "GET") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      applyNoStore(res);
       res.end(buildAgentWindowPageHtml(options.token));
       return;
     }
@@ -3504,6 +3532,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/" && req.method === "GET") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      applyNoStore(res);
       res.end(buildDashboardPageHtml(options.token));
       return;
     }
@@ -3521,7 +3550,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       socket.destroy();
       return;
     }
-    if (!isAuthorized(url)) {
+    if (!authorizeAccess(options.token, url, req.headers).ok) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -3560,6 +3589,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
   } else {
     process.stdout.write(`[winnow-ui] local URL: ${localUrl}\n`);
+  }
+  if (options.remote) {
+    process.stdout.write("[winnow-ui] remote mode: bound for network access; browser not auto-opened\n");
+  }
+  if (options.remote || options.host === "0.0.0.0") {
+    process.stdout.write(
+      "[winnow-ui] reverse proxy must forward WebSocket Upgrade for /ws/main/* and SSE for /api/agent/:id/stream\n",
+    );
   }
   process.stdout.write("[winnow-ui] press Ctrl+C to stop\n");
   const launchUrl = options.host === "0.0.0.0" ? localUrl : boundUrl;
