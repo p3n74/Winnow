@@ -64,6 +64,8 @@ export type AgentSession = {
   liveSubagents?: import("../../cursor/subagents.js").LiveSubagentRow[];
   /** Cursor CLI chat UUID from `system.init.session_id` / `result.session_id`. */
   cursorSessionId?: string;
+  /** Workspace the cursor-agent child was spawned in; survives UI cwd switches. */
+  projectRoot?: string;
 };
 
 export type SessionStreamClient = {

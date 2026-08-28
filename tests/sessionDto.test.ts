@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_SESSION_OUTPUT_CHARS,
+  assertAgentStartAllowed,
   capSessionBuffers,
+  countRunningSessions,
   enqueueExclusiveWrite,
+  ensureHeadlessWorkspaceArgs,
   evictIdleSessions,
+  listRunningSessions,
   toSessionClientDto,
+  AgentStartBlockedError,
 } from "../src/cli/ui/sessionDto.js";
 import type { AgentSession } from "../src/cli/ui/types.js";
 
@@ -80,5 +85,72 @@ describe("enqueueExclusiveWrite", () => {
       });
     await Promise.all([job("a", 20), job("b", 5)]);
     expect(log).toEqual(["a", "b"]);
+  });
+});
+
+describe("assertAgentStartAllowed", () => {
+  it("rejects a second start on a running session id", () => {
+    const map = new Map<string, AgentSession>();
+    map.set("s1", sess({ id: "s1", status: "running" }));
+    try {
+      assertAgentStartAllowed(map, "s1");
+      expect.fail("expected AgentStartBlockedError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AgentStartBlockedError);
+      expect((error as AgentStartBlockedError).status).toBe(409);
+      expect((error as AgentStartBlockedError).code).toBe("session_running");
+    }
+  });
+
+  it("rejects a new session when the concurrent cap is full", () => {
+    const map = new Map<string, AgentSession>();
+    map.set("a", sess({ id: "a", status: "running" }));
+    map.set("b", sess({ id: "b", status: "running" }));
+    map.set("c", sess({ id: "c", status: "running" }));
+    try {
+      assertAgentStartAllowed(map, "d", 3);
+      expect.fail("expected AgentStartBlockedError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AgentStartBlockedError);
+      expect((error as AgentStartBlockedError).status).toBe(429);
+      expect((error as AgentStartBlockedError).code).toBe("concurrent_cap");
+    }
+  });
+
+  it("allows continuing a finished session while others are running under the cap", () => {
+    const map = new Map<string, AgentSession>();
+    map.set("a", sess({ id: "a", status: "running" }));
+    map.set("idle", sess({ id: "idle", status: "done" }));
+    expect(() => assertAgentStartAllowed(map, "idle", 3)).not.toThrow();
+    expect(() => assertAgentStartAllowed(map, "fresh", 3)).not.toThrow();
+  });
+});
+
+describe("listRunningSessions", () => {
+  it("returns only running sessions newest first", () => {
+    const rows = listRunningSessions([
+      sess({ id: "done", status: "done", startedAt: "2026-01-03T00:00:00.000Z" }),
+      sess({ id: "old", status: "running", startedAt: "2026-01-01T00:00:00.000Z" }),
+      sess({ id: "new", status: "running", startedAt: "2026-01-02T00:00:00.000Z" }),
+    ]);
+    expect(rows.map((s) => s.id)).toEqual(["new", "old"]);
+    expect(countRunningSessions(rows)).toBe(2);
+  });
+});
+
+describe("ensureHeadlessWorkspaceArgs", () => {
+  it("adds --workspace and --trust when missing", () => {
+    expect(ensureHeadlessWorkspaceArgs(["--print"], "/tmp/proj")).toEqual([
+      "--print",
+      "--workspace",
+      "/tmp/proj",
+      "--trust",
+    ]);
+  });
+
+  it("does not duplicate existing --workspace or --trust", () => {
+    expect(
+      ensureHeadlessWorkspaceArgs(["--workspace", "/keep", "--trust", "--print"], "/tmp/other"),
+    ).toEqual(["--workspace", "/keep", "--trust", "--print"]);
   });
 });

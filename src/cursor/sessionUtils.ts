@@ -13,6 +13,10 @@ export type SessionSummary = {
   preview: string;
   /** Cursor `--resume` UUID when this row is a Winnow-local session that already captured one. */
   cursorSessionId?: string;
+  status?: "running" | "done" | "error";
+  startedAt?: string;
+  source?: string;
+  projectRoot?: string;
 };
 
 const CURSOR_CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

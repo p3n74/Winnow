@@ -70,7 +70,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
       .topbar {
         height: 48px;
-        display: flex;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         align-items: center;
         gap: 8px;
         padding: 0 16px;
@@ -81,6 +82,28 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         position: sticky;
         top: 0;
         backdrop-filter: blur(16px);
+      }
+      .topbarLeft {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .chipAgentCount {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        padding: 2px 10px;
+        border-radius: 99px;
+        background: var(--bg);
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        justify-self: center;
+      }
+      .chipAgentCount.isLive {
+        color: var(--text-neon);
+        border-color: var(--line-hot);
       }
       .tab {
         padding: 6px 12px;
@@ -1006,10 +1029,14 @@ export function buildDashboardPageHtml(token: string | undefined): string {
   <body>
     <div class="app">
       <div class="topbar">
-        <button class="tab active" data-view="os">Dashboard</button>
-        <button class="tab" data-view="agent">Cursor Agent</button>
-        <button class="tab" data-view="settings">Settings</button>
-        <button id="mainGridBtn" class="tab">Main Grid</button>
+        <div class="topbarLeft">
+          <button class="tab active" data-view="os">Dashboard</button>
+          <button class="tab" data-view="agent">Cursor Agent</button>
+          <button class="tab" data-view="settings">Settings</button>
+          <button id="mainGridBtn" class="tab">Main Grid</button>
+        </div>
+        <span class="chipAgentCount" id="toolbarAgentCount" hidden></span>
+        <div></div>
       </div>
       <div class="body">
         <div class="leftCol">
@@ -2214,6 +2241,7 @@ ${clientApiJavaScript()}
             document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
           }
           await refreshWorkspaceCwd();
+          await pollToolbarAgentCount();
         } catch(_e) {}
       }
       async function refreshWorkspaceCwd(){
@@ -2224,6 +2252,29 @@ ${clientApiJavaScript()}
         if(hint){
           hint.textContent = 'transcripts: ' + (data.transcriptDir || '') + ' | launched: ' + (data.launchRoot || '');
         }
+      }
+      function renderToolbarAgentCount(count){
+        const el = document.getElementById('toolbarAgentCount');
+        if(!el){ return; }
+        const n = Number(count) || 0;
+        if(n <= 0){
+          el.hidden = true;
+          el.textContent = '';
+          el.classList.remove('isLive');
+          return;
+        }
+        el.hidden = false;
+        el.classList.add('isLive');
+        el.textContent = n === 1 ? '1 agent running' : (n + ' agents running');
+        el.title = 'Agents keep working after you change the working directory.';
+      }
+      async function pollToolbarAgentCount(){
+        try {
+          const running = await apiJson('/api/agent/running');
+          if(running && running.ok){
+            renderToolbarAgentCount(running.runningCount);
+          }
+        } catch(_e) {}
       }
       async function setWorkspaceCwd(){
         const inp = document.getElementById('workspacePathInput');
@@ -2244,6 +2295,7 @@ ${clientApiJavaScript()}
           await refreshWorkspace();
           await refreshSessions();
           await refreshProjects();
+          await pollToolbarAgentCount();
         }
       }
       async function resetWorkspaceCwd(){
@@ -2259,6 +2311,7 @@ ${clientApiJavaScript()}
           await refreshWorkspace();
           await refreshSessions();
           await refreshProjects();
+          await pollToolbarAgentCount();
         }
       }
       let currentDir = '';

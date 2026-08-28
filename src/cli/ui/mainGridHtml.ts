@@ -48,16 +48,19 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .workspace { display: grid; grid-template-rows: 48px 1fr; height: 100vh; width: 100%; }
       .toolbar {
-        display: flex;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
         align-items: center;
-        justify-content: space-between;
         padding: 0 16px;
         border-bottom: 1px solid var(--line);
         background: var(--panel);
         box-shadow: none;
         z-index: 10;
       }
-      .toolbarLeft, .toolbarRight { display: flex; gap: 12px; align-items: center; }
+      .toolbarLeft, .toolbarRight { display: flex; gap: 12px; align-items: center; min-width: 0; }
+      .toolbarLeft { justify-self: start; }
+      .toolbarCenter { justify-self: center; }
+      .toolbarRight { justify-self: end; flex-wrap: wrap; justify-content: flex-end; }
       .brand { font-size: 13px; font-weight: 700; color: var(--text-neon); }
       .chip {
         font-size: 11px;
@@ -68,6 +71,10 @@ export function buildMainTerminalHtml(token?: string): string {
         border-radius: 99px;
         background: var(--bg);
         letter-spacing: 0.05em;
+      }
+      .chipAgentCount.isLive {
+        color: var(--text-neon);
+        border-color: var(--line-hot);
       }
       .back {
         border: 1px solid transparent;
@@ -1168,6 +1175,9 @@ export function buildMainTerminalHtml(token?: string): string {
           <a class="back" href="${token ? `/?token=${encodeURIComponent(token)}` : "/"}">Back</a>
           <span class="brand">Winnow Main Grid</span>
         </div>
+        <div class="toolbarCenter">
+          <span class="chip chipAgentCount" id="toolbarAgentCount" hidden></span>
+        </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger · trace · docs</span>
           <span class="chip">2 agent · shell · graph · plans · processes · scripts</span>
@@ -1185,7 +1195,7 @@ export function buildMainTerminalHtml(token?: string): string {
               <div style="display:flex;align-items:center;gap:10px">
                 <div class="paneTabs" role="tablist" aria-label="File browser, agent trace, and docs">
                   <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
-                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace <span id="pane1TraceCount" class="muted"></span></button>
                   <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="docs" id="pane1TabDocs">Docs</button>
                 </div>
                 <button type="button" class="reconnect" id="btnPane1Expand" aria-pressed="false" title="Hide panes 3, 4, and 5 and use their space">Fullscreen</button>
@@ -1475,6 +1485,8 @@ export function buildMainTerminalHtml(token?: string): string {
       let pane2Mode = "workspace";
       let pane1Mode = "browser";
       let pane1TraceSessionId = "";
+      let pane1TracePinnedId = "";
+      let pane1RunningCount = 0;
       let pane1TraceSource = null;
       let pane1TraceTimer = null;
       let pane1TraceLines = [];
@@ -1657,8 +1669,24 @@ ${clientApiJavaScript()}
           closePane1TraceStream();
         });
       }
+      function updatePane1TraceCount(){
+        const el = document.getElementById("pane1TraceCount");
+        if(!el){ return; }
+        el.textContent = pane1RunningCount > 1 ? "(" + pane1RunningCount + " running)" : (pane1RunningCount === 1 ? "(1 running)" : "");
+      }
       async function pollPane1TraceActive(){
         if(pane1Mode !== "trace"){ return; }
+        try {
+          const running = await apiJson("/api/agent/running");
+          if(running && running.ok){
+            pane1RunningCount = Number(running.runningCount || 0);
+            updatePane1TraceCount();
+          }
+        } catch(_e) {}
+        if(pane1TracePinnedId){
+          openPane1TraceStream(pane1TracePinnedId);
+          return;
+        }
         try {
           const res = await apiJson("/api/agent/active");
           if(!res || !res.ok){ return; }
@@ -1674,6 +1702,33 @@ ${clientApiJavaScript()}
         if(pane1TraceTimer){ return; }
         void pollPane1TraceActive();
         pane1TraceTimer = setInterval(pollPane1TraceActive, 2000);
+      }
+      function renderToolbarAgentCount(count){
+        const el = document.getElementById("toolbarAgentCount");
+        if(!el){ return; }
+        const n = Number(count) || 0;
+        if(n <= 0){
+          el.hidden = true;
+          el.textContent = "";
+          el.classList.remove("isLive");
+          return;
+        }
+        el.hidden = false;
+        el.classList.add("isLive");
+        el.textContent = n === 1 ? "1 agent running" : (n + " agents running");
+        el.title = "Live cursor-agent processes keep working after you change the working directory.";
+      }
+      async function pollToolbarAgentCount(){
+        try {
+          const running = await apiJson("/api/agent/running");
+          if(running && running.ok){
+            renderToolbarAgentCount(running.runningCount);
+          }
+        } catch(_e) {}
+      }
+      function startToolbarAgentCountPolling(){
+        void pollToolbarAgentCount();
+        setInterval(pollToolbarAgentCount, 2000);
       }
       function setPane1Tab(mode){
         pane1Mode = mode === "trace" ? "trace" : mode === "docs" ? "docs" : "browser";
@@ -4698,7 +4753,14 @@ ${clientApiJavaScript()}
         const data = event.data;
         if(!data || data.type !== "winnow-agent-session"){ return; }
         const sessionId = data.sessionId ? String(data.sessionId) : "";
-        if(sessionId){ openPane1TraceStream(sessionId, true); }
+        if(typeof data.runningCount === "number"){
+          pane1RunningCount = data.runningCount;
+          updatePane1TraceCount();
+        }
+        if(sessionId){
+          pane1TracePinnedId = sessionId;
+          openPane1TraceStream(sessionId, true);
+        }
       });
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
@@ -5081,6 +5143,7 @@ ${clientApiJavaScript()}
       setPane1Tab("browser");
       setPane1Expanded(pane1Expanded);
       startPane1TracePolling();
+      startToolbarAgentCountPolling();
       setPane2Tab("workspace");
       setPlanGraphVisibility(true);
       document.querySelectorAll(".reconnect[data-pane]").forEach((btn)=>{
