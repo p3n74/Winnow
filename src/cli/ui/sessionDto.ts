@@ -4,6 +4,67 @@ export const MAX_SESSION_OUTPUT_CHARS = 512_000;
 export const SESSION_CLIENT_EVENT_LIMIT = 500;
 export const MAX_LIVE_SESSIONS = 32;
 export const MAX_STDOUT_LINE_BUFFER = 1_000_000;
+export const MAX_CONCURRENT_AGENT_RUNS = 3;
+
+export type AgentStartBlockedCode = "session_running" | "concurrent_cap";
+
+export class AgentStartBlockedError extends Error {
+  readonly status: number;
+  readonly code: AgentStartBlockedCode;
+
+  constructor(status: number, code: AgentStartBlockedCode, message: string) {
+    super(message);
+    this.name = "AgentStartBlockedError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function countRunningSessions(
+  sessions: Iterable<{ status: string }>,
+): number {
+  let n = 0;
+  for (const session of sessions) {
+    if (session.status === "running") {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+export function listRunningSessions<T extends { status: string }>(sessions: Iterable<T>): T[] {
+  return [...sessions]
+    .filter((session) => session.status === "running")
+    .sort((a, b) => {
+      const aStarted = "startedAt" in a ? String((a as { startedAt?: string }).startedAt || "") : "";
+      const bStarted = "startedAt" in b ? String((b as { startedAt?: string }).startedAt || "") : "";
+      return aStarted < bStarted ? 1 : aStarted > bStarted ? -1 : 0;
+    });
+}
+
+/** Refuse a second start on the same id, and cap parallel cursor-agent (or external) runs. */
+export function assertAgentStartAllowed(
+  sessions: Map<string, { id: string; status: string }>,
+  sessionId: string,
+  maxConcurrent = MAX_CONCURRENT_AGENT_RUNS,
+): void {
+  const existing = sessions.get(sessionId);
+  if (existing?.status === "running") {
+    throw new AgentStartBlockedError(
+      409,
+      "session_running",
+      `Session ${sessionId} is already running. Stop it before sending another prompt on the same thread.`,
+    );
+  }
+  const running = countRunningSessions(sessions.values());
+  if (running >= maxConcurrent) {
+    throw new AgentStartBlockedError(
+      429,
+      "concurrent_cap",
+      `At most ${maxConcurrent} agent runs can be in progress at once. Stop one before starting another.`,
+    );
+  }
+}
 
 export function capSessionText(text: string, max = MAX_SESSION_OUTPUT_CHARS): string {
   if (text.length <= max) {
@@ -88,4 +149,16 @@ export function enqueueExclusiveWrite(
     }),
   );
   return job;
+}
+
+/** Pin headless cursor-agent to a workspace so a later UI cwd change does not retarget the child. */
+export function ensureHeadlessWorkspaceArgs(args: string[], workspaceDir: string): string[] {
+  const next = [...args];
+  if (workspaceDir && !next.includes("--workspace")) {
+    next.push("--workspace", workspaceDir);
+  }
+  if (!next.includes("--trust")) {
+    next.push("--trust");
+  }
+  return next;
 }

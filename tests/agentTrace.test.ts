@@ -95,4 +95,11 @@ describe("pane 1 Trace HTML contract", () => {
     const html = buildAgentWindowPageHtml(undefined);
     expect(html).toContain("winnow-agent-session");
   });
+
+  it("pins pane 1 Trace to the selected thread and shows a running count", () => {
+    const html = buildMainTerminalHtml();
+    expect(html).toContain("pane1TracePinnedId");
+    expect(html).toContain("/api/agent/running");
+    expect(html).toContain('id="pane1TraceCount"');
+  });
 });

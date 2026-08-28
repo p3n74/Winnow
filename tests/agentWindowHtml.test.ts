@@ -32,7 +32,7 @@ describe("buildAgentWindowPageHtml", () => {
 
   it("continues via stored Cursor UUID instead of injecting Winnow ids into --resume args", () => {
     const html = buildAgentWindowPageHtml(undefined);
-    expect(html).toContain("cursorSessionId: continueMode");
+    expect(html).toContain("cursorSessionId: continueThis");
     expect(html).toContain("rememberCursorSessionId");
     expect(html).toContain("Continue uses Cursor");
     expect(html).not.toContain("pass <code>--resume");
@@ -63,5 +63,34 @@ describe("buildAgentWindowPageHtml", () => {
     expect(intervalHits.length).toBe(1);
     const around = html.slice(Math.max(0, intervalHits[0].index! - 180), intervalHits[0].index! + 40);
     expect(around).toContain("streamSource.onerror");
+  });
+
+  it("exposes a collapsible Agents thread list in embed and unlocks other threads while one runs", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    expect(html).toContain('id="agentThreadsSidebar"');
+    expect(html).toContain('id="btnNewAgent"');
+    expect(html).toContain('id="btnToggleThreads"');
+    expect(html).toContain("winnow.agentThreadsCollapsed");
+    expect(html).toContain("threads-collapsed");
+    expect(html).toContain("function selectedIsRunning");
+    expect(html).toContain("function composerLocked");
+    expect(html).toContain("/api/agent/running");
+    expect(html).toContain("/api/agent/overlaps");
+    expect(html).toContain('id="agentOverlapBanner"');
+    expect(html).toContain('id="btnStartResolver"');
+    expect(html).toContain('id="agentSessionSelect"');
+    expect(html).toContain('id="btnOpenThreads"');
+    expect(html).toContain("width: 0 !important");
+    expect(html).not.toContain("<label>Resume</label>");
+    expect(html).not.toContain(">New chat<");
+    expect(html).not.toMatch(/<aside class="side-bar hide-embed"/);
+    expect(html).toContain("New agent thread. Run starts a separate cursor-agent process");
+  });
+
+  it("labels threads that keep running in another working directory", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    expect(html).toContain("lastSessionsCwd");
+    expect(html).toContain("other folder · ");
+    expect(html).toContain("data.cwd");
   });
 });

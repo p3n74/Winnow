@@ -51,6 +51,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       code { font-family: ui-monospace, Menlo, monospace; color: var(--text-neon); font-weight: 600; font-size: 0.95em; }
       body.embed .hide-embed { display: none !important; }
       body.embed .split { flex: 1; }
+      body.embed .side-bar { width: 220px; }
       .workbench { display: flex; flex-direction: column; height: 100vh; min-height: 0; }
       .title-bar {
         height: 30px;
@@ -114,6 +115,16 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         display: flex;
         flex-direction: column;
         min-height: 0;
+        transition: width 0.15s ease;
+      }
+      body.threads-collapsed .side-bar,
+      body.embed.threads-collapsed .side-bar {
+        width: 0 !important;
+        min-width: 0;
+        border: 0;
+        overflow: hidden;
+        pointer-events: none;
+        background: transparent;
       }
       .side-header {
         padding: 10px 12px;
@@ -124,7 +135,19 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-style: italic;
         font-weight: 600;
         border-bottom: 1px solid var(--vscode-panel-border);
+        display: flex;
+        align-items: center;
+        gap: 6px;
       }
+      .side-header-title { flex: 1; min-width: 0; }
+      #btnToggleThreads {
+        margin-left: auto;
+        padding: 2px 6px;
+        font-size: 11px;
+        min-width: 28px;
+      }
+      #btnOpenThreads { display: none; }
+      body.threads-collapsed #btnOpenThreads { display: inline-flex; }
       .main-panel {
         flex: 1;
         min-width: 0;
@@ -485,10 +508,76 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         border: 1px solid var(--line);
         border-radius: 4px;
         overflow: auto;
-        max-height: 200px;
+        flex: 1;
+        min-height: 80px;
         margin: 0 8px;
         background: var(--bg);
       }
+      .threads-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+      .thread-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-bottom: 1px solid var(--line-faint);
+        background: transparent;
+        color: inherit;
+        padding: 8px;
+        cursor: pointer;
+        font-size: 11px;
+        font-family: inherit;
+      }
+      .thread-row:hover { background: var(--line-faint); color: var(--text-neon); }
+      .thread-row.is-active {
+        background: rgba(34, 211, 238, 0.12);
+        border-left: 2px solid var(--accent);
+      }
+      .thread-row.is-draft {
+        font-style: italic;
+        color: var(--muted);
+      }
+      .thread-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        background: var(--line);
+      }
+      .thread-dot.is-running {
+        background: #4ade80;
+        box-shadow: 0 0 8px #4ade80;
+      }
+      .thread-dot.is-error { background: var(--red-pastel); }
+      .thread-main { flex: 1; min-width: 0; }
+      .thread-title {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-strong);
+      }
+      .thread-meta { font-size: 10px; color: var(--muted); }
+      .thread-actions { display: flex; gap: 2px; flex-shrink: 0; }
+      .thread-actions button {
+        padding: 1px 5px;
+        font-size: 10px;
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+      }
+      .thread-actions button:hover { color: var(--text-neon); border-color: var(--line); }
+      #agentOverlapBanner {
+        margin: 8px;
+        padding: 8px;
+        border: 1px solid var(--red-pastel);
+        border-radius: 4px;
+        background: rgba(255, 77, 77, 0.08);
+        font-size: 11px;
+      }
+      #agentOverlapBanner[hidden] { display: none !important; }
+      #agentOverlapText { display: block; margin-bottom: 6px; color: var(--text); }
       #sessionDirInfo { padding: 6px 10px; font-size: 10px; }
       #sessionPreview {
         font-size: 10px;
@@ -538,19 +627,29 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           <div class="activity-icon" title="Agent">Ag</div>
         </aside>
         <div class="split">
-          <aside class="side-bar hide-embed">
-            <div class="side-header">Sessions</div>
+          <aside class="side-bar" id="agentThreadsSidebar">
+            <div class="side-header">
+              <span class="side-header-title">Agents</span>
+              <button type="button" class="secondary" id="btnNewAgent" onclick="startFreshSession()">New</button>
+              <button type="button" class="secondary" id="btnToggleThreads" aria-expanded="true" aria-controls="agentThreadsBody" title="Collapse agent list">‹</button>
+            </div>
+            <div class="threads-body" id="agentThreadsBody">
+            <div id="agentOverlapBanner" hidden>
+              <span id="agentOverlapText"></span>
+              <button type="button" id="btnStartResolver">Start resolver</button>
+            </div>
             <div class="row small" style="padding: 8px 10px">
               <button type="button" class="secondary" onclick="refreshSessions()">Refresh</button>
             </div>
             <div class="small muted" id="sessionDirInfo"></div>
             <div id="sessionList"></div>
-            <div class="session-actions">
+            <div class="session-actions hide-embed">
               <button type="button" class="secondary" onclick="continueSelectedSession()">Continue selected</button>
               <button type="button" class="secondary" onclick="useSelectedPrompt()">Use last prompt</button>
             </div>
-            <pre id="sessionPreview">No session selected.</pre>
+            <pre id="sessionPreview" class="hide-embed">No session selected.</pre>
             <div id="result"></div>
+            </div>
           </aside>
           <main class="main-panel">
             <div class="panel-toolbar">
@@ -559,9 +658,11 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" class="secondary" id="btnCursorLogin" style="display:none">Log in to Cursor</button>
               </div>
               <div class="row small agent-controls-compact">
+                <button type="button" class="secondary" id="btnOpenThreads" aria-expanded="false" aria-controls="agentThreadsBody" title="Open agent list">Agents</button>
                 <button type="button" class="secondary" id="btnToggleAgentControls" aria-expanded="true" aria-controls="agentControls">Controls</button>
                 <span id="agentCollapsedModel" class="small muted"></span>
                 <span class="statusBadge" id="agentStatusBadge">idle</span>
+                <span id="agentRunningCount" class="small muted"></span>
                 <span id="agentSessionInfo">No active session.</span>
               </div>
               <div id="agentControls" data-agent-controls>
@@ -596,14 +697,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 </span>
                 <span class="kbd">⌘↵</span>
               </div>
-              <div class="row small" style="margin-top: 8px">
-                <label>Resume</label>
-                <select id="agentSessionSelect" style="min-width: 220px; flex: 1">
-                  <option value="">(new session)</option>
-                </select>
-                <button type="button" class="secondary" onclick="refreshSessions()">Reload</button>
-                <button type="button" class="secondary" onclick="startFreshSession()">New chat</button>
-              </div>
+              <select id="agentSessionSelect" hidden aria-hidden="true">
+                <option value="">(new session)</option>
+              </select>
               <div class="row small" style="margin-top: 8px">
                 <label>Plan</label>
                 <select id="agentPlanSelect" style="min-width: 220px; flex: 1">
@@ -673,6 +769,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const EMBED_MODE = PAGE_PARAMS.get("embed") === "1";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
       const AGENT_CONTROLS_COLLAPSED_KEY = "winnow.agentControlsCollapsed";
+      const THREADS_COLLAPSED_KEY = "winnow.agentThreadsCollapsed";
+      const PINNED_THREADS_KEY = "winnow.agentPinnedIds";
+      const CLOSED_THREADS_KEY = "winnow.agentClosedIds";
 ${clientApiJavaScript()}
       function formatLocalDateTime(value) {
         const dt = new Date(value || "");
@@ -688,6 +787,37 @@ ${clientApiJavaScript()}
           second: "2-digit",
           hour12: false,
         });
+      }
+      function formatRelativeTime(value) {
+        const dt = new Date(value || "");
+        const ms = Date.now() - dt.getTime();
+        if (!Number.isFinite(dt.getTime()) || ms < 0) {
+          return "";
+        }
+        if (ms < 60 * 1000) {
+          return Math.max(1, Math.round(ms / 1000)) + "s";
+        }
+        if (ms < 60 * 60 * 1000) {
+          return Math.round(ms / (60 * 1000)) + "m";
+        }
+        if (ms < 24 * 60 * 60 * 1000) {
+          return Math.round(ms / (60 * 60 * 1000)) + "h";
+        }
+        return Math.round(ms / (24 * 60 * 60 * 1000)) + "d";
+      }
+      function readJsonArray(key) {
+        try {
+          const raw = localStorage.getItem(key);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed.map(String) : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+      function writeJsonArray(key, values) {
+        try {
+          localStorage.setItem(key, JSON.stringify(values));
+        } catch (_err) {}
       }
       function openDashboard() {
         window.location.assign(withToken("/"));
@@ -739,6 +869,40 @@ ${clientApiJavaScript()}
             persistAgentControlsCollapsed(next);
           });
         }
+      }
+      function applyThreadsCollapsed(collapsed) {
+        document.body.classList.toggle("threads-collapsed", Boolean(collapsed));
+        const closeBtn = document.getElementById("btnToggleThreads");
+        const openBtn = document.getElementById("btnOpenThreads");
+        if (closeBtn) {
+          closeBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          closeBtn.textContent = "‹";
+          closeBtn.title = "Collapse agent list";
+        }
+        if (openBtn) {
+          openBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        }
+      }
+      function toggleThreadsCollapsed() {
+        const next = !document.body.classList.contains("threads-collapsed");
+        applyThreadsCollapsed(next);
+        try {
+          localStorage.setItem(THREADS_COLLAPSED_KEY, next ? "1" : "0");
+        } catch (_err) {}
+      }
+      function initThreadsCollapse() {
+        let collapsed = EMBED_MODE;
+        try {
+          const stored = localStorage.getItem(THREADS_COLLAPSED_KEY);
+          if (stored === "1") {
+            collapsed = true;
+          } else if (stored === "0") {
+            collapsed = false;
+          }
+        } catch (_err) {}
+        applyThreadsCollapsed(collapsed);
+        document.getElementById("btnToggleThreads")?.addEventListener("click", toggleThreadsCollapsed);
+        document.getElementById("btnOpenThreads")?.addEventListener("click", toggleThreadsCollapsed);
       }
       async function loadSelectableModels() {
         const select = document.getElementById("agentModelPref");
@@ -969,6 +1133,13 @@ ${clientApiJavaScript()}
       let agentStartAbort = null;
       let agentStartInFlight = false;
       let agentSessionRunning = false;
+      let draftThread = false;
+      const runningSessionIds = new Set();
+      let runningCount = 0;
+      let maxConcurrent = 3;
+      let threadPollTimer = null;
+      let overlapPollTimer = null;
+      let lastResolverPrompt = "";
       const ALLOWED_ATTACH_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
       const MAX_ATTACHMENTS_PER_SEND = 8;
       const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -984,8 +1155,21 @@ ${clientApiJavaScript()}
         "Double-checking edge cases…",
         "Almost there — still working…",
       ];
+      function selectedIsRunning() {
+        return Boolean(activeSessionId && runningSessionIds.has(activeSessionId));
+      }
+      function composerLocked() {
+        return agentStartInFlight || selectedIsRunning();
+      }
       function agentNavLockActive() {
-        return agentStartInFlight || agentSessionRunning;
+        return composerLocked();
+      }
+      function updateRunningCountChip() {
+        const el = document.getElementById("agentRunningCount");
+        if (!el) {
+          return;
+        }
+        el.textContent = runningCount > 0 ? runningCount + " running / " + maxConcurrent : "";
       }
       function onAgentBeforeUnload(e) {
         if (!agentNavLockActive()) {
@@ -1041,6 +1225,7 @@ ${clientApiJavaScript()}
         }
       }
       let cachedSessionRows = [];
+      let lastSessionsCwd = "";
       let agentMetrics = { startedAtMs: 0, promptChars: 0, outputChars: 0, chunkCount: 0 };
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
@@ -1332,22 +1517,54 @@ ${clientApiJavaScript()}
           }),
         );
         select.innerHTML = options.join("");
+        if (draftThread) {
+          select.value = "";
+          selectedResumeSessionId = null;
+          return;
+        }
         const nextValue = cachedSessionRows.some((s) => s.id === prev) ? prev : "";
         select.value = nextValue;
-        selectedResumeSessionId = nextValue || null;
+        if (nextValue) {
+          selectedResumeSessionId = nextValue;
+        }
       }
       function updateArgsResume(id) {
         void id;
       }
       function startFreshSession() {
+        draftThread = true;
         selectedResumeSessionId = null;
         lastCursorSessionId = "";
+        activeSessionId = null;
+        agentSessionRunning = false;
+        closeStream();
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
         const select = document.getElementById("agentSessionSelect");
         if (select) {
           select.value = "";
         }
+        const continueBox = document.getElementById("continueMode");
+        if (continueBox) {
+          continueBox.checked = false;
+        }
         updateArgsResume(null);
-        appendChat("system", "Switched to new session mode.");
+        clearChat();
+        thinkingEvents = [];
+        lastTraceAtMs = Date.now();
+        liveSubagentMap = {};
+        renderSubagentsPanel();
+        const thinkingBlock = document.getElementById("agentThinking");
+        if (thinkingBlock) {
+          thinkingBlock.textContent = "";
+        }
+        document.getElementById("agentStatusBadge").textContent = "idle";
+        document.getElementById("agentSessionInfo").textContent = "New agent thread.";
+        appendChat("system", "New agent thread. Run starts a separate cursor-agent process; other threads keep going.");
+        applyAgentRunUi();
+        renderThreadList(cachedSessionRows);
       }
       function traceNow() {
         return new Date().toTimeString().slice(0, 8);
@@ -1360,7 +1577,7 @@ ${clientApiJavaScript()}
           return;
         }
         try {
-          window.parent.postMessage({ type: "winnow-agent-session", sessionId: sessionId }, "*");
+          window.parent.postMessage({ type: "winnow-agent-session", sessionId: sessionId, runningCount: runningCount }, "*");
         } catch (_e) {}
       }
       function pushTrace(line) {
@@ -1448,12 +1665,16 @@ ${clientApiJavaScript()}
           playSound(s.status === 'done' ? 'success' : 'error');
         }
         if (s.status !== "running") {
-          agentSessionRunning = false;
+          runningSessionIds.delete(s.id);
+          agentSessionRunning = selectedIsRunning();
           applyAgentRunUi();
         } else {
-          agentSessionRunning = true;
+          runningSessionIds.add(s.id);
+          agentSessionRunning = selectedIsRunning();
           applyAgentRunUi();
         }
+        updateRunningCountChip();
+        renderThreadList(cachedSessionRows);
       }
       function backfillConversationEvents(events) {
         if (!Array.isArray(events)) {
@@ -1491,9 +1712,15 @@ ${clientApiJavaScript()}
             (data.exitCode !== undefined ? " exit=" + data.exitCode : "");
           document.getElementById("agentStatusBadge").textContent = data.status || "running";
           const st = data.status || "running";
-          agentSessionRunning = st === "running";
+          if (st === "running") {
+            runningSessionIds.add(sessionId);
+          } else {
+            runningSessionIds.delete(sessionId);
+          }
+          agentSessionRunning = selectedIsRunning();
           applyAgentRunUi();
           refreshMetrics();
+          renderThreadList(cachedSessionRows);
         });
         streamSource.addEventListener("done", () => {
           pushTrace("stream completed");
@@ -1535,7 +1762,8 @@ ${clientApiJavaScript()}
         banner.style.minHeight = px + "px";
       }
       function applyAgentRunUi() {
-        const locked = agentStartInFlight || agentSessionRunning;
+        agentSessionRunning = selectedIsRunning();
+        const locked = composerLocked();
         document.querySelectorAll("[data-agent-run]").forEach((b) => {
           b.disabled = locked;
           b.textContent = locked ? "Running" : "Run";
@@ -1577,7 +1805,7 @@ ${clientApiJavaScript()}
           agentStartAbort.abort();
           return;
         }
-        if (!agentSessionRunning || !activeSessionId) {
+        if (!selectedIsRunning() || !activeSessionId) {
           return;
         }
         const cancelBtn = document.getElementById("btnAgentRunCancel");
@@ -1712,7 +1940,8 @@ ${clientApiJavaScript()}
         const continueMode = document.getElementById("continueMode").checked;
         const select = document.getElementById("agentSessionSelect");
         const pickedSession = (select?.value || selectedResumeSessionId || "").trim();
-        const localSessionId = continueMode ? pickedSession || selectedResumeSessionId || activeSessionId || "" : "";
+        const continueThis = !draftThread && (continueMode || Boolean(lastCursorSessionId || (isCursorChatId(pickedSession))));
+        const localSessionId = continueThis ? pickedSession || selectedResumeSessionId || activeSessionId || "" : "";
         const baseArgs = (document.getElementById("agentArgs").value || "").trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\\s)--resume\\s+\\S+/g, "").trim();
         const payload = {
@@ -1723,7 +1952,7 @@ ${clientApiJavaScript()}
           graphSeed: document.getElementById("graphSeedMode").checked,
           planId: document.getElementById("agentPlanSelect")?.value || undefined,
           sessionId: localSessionId || undefined,
-          cursorSessionId: continueMode
+          cursorSessionId: continueThis
             ? lastCursorSessionId || (isCursorChatId(localSessionId) ? localSessionId : undefined)
             : undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
@@ -1741,6 +1970,7 @@ ${clientApiJavaScript()}
             signal: agentStartAbort.signal,
           });
           if (res && res.ok === true) {
+            runningSessionIds.add(res.sessionId);
             agentSessionRunning = true;
           }
         } catch (err) {
@@ -1763,11 +1993,13 @@ ${clientApiJavaScript()}
           return;
         }
         activeSessionId = res.sessionId;
+        draftThread = false;
+        runningSessionIds.add(res.sessionId);
         rememberCursorSessionId(res.sessionId, res.cursorSessionId);
         notifyParentAgentSession(activeSessionId);
         clearPrompt();
         clearAttachments();
-        if (continueMode) {
+        if (continueThis) {
           selectedResumeSessionId = activeSessionId;
         } else {
           clearChat();
@@ -1792,6 +2024,8 @@ ${clientApiJavaScript()}
         }
         attachStream(activeSessionId);
         pollAgent();
+        applyAgentRunUi();
+        renderThreadList(cachedSessionRows);
         setTimeout(refreshSessions, 500);
       }
       function appendPrompt(text) {
@@ -1810,37 +2044,155 @@ ${clientApiJavaScript()}
       async function refreshSessions() {
         const data = await apiJson("/api/sessions?limit=25");
         await refreshAgentCwdBanner();
+        if (typeof data.runningCount === "number") {
+          runningCount = data.runningCount;
+        }
+        if (typeof data.maxConcurrent === "number") {
+          maxConcurrent = data.maxConcurrent;
+        }
+        lastSessionsCwd = data.cwd || "";
+        updateRunningCountChip();
         const dirEl = document.getElementById("sessionDirInfo");
         if (dirEl) {
           dirEl.textContent = "dir: " + (data.dir || "(unknown)");
         }
         updateResumeSelect(data.sessions || []);
-        const rows = (data.sessions || [])
-          .map(
-            (s, idx) =>
-              '<button type="button" class="entry sync-session" data-session-id="' +
-              s.id +
-              '"' +
-              (idx === 0 ? ' style="border:1px solid var(--accent)"' : "") +
-              ">" +
-              "[" +
-              formatLocalDateTime(s.updatedAt || "") +
-              "] " +
-              s.id.slice(0, 8) +
-              "  " +
-              (s.preview || "") +
-              "</button>",
-          )
-          .join("");
+        renderThreadList(data.sessions || []);
+      }
+      let lastThreadRenderKey = "";
+      function threadListRenderKey(rows) {
+        const pinned = readJsonArray(PINNED_THREADS_KEY).join(",");
+        const closed = readJsonArray(CLOSED_THREADS_KEY).join(",");
+        const running = [...runningSessionIds].sort().join(",");
+        const selected = draftThread ? "draft" : String(selectedResumeSessionId || activeSessionId || "");
+        const rowKey = (rows || [])
+          .map((s) => String(s.id || "") + ":" + String(s.status || "") + ":" + String(s.updatedAt || "") + ":" + String(s.projectRoot || ""))
+          .join(";");
+        return [pinned, closed, running, selected, lastSessionsCwd, rowKey].join("|");
+      }
+      function renderThreadList(rows, force) {
         const listEl = document.getElementById("sessionList");
-        if (listEl) {
-          listEl.innerHTML = rows || '<span class="muted small" style="padding:8px;display:block">No sessions yet.</span>';
+        if (!listEl) {
+          return;
         }
-        document.querySelectorAll(".sync-session").forEach((el) => {
-          el.onclick = () => loadSession(el.getAttribute("data-session-id"));
+        const key = threadListRenderKey(rows);
+        if (!force && key === lastThreadRenderKey) {
+          return;
+        }
+        lastThreadRenderKey = key;
+        const pinned = new Set(readJsonArray(PINNED_THREADS_KEY));
+        const closed = new Set(readJsonArray(CLOSED_THREADS_KEY));
+        const visible = (rows || []).filter((s) => s && s.id && !closed.has(s.id));
+        visible.sort((a, b) => {
+          const ap = pinned.has(a.id) ? 1 : 0;
+          const bp = pinned.has(b.id) ? 1 : 0;
+          if (ap !== bp) {
+            return bp - ap;
+          }
+          const ar = runningSessionIds.has(a.id) ? 1 : 0;
+          const br = runningSessionIds.has(b.id) ? 1 : 0;
+          if (ar !== br) {
+            return br - ar;
+          }
+          return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
         });
-        if (selectedResumeSessionId && !agentSessionRunning) {
-          await loadSession(selectedResumeSessionId);
+        listEl.textContent = "";
+        if (draftThread) {
+          const draft = document.createElement("button");
+          draft.type = "button";
+          draft.className = "thread-row is-draft is-active";
+          draft.textContent = "New agent (not started)";
+          listEl.appendChild(draft);
+        }
+        if (!visible.length && !draftThread) {
+          const empty = document.createElement("span");
+          empty.className = "muted small";
+          empty.style.padding = "8px";
+          empty.style.display = "block";
+          empty.textContent = "No agents yet.";
+          listEl.appendChild(empty);
+          return;
+        }
+        visible.forEach((s) => {
+          const running = runningSessionIds.has(s.id) || s.status === "running";
+          const row = document.createElement("div");
+          row.className = "thread-row" + (!draftThread && (s.id === selectedResumeSessionId || s.id === activeSessionId) ? " is-active" : "");
+          row.setAttribute("data-session-id", s.id);
+          const dot = document.createElement("span");
+          dot.className = "thread-dot" + (running ? " is-running" : s.status === "error" ? " is-error" : "");
+          const main = document.createElement("button");
+          main.type = "button";
+          main.className = "thread-main";
+          main.style.background = "transparent";
+          main.style.border = "0";
+          main.style.padding = "0";
+          main.style.textAlign = "left";
+          main.style.color = "inherit";
+          const title = document.createElement("span");
+          title.className = "thread-title";
+          title.textContent = (s.preview || s.id || "Untitled").replace(/\\s+/g, " ").slice(0, 72);
+          const meta = document.createElement("span");
+          meta.className = "thread-meta";
+          const otherFolder = Boolean(s.projectRoot && lastSessionsCwd && s.projectRoot !== lastSessionsCwd);
+          meta.textContent = (running ? "running · " : "") + (otherFolder ? "other folder · " : "") + formatRelativeTime(s.updatedAt || s.startedAt || "");
+          main.appendChild(title);
+          main.appendChild(meta);
+          main.onclick = () => { void loadSession(s.id); };
+          const actions = document.createElement("div");
+          actions.className = "thread-actions";
+          const pinBtn = document.createElement("button");
+          pinBtn.type = "button";
+          pinBtn.className = "secondary";
+          pinBtn.title = "Pin";
+          pinBtn.textContent = pinned.has(s.id) ? "★" : "☆";
+          pinBtn.onclick = (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            togglePinnedThread(s.id);
+          };
+          const closeBtn = document.createElement("button");
+          closeBtn.type = "button";
+          closeBtn.className = "secondary";
+          closeBtn.title = running ? "Stop and close" : "Close";
+          closeBtn.textContent = "×";
+          closeBtn.onclick = (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            void closeThread(s.id, running);
+          };
+          actions.appendChild(pinBtn);
+          actions.appendChild(closeBtn);
+          row.appendChild(dot);
+          row.appendChild(main);
+          row.appendChild(actions);
+          listEl.appendChild(row);
+        });
+      }
+      function togglePinnedThread(id) {
+        const pinned = readJsonArray(PINNED_THREADS_KEY);
+        const next = pinned.includes(id) ? pinned.filter((x) => x !== id) : [id].concat(pinned).slice(0, 40);
+        writeJsonArray(PINNED_THREADS_KEY, next);
+        renderThreadList(cachedSessionRows);
+      }
+      async function closeThread(id, running) {
+        if (running) {
+          const ok = window.confirm("This agent is still running. Stop it and close the thread?");
+          if (!ok) {
+            return;
+          }
+          try {
+            await apiJson("/api/agent/" + id + "/stop", { method: "POST" });
+          } catch (_err) {}
+          runningSessionIds.delete(id);
+        }
+        const closed = readJsonArray(CLOSED_THREADS_KEY);
+        if (!closed.includes(id)) {
+          writeJsonArray(CLOSED_THREADS_KEY, [id].concat(closed).slice(0, 200));
+        }
+        if (activeSessionId === id || selectedResumeSessionId === id) {
+          startFreshSession();
+        } else {
+          renderThreadList(cachedSessionRows);
         }
       }
       async function loadSession(id) {
@@ -1851,6 +2203,7 @@ ${clientApiJavaScript()}
         if (!data || data.error || !Array.isArray(data.messages)) {
           return;
         }
+        draftThread = false;
         selectedSyncedSession = id;
         selectedResumeSessionId = id;
         const select = document.getElementById("agentSessionSelect");
@@ -1859,11 +2212,17 @@ ${clientApiJavaScript()}
         }
         selectedSyncedMessages = data.messages;
         rememberCursorSessionId(id, data.cursorSessionId);
-        if (agentSessionRunning) {
-          return;
+        const continueBox = document.getElementById("continueMode");
+        if (continueBox) {
+          continueBox.checked = Boolean(lastCursorSessionId || isCursorChatId(id) || data.cursorSessionId);
         }
         activeSessionId = id;
         updateArgsResume(id);
+        closeStream();
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
         loadHistoryIntoPanels(selectedSyncedMessages);
         const preview = selectedSyncedMessages
           .slice(-8)
@@ -1873,10 +2232,95 @@ ${clientApiJavaScript()}
         if (prevEl) {
           prevEl.textContent = preview || "No message content.";
         }
-        document.querySelectorAll(".sync-session").forEach((el) => {
-          el.style.border =
-            el.getAttribute("data-session-id") === id ? "1px solid var(--accent)" : "1px solid transparent";
-        });
+        let live = null;
+        try {
+          live = await apiJson("/api/agent/" + id);
+        } catch (_e) {}
+        if (live && live.ok && live.session && live.session.status === "running") {
+          runningSessionIds.add(id);
+          attachStream(id);
+        } else if (runningSessionIds.has(id)) {
+          attachStream(id);
+        }
+        document.getElementById("agentStatusBadge").textContent = runningSessionIds.has(id) ? "running" : (live && live.session && live.session.status) || "idle";
+        document.getElementById("agentSessionInfo").textContent = "session=" + id;
+        applyAgentRunUi();
+        notifyParentAgentSession(id);
+        renderThreadList(cachedSessionRows);
+      }
+      async function pollRunningThreads() {
+        if (agentStartInFlight) {
+          return;
+        }
+        try {
+          const data = await apiJson("/api/agent/running");
+          if (!data || data.ok === false) {
+            return;
+          }
+          const ids = new Set((data.sessions || []).map((s) => String(s.id || "")).filter(Boolean));
+          runningSessionIds.clear();
+          ids.forEach((id) => runningSessionIds.add(id));
+          runningCount = typeof data.runningCount === "number" ? data.runningCount : ids.size;
+          if (typeof data.maxConcurrent === "number") {
+            maxConcurrent = data.maxConcurrent;
+          }
+          updateRunningCountChip();
+          renderThreadList(cachedSessionRows);
+          applyAgentRunUi();
+          if (selectedIsRunning() && activeSessionId && !streamSource) {
+            attachStream(activeSessionId);
+          }
+        } catch (_e) {}
+      }
+      async function pollOverlaps() {
+        const banner = document.getElementById("agentOverlapBanner");
+        const text = document.getElementById("agentOverlapText");
+        if (runningSessionIds.size < 2) {
+          lastResolverPrompt = "";
+          if (banner) {
+            banner.hidden = true;
+          }
+          return;
+        }
+        try {
+          const data = await apiJson("/api/agent/overlaps");
+          if (!data || data.ok === false) {
+            return;
+          }
+          const overlaps = Array.isArray(data.overlaps) ? data.overlaps : [];
+          if (!overlaps.length) {
+            lastResolverPrompt = "";
+            if (banner) {
+              banner.hidden = true;
+            }
+            return;
+          }
+          if (text) {
+            text.textContent =
+              overlaps.length +
+              " overlapping file" +
+              (overlaps.length === 1 ? "" : "s") +
+              ": " +
+              overlaps.map((row) => row.path).slice(0, 6).join(", ");
+          }
+          if (banner) {
+            banner.hidden = false;
+          }
+          lastResolverPrompt = data.resolverPrompt || "";
+        } catch (_e) {}
+      }
+      async function startResolverAgent() {
+        const prompt = lastResolverPrompt || "";
+        if (!prompt.trim()) {
+          appendChat("system", "No overlap prompt yet. Wait for both agents to touch the same files.");
+          return;
+        }
+        startFreshSession();
+        const area = document.getElementById("agentPrompt");
+        if (area) {
+          area.value = prompt;
+        }
+        await startAgentRun();
       }
       function continueSelectedSession() {
         if (!selectedSyncedSession) {
@@ -2042,15 +2486,25 @@ ${clientApiJavaScript()}
       }
       document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
       window.addEventListener("resize", syncAgentLoadingHeight);
+      if (EMBED_MODE) {
+        document.body.classList.add("embed");
+      }
       initAgentControlsCollapse();
+      initThreadsCollapse();
       bootstrapCursorAndModels();
       document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
+      document.getElementById("btnStartResolver")?.addEventListener("click", () => { void startResolverAgent(); });
       updateExecutionModeUi();
       refreshSessions();
       refreshPlans();
       setInterval(refreshMetrics, 1000);
-      if (EMBED_MODE) {
-        document.body.classList.add("embed");
+      void pollRunningThreads();
+      void pollOverlaps();
+      if (!threadPollTimer) {
+        threadPollTimer = setInterval(pollRunningThreads, 2000);
+      }
+      if (!overlapPollTimer) {
+        overlapPollTimer = setInterval(pollOverlaps, 4000);
       }
       syncAgentLoadingHeight();
     </script>

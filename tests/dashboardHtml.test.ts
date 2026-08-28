@@ -69,4 +69,13 @@ describe("buildDashboardPageHtml", () => {
     expect(refreshFn).toContain("apiJson('/api/state')");
     expect(refreshFn).toContain("apiJson('/api/logs?limit=60')");
   });
+
+  it("shows a centered running-agent count in the topbar", () => {
+    const html = buildDashboardPageHtml(undefined);
+    expect(html).toContain('id="toolbarAgentCount"');
+    expect(html).toContain("pollToolbarAgentCount");
+    expect(html).toContain("/api/agent/running");
+    expect(html).toContain("1 agent running");
+    expect(html).toContain("Agents keep working after you change the working directory.");
+  });
 });

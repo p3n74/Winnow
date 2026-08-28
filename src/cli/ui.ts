@@ -108,12 +108,23 @@ import {
 import { sendJson, readJsonBody, sendHandlerError } from "./ui/httpUtil.js";
 import { agentStartRequestSchema, graphCorrectionsBodySchema, planCreateBodySchema } from "./ui/apiSchemas.js";
 import {
+  AgentStartBlockedError,
+  MAX_CONCURRENT_AGENT_RUNS,
   MAX_STDOUT_LINE_BUFFER,
+  assertAgentStartAllowed,
   capSessionBuffers,
+  countRunningSessions,
   enqueueExclusiveWrite,
+  ensureHeadlessWorkspaceArgs,
   evictIdleSessions,
+  listRunningSessions,
   toSessionClientDto,
 } from "./ui/sessionDto.js";
+import {
+  buildResolverPrompt,
+  extractWrittenPathFromToolEvent,
+  findPathOverlaps,
+} from "./ui/agentOverlap.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
 import { pickActiveAgentSession } from "./ui/agentTrace.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
@@ -251,6 +262,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     const previousRoot = uiWorkspace.dir;
     if (previousRoot !== real) {
+      // Managed shell processes are project-scoped and are stopped. Live cursor-agent
+      // children keep running in the cwd they were spawned with.
       try {
         await processManager.stopAll();
       } catch (error) {
@@ -626,16 +639,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return { path: absolute, content };
   }
 
-  function localSessionDir(): string {
-    return join(uiWorkspace.dir, ".winnow", "sessions");
+  function localSessionDir(projectRoot = uiWorkspace.dir): string {
+    return join(projectRoot, ".winnow", "sessions");
   }
 
-  function localSessionIndexPath(): string {
-    return join(localSessionDir(), "index.json");
+  function localSessionIndexPath(projectRoot = uiWorkspace.dir): string {
+    return join(localSessionDir(projectRoot), "index.json");
   }
 
-  function localSessionRecordPath(id: string): string {
-    return join(localSessionDir(), `${id}.json`);
+  function localSessionRecordPath(id: string, projectRoot = uiWorkspace.dir): string {
+    return join(localSessionDir(projectRoot), `${id}.json`);
   }
 
   async function readLocalSessionIndex(): Promise<LocalSessionIndexEntry[]> {
@@ -709,22 +722,28 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
    */
   let localSessionIndexWriteChain: Promise<void> = Promise.resolve();
 
-  async function upsertLocalSessionIndex(entry: LocalSessionIndexEntry): Promise<void> {
+  async function upsertLocalSessionIndex(
+    entry: LocalSessionIndexEntry,
+    projectRoot = uiWorkspace.dir,
+  ): Promise<void> {
+    const root = projectRoot || uiWorkspace.dir;
     const run = async (): Promise<void> => {
-      let current = await readLocalSessionIndex();
-      if (current.length < (await countSessionRecordJsonFiles())) {
-        current = await mergeSessionRecordsMissingFromIndex(current);
+      const dir = localSessionDir(root);
+      const indexPath = localSessionIndexPath(root);
+      let current: LocalSessionIndexEntry[] = [];
+      try {
+        const parsed = JSON.parse(await readFile(indexPath, "utf8")) as LocalSessionIndexEntry[];
+        current = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        current = [];
       }
       const next = [entry, ...current.filter((item) => item.id !== entry.id)]
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
         .slice(0, 500);
-      await writeLocalSessionIndex(next);
+      await mkdir(dir, { recursive: true });
+      await writeFile(indexPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
     };
-    const job = localSessionIndexWriteChain.then(run, run);
-    localSessionIndexWriteChain = job.catch(() => {
-      /* keep queue alive; void callers must not strand later upserts */
-    });
-    await job.catch((err) => {
+    await enqueueExclusiveWrite(sessionRecordWriteChains, `index:${root}`, run).catch((err) => {
       process.stderr.write(`[winnow-ui] session index update failed: ${(err as Error).message}\n`);
     });
   }
@@ -732,8 +751,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const sessionRecordWriteChains = new Map<string, Promise<void>>();
 
   async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
-    await mkdir(localSessionDir(), { recursive: true });
-    await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record)}\n`, "utf8");
+    const dir = localSessionDir(record.projectRoot || uiWorkspace.dir);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${record.id}.json`), `${JSON.stringify(record)}\n`, "utf8");
   }
 
   async function repairLocalSessionIndexIfStale(): Promise<void> {
@@ -761,13 +781,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       updatedAt: entry.updatedAt,
       preview: entry.preview,
       cursorSessionId: entry.cursorSessionId,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      source: entry.source,
     }));
   }
 
   async function readLocalSession(
     id: string,
+    projectRoot = uiWorkspace.dir,
   ): Promise<{ id: string; messages: SessionMessage[]; cursorSessionId?: string }> {
-    const content = await readFile(localSessionRecordPath(id), "utf8");
+    const content = await readFile(localSessionRecordPath(id, projectRoot), "utf8");
     const record = JSON.parse(content) as LocalSessionRecord;
     if (Array.isArray(record.events) && record.events.length > 0) {
       const messages = record.events.map((event) => ({
@@ -794,6 +818,45 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const streamClients = new Map<string, Set<SessionStreamClient>>();
   /** Live cursor-agent child processes keyed by session id (for cancel / stop). */
   const agentRunChildProcesses = new Map<string, ChildProcess>();
+  /** Write-ish tool paths touched by each in-memory session (collision detection). */
+  const sessionWrittenPaths = new Map<string, Set<string>>();
+
+  const firstUserPreview = (session: AgentSession): string => {
+    const user = (session.events ?? []).find((event) => event.kind === "user");
+    return (user?.content || session.output || "").replace(/\s+/g, " ").slice(0, 160);
+  };
+
+  const runningOverlapPayload = async (): Promise<{
+    overlaps: ReturnType<typeof findPathOverlaps>;
+    sessions: Array<{ id: string; preview: string; writtenPaths: string[] }>;
+    gitStatus: string;
+    gitDiffExcerpt: string;
+    resolverPrompt: string;
+  }> => {
+    const running = listRunningSessions(sessions.values());
+    const bySession = new Map<string, Iterable<string>>();
+    const summaries = running.map((session) => {
+      const writtenPaths = [...(sessionWrittenPaths.get(session.id) ?? [])].sort();
+      bySession.set(session.id, writtenPaths);
+      return { id: session.id, preview: firstUserPreview(session), writtenPaths };
+    });
+    const overlaps = findPathOverlaps(bySession);
+    const workspace = await getWorkspaceChanges();
+    const gitStatus = workspace.status || "";
+    const gitDiffExcerpt = (workspace.diff || "").slice(0, 12000);
+    return {
+      overlaps,
+      sessions: summaries,
+      gitStatus,
+      gitDiffExcerpt,
+      resolverPrompt: buildResolverPrompt({
+        overlaps,
+        sessions: summaries,
+        gitStatus,
+        gitDiffExcerpt,
+      }),
+    };
+  };
   const nodeMajor = Number(process.versions.node.split(".")[0] || "0");
   const supportsPty = nodeMajor >= 20;
 
@@ -989,6 +1052,32 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     streamClients.delete(sessionId);
   };
 
+  const notifyRunningAgentsOfCwdChange = (previousDir: string, nextDir: string) => {
+    if (previousDir === nextDir) {
+      return;
+    }
+    const ts = new Date().toISOString();
+    for (const session of sessions.values()) {
+      if (session.status !== "running") {
+        continue;
+      }
+      const home = session.projectRoot || previousDir;
+      const content =
+        home === nextDir
+          ? `Winnow working directory is now ${nextDir}.`
+          : `Winnow working directory is now ${nextDir}. This agent keeps running in ${home}.`;
+      const event = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        ts,
+        kind: "status" as const,
+        content,
+      };
+      session.events.push(event);
+      capSessionBuffers(session);
+      pushStreamEvent(session.id, "timeline", { sessionId: session.id, event });
+    }
+  };
+
   const forceCursorNativeConfig = (input: WinnowConfig): WinnowConfig => ({
     ...input,
     inputMode: "off",
@@ -1050,8 +1139,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const value = selected;
     return [...stripModelArgs(args), "--model", value];
   };
-  const ensureExecutionArgs = (args: string[], autonomyEnabled: boolean, sessionId?: string): string[] => {
-    const next = [...args];
+  const ensureExecutionArgs = (
+    args: string[],
+    autonomyEnabled: boolean,
+    sessionId?: string,
+    workspaceDir?: string,
+  ): string[] => {
+    let next = [...args];
     if (sessionId) {
       if (!next.includes("--resume")) {
         next.push("--resume", sessionId);
@@ -1069,6 +1163,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     if (!next.includes("--stream-partial-output")) {
       next.push("--stream-partial-output");
+    }
+    if (workspaceDir) {
+      next = ensureHeadlessWorkspaceArgs(next, workspaceDir);
     }
     if (!autonomyEnabled) {
       return next;
@@ -1099,6 +1196,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const autonomyEnabled = payload.autonomyMode !== false;
     const requestedResumeId = (payload.sessionId || "").trim();
     const existing = sessions.get(id);
+    assertAgentStartAllowed(sessions, id);
 
     let diskEvents: AgentEvent[] = [];
     let diskOutput = "";
@@ -1119,6 +1217,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         // New session or failed to read
       }
     }
+    const spawnCwd = existing?.projectRoot || uiWorkspace.dir;
     const storedCursorSessionId = existing?.cursorSessionId || diskCursorSessionId || "";
     let { resumeId: resumeSessionId, droppedArgIds: droppedResumeIds } = resolveCursorResumeId({
       payloadSessionId: requestedResumeId,
@@ -1133,7 +1232,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     const args =
       executionMode === "cursor"
-        ? ensureExecutionArgs(ensureModelArg(baseArgs, payload.modelPreference ?? "default"), autonomyEnabled, resumeSessionId)
+        ? ensureExecutionArgs(
+            ensureModelArg(baseArgs, payload.modelPreference ?? "default"),
+            autonomyEnabled,
+            resumeSessionId,
+            spawnCwd,
+          )
         : [];
     let session: AgentSession;
 
@@ -1149,6 +1253,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         events: existing.events ?? [],
         liveSubagents: [],
         cursorSessionId: existing.cursorSessionId || storedCursorSessionId || undefined,
+        projectRoot: spawnCwd,
       };
     } else {
       session = {
@@ -1162,10 +1267,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         events: diskEvents,
         liveSubagents: [],
         cursorSessionId: storedCursorSessionId || undefined,
+        projectRoot: spawnCwd,
       };
     }
 
     sessions.set(id, session);
+    if (!sessionWrittenPaths.has(id)) {
+      sessionWrittenPaths.set(id, new Set());
+    }
     const startedAt = session.startedAt;
     const modelPreference = payload.modelPreference ?? "default";
     const attachmentIds = Array.isArray(payload.attachmentIds)
@@ -1203,7 +1312,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         enqueueExclusiveWrite(sessionRecordWriteChains, id, () =>
           writeLocalSessionRecord({
             id,
-            projectRoot: uiWorkspace.dir,
+            projectRoot: spawnCwd,
             startedAt,
             endedAt: session.endedAt,
             status: session.status,
@@ -1277,8 +1386,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         preview: prompt.slice(0, 160),
         source: "winnow-local",
         cursorSessionId: session.cursorSessionId,
-      });
+      }, spawnCwd);
       closeStreamClients(id);
+      sessionWrittenPaths.delete(id);
       sessions.delete(id);
       throw new DOMException("Start cancelled", "AbortError");
     };
@@ -1307,7 +1417,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       pushEvent("status", `Resuming Cursor chat ${resumeSessionId} (native thread, no local history dump).`);
     }
 
-    ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
+    ensureCursorWorkspaceLayoutSync(spawnCwd);
     void persistRecord(true);
     void upsertLocalSessionIndex({
       id,
@@ -1317,12 +1427,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       preview: prompt.slice(0, 160),
       source: "winnow-local",
       cursorSessionId: session.cursorSessionId,
-    });
+    }, spawnCwd);
 
     upsertRunStart({
       id,
-      projectPath: uiWorkspace.dir,
-      projectName: basename(uiWorkspace.dir),
+      projectPath: spawnCwd,
+      projectName: basename(spawnCwd),
       source: executionMode === "external" ? "external-provider" : "cursor-agent",
       modelPref: modelPreference,
       startedAt,
@@ -1360,7 +1470,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
           cursorSessionId: session.cursorSessionId,
-        });
+        }, spawnCwd);
         pushDone();
       };
       try {
@@ -1445,7 +1555,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
           cursorSessionId: session.cursorSessionId,
-        });
+        }, spawnCwd);
         pushDone();
       } catch (error) {
         completeError(error instanceof Error ? error.message : String(error));
@@ -1459,7 +1569,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     );
     const child = spawn(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      cwd: uiWorkspace.dir,
+      cwd: spawnCwd,
       env: process.env,
     });
     agentRunChildProcesses.set(id, child);
@@ -1558,6 +1668,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             const prefix = data.subtype === "started" ? "▶" : "✓";
             pushEvent("tool", `${prefix} ${action} ${target}`.trim());
 
+            const writtenPath = extractWrittenPathFromToolEvent(data);
+            if (writtenPath) {
+              const bucket = sessionWrittenPaths.get(id) ?? new Set<string>();
+              bucket.add(writtenPath);
+              sessionWrittenPaths.set(id, bucket);
+            }
+
             if (data.subtype === "completed") {
               session.output += "\n";
             }
@@ -1649,7 +1766,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           preview: (session.output || prompt).slice(0, 160),
           source: "winnow-local",
           cursorSessionId: session.cursorSessionId,
-        });
+        }, spawnCwd);
         pushStreamEvent(id, "status", {
           status: session.status,
           exitCode: session.exitCode,
@@ -1657,6 +1774,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         });
         pushStreamEvent(id, "done", { sessionId: id });
         closeStreamClients(id);
+        sessionWrittenPaths.delete(id);
         evictIdleSessions(sessions);
       })();
     });
@@ -2613,15 +2731,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/workspace/cwd" && req.method === "POST") {
       try {
         const payload = (await readJsonBody(req)) as { path?: string; reset?: boolean };
+        const previousDir = uiWorkspace.dir;
         if (payload.reset) {
           const next = await applyWorkspaceDir(winnowLaunchRoot, true);
           await registerProject(next);
           void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
+          notifyRunningAgentsOfCwdChange(previousDir, next);
           sendJson(res, 200, {
             ok: true,
             cwd: next,
             transcriptDir: cursorTranscriptDirForUi(),
             launchRoot: winnowLaunchRoot,
+            runningCount: countRunningSessions(sessions.values()),
           });
           return;
         }
@@ -2634,11 +2755,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const next = await applyWorkspaceDir(candidate, true);
         await registerProject(next);
         void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
+        notifyRunningAgentsOfCwdChange(previousDir, next);
         sendJson(res, 200, {
           ok: true,
           cwd: next,
           transcriptDir: cursorTranscriptDirForUi(),
           launchRoot: winnowLaunchRoot,
+          runningCount: countRunningSessions(sessions.values()),
         });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
@@ -3037,18 +3160,59 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             byId.set(s.id, s);
           }
         }
+        for (const live of listRunningSessions(sessions.values())) {
+          const existingRow = byId.get(live.id);
+          const projectRoot = live.projectRoot || uiWorkspace.dir;
+          if (existingRow) {
+            byId.set(live.id, {
+              ...existingRow,
+              status: "running",
+              startedAt: live.startedAt,
+              projectRoot,
+              cursorSessionId: live.cursorSessionId || existingRow.cursorSessionId,
+            });
+            continue;
+          }
+          byId.set(live.id, {
+            id: live.id,
+            file: localSessionRecordPath(live.id, projectRoot),
+            updatedAt: live.startedAt,
+            preview: firstUserPreview(live),
+            cursorSessionId: live.cursorSessionId,
+            status: "running",
+            startedAt: live.startedAt,
+            source: "winnow-local",
+            projectRoot,
+          });
+        }
         const merged = [...byId.values()]
-          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+          .sort((a, b) => {
+            const ar = a.status === "running" ? 1 : 0;
+            const br = b.status === "running" ? 1 : 0;
+            if (ar !== br) {
+              return br - ar;
+            }
+            return a.updatedAt < b.updatedAt ? 1 : -1;
+          })
           .slice(0, max)
-          .map((s) =>
-            s.cursorSessionId || !isCursorChatSessionId(s.id)
-              ? s
-              : { ...s, cursorSessionId: s.id },
-          );
+          .map((s) => {
+            const live = sessions.get(s.id);
+            const withCursor =
+              s.cursorSessionId || !isCursorChatSessionId(s.id) ? s : { ...s, cursorSessionId: s.id };
+            return {
+              ...withCursor,
+              status: live?.status ?? s.status,
+              startedAt: live?.startedAt ?? s.startedAt,
+              projectRoot: live?.projectRoot ?? s.projectRoot,
+            };
+          });
         sendJson(res, 200, {
           sessions: merged,
           dir: transcriptDirLabel,
           localDir: localSessionDir(),
+          cwd: uiWorkspace.dir,
+          runningCount: countRunningSessions(sessions.values()),
+          maxConcurrent: MAX_CONCURRENT_AGENT_RUNS,
         });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
@@ -3061,10 +3225,32 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const id = url.pathname.replace("/api/sessions/", "").trim();
         const explicitDir = url.searchParams.get("dir") ?? undefined;
         const envTranscripts = Boolean(process.env.WINNOW_AGENT_TRANSCRIPTS_DIR?.trim());
-        let session: { id: string; messages: SessionMessage[]; cursorSessionId?: string };
+        let session: { id: string; messages: SessionMessage[]; cursorSessionId?: string } | undefined;
         try {
           session = await readLocalSession(id);
         } catch {
+          const live = sessions.get(id);
+          if (live?.projectRoot && live.projectRoot !== uiWorkspace.dir) {
+            try {
+              session = await readLocalSession(id, live.projectRoot);
+            } catch {
+              session = undefined;
+            }
+          }
+          if (!session && live) {
+            session = {
+              id,
+              messages: (live.events ?? []).map((event) => ({
+                id: event.id,
+                role: event.kind,
+                content: event.content,
+                timestamp: event.ts,
+              })),
+              cursorSessionId: live.cursorSessionId,
+            };
+          }
+        }
+        if (!session) {
           if (explicitDir) {
             session = await readCursorSession(id, explicitDir);
           } else if (envTranscripts) {
@@ -3136,6 +3322,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         const session = await startAgentSession(payload, { signal: abortFromDisconnect.signal });
         sendJson(res, 200, { ok: true, sessionId: session.id, cursorSessionId: session.cursorSessionId || null });
       } catch (error) {
+        if (error instanceof AgentStartBlockedError) {
+          if (!res.headersSent) {
+            sendJson(res, error.status, { ok: false, error: error.message, code: error.code });
+          }
+          return;
+        }
         const aborted =
           error instanceof DOMException && error.name === "AbortError"
             ? true
@@ -3184,13 +3376,42 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/agent/active" && req.method === "GET") {
       const picked = pickActiveAgentSession(sessions.values());
       if (!picked) {
-        sendJson(res, 200, { ok: true, session: null });
+        sendJson(res, 200, { ok: true, session: null, runningCount: 0, maxConcurrent: MAX_CONCURRENT_AGENT_RUNS });
         return;
       }
       sendJson(res, 200, {
         ok: true,
         session: toSessionClientDto(picked),
+        runningCount: countRunningSessions(sessions.values()),
+        maxConcurrent: MAX_CONCURRENT_AGENT_RUNS,
       });
+      return;
+    }
+
+    if (url.pathname === "/api/agent/running" && req.method === "GET") {
+      const running = listRunningSessions(sessions.values()).map((session) => ({
+        ...toSessionClientDto(session, 20),
+        preview: firstUserPreview(session),
+        writtenPaths: [...(sessionWrittenPaths.get(session.id) ?? [])].sort(),
+        projectRoot: session.projectRoot || uiWorkspace.dir,
+      }));
+      sendJson(res, 200, {
+        ok: true,
+        sessions: running,
+        runningCount: running.length,
+        maxConcurrent: MAX_CONCURRENT_AGENT_RUNS,
+        cwd: uiWorkspace.dir,
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/agent/overlaps" && req.method === "GET") {
+      try {
+        const payload = await runningOverlapPayload();
+        sendJson(res, 200, { ok: true, ...payload });
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 
