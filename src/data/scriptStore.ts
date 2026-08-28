@@ -1,7 +1,7 @@
-import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { LinkedScriptConfig, ScriptKnob, ScriptScanEntry } from "../cli/scriptIndex.js";
+import { openProjectSqlite } from "./projectDb.js";
 
 export type ScriptCatalogRecord = {
   id: string;
@@ -98,21 +98,19 @@ function parseKnobs(raw: string | null | undefined): ScriptKnob[] {
 
 export class ScriptStore {
   private readonly projectRoot: string;
-  private readonly dbPath: string;
-  private db: InstanceType<typeof Database> | null = null;
+  private db: ReturnType<typeof openProjectSqlite> | null = null;
 
   constructor(projectRoot: string) {
     this.projectRoot = resolve(projectRoot);
     const root = join(this.projectRoot, ".winnow");
     mkdirSync(join(root, "scripts"), { recursive: true });
-    this.dbPath = join(root, "winnow.db");
   }
 
   init(): void {
     if (this.db) {
       return;
     }
-    this.db = new Database(this.dbPath);
+    this.db = openProjectSqlite(this.projectRoot);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS script_catalog (
         id TEXT PRIMARY KEY,
@@ -165,7 +163,7 @@ export class ScriptStore {
     addColumn(`ALTER TABLE script_catalog ADD COLUMN linked_configs_json TEXT NOT NULL DEFAULT '[]'`);
   }
 
-  private requireDb(): InstanceType<typeof Database> {
+  private requireDb(): ReturnType<typeof openProjectSqlite> {
     if (!this.db) {
       throw new Error("script store not initialized");
     }

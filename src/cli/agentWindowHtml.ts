@@ -3,6 +3,8 @@
  * (title bar, activity rail, session sidebar, editor stack, bottom composer).
  */
 
+import { clientApiJavaScript } from "./ui/clientApiSnippet.js";
+
 export function buildAgentWindowPageHtml(authToken: string | undefined): string {
   const tokenJson = JSON.stringify(authToken ?? "");
   return `<!doctype html>
@@ -671,13 +673,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const EMBED_MODE = PAGE_PARAMS.get("embed") === "1";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
       const AGENT_CONTROLS_COLLAPSED_KEY = "winnow.agentControlsCollapsed";
-      function withToken(path) {
-        if (!AUTH_TOKEN) {
-          return path;
-        }
-        const glue = path.includes("?") ? "&" : "?";
-        return path + glue + "token=" + encodeURIComponent(AUTH_TOKEN);
-      }
+${clientApiJavaScript()}
       function formatLocalDateTime(value) {
         const dt = new Date(value || "");
         if (!Number.isFinite(dt.getTime())) {
@@ -1421,11 +1417,19 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (!activeSessionId) {
           return;
         }
-        const res = await fetch(withToken("/api/agent/" + activeSessionId)).then((r) => r.json());
+        let res;
+        try {
+          res = await apiJson("/api/agent/" + activeSessionId);
+        } catch (_e) {
+          return;
+        }
         if (!res.ok) {
           return;
         }
         const s = res.session;
+        if (!s) {
+          return;
+        }
         rememberCursorSessionId(s.id, s.cursorSessionId);
         document.getElementById("agentSessionInfo").textContent =
           "session=" + s.id + " status=" + s.status + (s.exitCode !== undefined ? " exit=" + s.exitCode : "");
@@ -1433,7 +1437,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (Array.isArray(s.liveSubagents)) {
           applyLiveSubagents(s.liveSubagents);
         }
-        agentMetrics.outputChars = (s.output || "").length + (s.errorOutput || "").length;
+        const outLen = typeof s.outputChars === "number" ? s.outputChars : (s.output || "").length;
+        const errLen = typeof s.errorOutputChars === "number" ? s.errorOutputChars : (s.errorOutput || "").length;
+        agentMetrics.outputChars = outLen + errLen;
         refreshMetrics();
         backfillConversationEvents(s.events);
         if (s.status !== "running" && pollTimer) {
@@ -1579,10 +1585,9 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           cancelBtn.disabled = true;
         }
         try {
-          const httpRes = await fetch(withToken("/api/agent/" + activeSessionId + "/stop"), {
+          const data = await apiJson("/api/agent/" + activeSessionId + "/stop", {
             method: "POST",
           });
-          const data = await httpRes.json();
           if (data && data.ok && data.stopped) {
             appendChat("system", "Stop requested — winding down the agent process.");
           } else if (data && data.ok) {
@@ -1729,13 +1734,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         applyAgentRunUi();
         let res = null;
         try {
-          const httpRes = await fetch(withToken("/api/agent/start"), {
+          res = await apiJson("/api/agent/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
             signal: agentStartAbort.signal,
           });
-          res = await httpRes.json();
           if (res && res.ok === true) {
             agentSessionRunning = true;
           }
@@ -1784,8 +1788,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         refreshMetrics();
         if (pollTimer) {
           clearInterval(pollTimer);
+          pollTimer = null;
         }
-        pollTimer = setInterval(pollAgent, 1000);
         attachStream(activeSessionId);
         pollAgent();
         setTimeout(refreshSessions, 500);
@@ -1804,7 +1808,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         }
       }
       async function refreshSessions() {
-        const data = await fetch(withToken("/api/sessions?limit=25")).then((r) => r.json());
+        const data = await apiJson("/api/sessions?limit=25");
         await refreshAgentCwdBanner();
         const dirEl = document.getElementById("sessionDirInfo");
         if (dirEl) {
@@ -1843,7 +1847,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         if (!id) {
           return;
         }
-        const data = await fetch(withToken("/api/sessions/" + id)).then((r) => r.json());
+        const data = await apiJson("/api/sessions/" + id);
         if (!data || data.error || !Array.isArray(data.messages)) {
           return;
         }

@@ -1,5 +1,5 @@
 import type { ProjectGraphService } from "./service.js";
-import type { BusinessLogicGraph, BusinessLogicNode, GraphEdge, GraphNode } from "./types.js";
+import type { GraphEdge, GraphNode } from "./types.js";
 
 const PREAMBLE_MAX_CHARS = 4500;
 /** Short tokens add noise and blow up path LIKE matches (e.g. `*.test.ts`). */
@@ -345,26 +345,6 @@ function buildMarkdown(params: {
   return md;
 }
 
-function collectHeuristicPaths(terms: string[], business: BusinessLogicGraph, pathBudget: number): string[] {
-  const paths = new Set<string>();
-  const pushPaths = (arr: string[]) => {
-    for (const p of arr) {
-      if (paths.size >= pathBudget) return;
-      if (p) paths.add(p);
-    }
-  };
-  for (const row of business.heuristicIndex.conceptToFiles) {
-    if (scoreTerms(terms, row.concept) <= 0) continue;
-    pushPaths(row.files.slice(0, 4));
-  }
-  for (const row of business.heuristicIndex.fileHints) {
-    if (scoreTerms(terms, `${row.file} ${row.symbols.join(" ")}`) <= 0) continue;
-    if (row.file) paths.add(row.file);
-    if (paths.size >= pathBudget) break;
-  }
-  return [...paths];
-}
-
 function isTestLikePath(p: string): boolean {
   const lower = p.toLowerCase();
   return (
@@ -409,15 +389,40 @@ function rankSymbols(
   return scored.map((x) => x.sym);
 }
 
-function rankBusinessNodes(terms: string[], nodes: BusinessLogicNode[]): Array<{ node: BusinessLogicNode; score: number }> {
-  const ranked: Array<{ node: BusinessLogicNode; score: number }> = [];
+const FEATURE_HINT_KINDS = new Set(["Concept", "Workflow", "DataEntity", "ExternalSystem"]);
+
+function rankFeatureHintNodes(
+  terms: string[],
+  nodes: GraphNode[],
+): Array<{ name: string; kind: string }> {
+  const ranked: Array<{ name: string; kind: string; score: number; confidence: number }> = [];
   for (const n of nodes) {
-    const blob = [n.name, n.summaryEn, n.descriptionEn, n.sourceNodeIds.join(" ")].join(" ");
+    if (!FEATURE_HINT_KINDS.has(n.kind)) continue;
+    const blob = [n.name, n.summaryEn, n.descriptionEn].join(" ");
     const s = scoreTerms(terms, blob);
-    if (s > 0) ranked.push({ node: n, score: s });
+    if (s > 0) ranked.push({ name: n.name, kind: n.kind, score: s, confidence: n.confidence });
   }
-  ranked.sort((a, b) => b.score - a.score || b.node.confidence - a.node.confidence);
-  return ranked;
+  ranked.sort((a, b) => b.score - a.score || b.confidence - a.confidence || a.name.localeCompare(b.name));
+  const seen = new Set<string>();
+  const out: Array<{ name: string; kind: string }> = [];
+  for (const row of ranked) {
+    const key = `${row.kind}::${row.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: row.name, kind: row.kind });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+function pathHintsFromPrompt(docHints: string[], terms: string[]): string[] {
+  const out: string[] = [...docHints];
+  for (const t of terms) {
+    if (t.includes("/") || /\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts|md)$/i.test(t)) {
+      out.push(t);
+    }
+  }
+  return [...new Set(out)];
 }
 
 /** Meta / philosophy prompts about the tool or assistant, not the codebase. */
@@ -531,8 +536,9 @@ function seedIdsFromDocPathHints(
 }
 
 /**
- * Builds a markdown preamble from the project graph (technical SQLite + derived business layer)
+ * Builds a markdown preamble from targeted technical-graph lookups
  * so the agent can narrow scope before broad repo exploration.
+ * Does not load the full business-logic projection.
  */
 export function buildAgentGraphContextPreamble(
   graphService: ProjectGraphService,
@@ -561,36 +567,11 @@ export function buildAgentGraphContextPreamble(
     const scoringTerms = narrowTermsForDocEdit(terms, docHints);
     const termsForPreview = docHints.length > 0 ? scoringTerms : terms;
 
-    const business = graphService.businessLogicGraph(projectRoot, "full");
-
     const seedIds = new Set<string>();
-    const ranked = rankBusinessNodes(scoringTerms, business.nodes);
-    for (const { node } of ranked.slice(0, 18)) {
-      for (const sid of node.sourceNodeIds) {
-        seedIds.add(sid);
-      }
-    }
 
-    for (const g of business.overview.keyGoals) {
-      if (scoreTerms(scoringTerms, g) <= 0) continue;
-      const match = business.nodes.find((n) => n.kind === "BusinessGoal" && n.name === g);
-      if (match) for (const sid of match.sourceNodeIds) seedIds.add(sid);
-    }
-    for (const c of business.overview.keyCapabilities) {
-      if (scoreTerms(scoringTerms, c) <= 0) continue;
-      const match = business.nodes.find((n) => n.kind === "BusinessCapability" && n.name === c);
-      if (match) for (const sid of match.sourceNodeIds) seedIds.add(sid);
-    }
-
-    for (const row of business.heuristicIndex.workflowToSymbols) {
-      if (scoreTerms(scoringTerms, `${row.workflow} ${row.symbols.join(" ")}`) <= 0) continue;
-      const wfNode = business.nodes.find((n) => n.kind === "BusinessProcess" && n.name === row.workflow);
-      if (wfNode) for (const sid of wfNode.sourceNodeIds) seedIds.add(sid);
-    }
-
-    const hintPaths = collectHeuristicPaths(scoringTerms, business, 24);
-    if (hintPaths.length > 0) {
-      const fileNodes = graphService.getFileNodesByPaths(projectRoot, hintPaths, 40);
+    const pathHints = pathHintsFromPrompt(docHints, scoringTerms);
+    if (pathHints.length > 0) {
+      const fileNodes = graphService.getFileNodesByPaths(projectRoot, pathHints, 40);
       for (const fn of fileNodes) {
         seedIds.add(fn.id);
       }
@@ -646,15 +627,7 @@ export function buildAgentGraphContextPreamble(
     }
     const workflowsFiltered = workflows.filter((w) => scoreTerms(scoringTerms, w) > 0).sort((a, b) => a.localeCompare(b));
 
-    const businessHighlightSeen = new Set<string>();
-    const businessHighlights: Array<{ name: string; kind: string }> = [];
-    for (const { node } of ranked) {
-      const key = `${node.kind}::${node.name}`;
-      if (businessHighlightSeen.has(key)) continue;
-      businessHighlightSeen.add(key);
-      businessHighlights.push({ name: node.name, kind: node.kind });
-      if (businessHighlights.length >= 8) break;
-    }
+    const businessHighlights = rankFeatureHintNodes(scoringTerms, nodes);
 
     return buildMarkdown({
       graphUpdatedAt: summary.updatedAt,

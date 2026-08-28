@@ -1,6 +1,8 @@
 /**
  * Main grid (pane terminals) HTML served at `/main`.
  */
+import { clientApiJavaScript } from "./clientApiSnippet.js";
+
 export function buildMainTerminalHtml(token?: string): string {
   return `<!doctype html>
 <html>
@@ -1523,11 +1525,7 @@ export function buildMainTerminalHtml(token?: string): string {
       const paneState = new Map();
       const PANE2_ID = "2";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
-      function withToken(path){
-        if(!AUTH_TOKEN){ return path; }
-        const glue = path.includes("?") ? "&" : "?";
-        return path + glue + "token=" + encodeURIComponent(AUTH_TOKEN);
-      }
+${clientApiJavaScript()}
       function wsPath(paneId){
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         return withToken(protocol + "//" + location.host + "/ws/main/" + paneId);
@@ -1660,8 +1658,9 @@ export function buildMainTerminalHtml(token?: string): string {
         });
       }
       async function pollPane1TraceActive(){
+        if(pane1Mode !== "trace"){ return; }
         try {
-          const res = await fetch(withToken("/api/agent/active")).then((r)=>r.json());
+          const res = await apiJson("/api/agent/active");
           if(!res || !res.ok){ return; }
           const session = res.session;
           if(!session || !session.id){
@@ -2368,7 +2367,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const list = document.getElementById("plansList");
         if(!list){ return; }
         try {
-          const d = await fetch(withToken("/api/plans")).then((r)=>r.json());
+          const d = await apiJson("/api/plans");
           cachedPlans = (d && d.ok && Array.isArray(d.plans)) ? d.plans : [];
           if(cachedPlans.length === 0){
             list.innerHTML = '<div class="procSub">No plans yet. Create one above.</div>';
@@ -2512,7 +2511,7 @@ export function buildMainTerminalHtml(token?: string): string {
         if(!pre || !id){ return; }
         pre.textContent = "Loading log…";
         try {
-          const data = await fetch(withToken("/api/processes/" + encodeURIComponent(id) + "/log?tail=220")).then((r)=>r.json());
+          const data = await apiJson("/api/processes/" + encodeURIComponent(id) + "/log?tail=220");
           if(!data || data.ok === false){
             pre.textContent = "Log unavailable: " + ((data && data.error) || "unknown error");
             return;
@@ -2713,7 +2712,7 @@ export function buildMainTerminalHtml(token?: string): string {
         selectedScriptId = id;
         showScriptsStep("detail");
         try {
-          const data = await fetch(withToken("/api/scripts/detail?id=" + encodeURIComponent(id))).then((r)=>r.json());
+          const data = await apiJson("/api/scripts/detail?id=" + encodeURIComponent(id));
           if(!data || data.ok === false){
             setScriptsHint((data && data.error) || "script not found");
             return;
@@ -2857,7 +2856,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const pre = document.getElementById("procLogPreview");
         if(!list){ return; }
         try {
-          const data = await fetch(withToken("/api/processes")).then((r)=>r.json());
+          const data = await apiJson("/api/processes");
           const rows = (data && data.processes) || [];
           cachedManagedProcesses = Array.isArray(rows) ? rows : [];
           const q = String(document.getElementById("procFilterInput")?.value || "").trim().toLowerCase();
@@ -3380,7 +3379,7 @@ export function buildMainTerminalHtml(token?: string): string {
           return { ok: true, nodes: graphNodeCache.nodes || [], edges: graphNodeCache.edges || [] };
         }
         try{
-          const res = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nodeId) + "/neighbors")).then((r)=>r.json());
+          const res = await apiJson("/api/graph/node/" + encodeURIComponent(nodeId) + "/neighbors");
           if(!res || !res.ok){ return res || { ok: false, nodes: [], edges: [] }; }
           const merged = mergeGraphData(graphNodeCache.nodes, graphNodeCache.edges, res.nodes || [], res.edges || []);
           graphNodeCache = { nodes: merged.nodes, edges: merged.edges };
@@ -3410,7 +3409,7 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       async function loadTechnicalGraphSeed(){
         graphSummaryTotals = { nodes: 0, edges: 0 };
-        const summaryRes = await fetch(withToken("/api/graph/summary")).then((r)=>r.json());
+        const summaryRes = await apiJson("/api/graph/summary");
         if(summaryRes && summaryRes.ok && summaryRes.summary){
           graphSummaryTotals = {
             nodes: Number(summaryRes.summary.nodesTotal) || 0,
@@ -3419,16 +3418,16 @@ export function buildMainTerminalHtml(token?: string): string {
         } else if(!summaryRes || !summaryRes.ok){
           return { ok: false, nodes: [], edges: [], error: (summaryRes && summaryRes.error) || "summary unavailable" };
         }
-        const projectRes = await fetch(withToken("/api/graph/nodes?kind=Project&limit=5")).then((r)=>r.json());
+        const projectRes = await apiJson("/api/graph/nodes?kind=Project&limit=5");
         let seedNode = (projectRes && projectRes.ok && (projectRes.nodes || [])[0]) || null;
         if(!seedNode){
-          const moduleRes = await fetch(withToken("/api/graph/nodes?kind=Module&limit=1")).then((r)=>r.json());
+          const moduleRes = await apiJson("/api/graph/nodes?kind=Module&limit=1");
           seedNode = (moduleRes && moduleRes.ok && (moduleRes.nodes || [])[0]) || null;
         }
         if(!seedNode){
           return { ok: true, nodes: [], edges: [], error: null };
         }
-        const hop1 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(seedNode.id) + "/neighbors")).then((r)=>r.json());
+        const hop1 = await apiJson("/api/graph/node/" + encodeURIComponent(seedNode.id) + "/neighbors");
         if(!hop1 || !hop1.ok){
           return { ok: true, nodes: [seedNode], edges: [], error: null };
         }
@@ -3437,7 +3436,7 @@ export function buildMainTerminalHtml(token?: string): string {
         let edges = hop1.edges || [];
         const nextModule = nodes.find((n)=>n && n.kind === "Module" && n.id !== seedNode.id);
         if(nextModule){
-          const hop2 = await fetch(withToken("/api/graph/node/" + encodeURIComponent(nextModule.id) + "/neighbors")).then((r)=>r.json());
+          const hop2 = await apiJson("/api/graph/node/" + encodeURIComponent(nextModule.id) + "/neighbors");
           if(hop2 && hop2.ok){
             const merged = mergeGraphData(nodes, edges, hop2.nodes || [], hop2.edges || []);
             nodes = merged.nodes;
@@ -4513,7 +4512,7 @@ export function buildMainTerminalHtml(token?: string): string {
         try{
           if(graphViewMode === "business" || graphViewMode === "business-goal"){
             const layer = graphViewMode === "business-goal" ? "goal" : "full";
-            const businessRes = await fetch(withToken("/api/graph/business-logic?layer=" + encodeURIComponent(layer))).then((r)=>r.json());
+            const businessRes = await apiJson("/api/graph/business-logic?layer=" + encodeURIComponent(layer));
             if(!businessRes.ok){
               if(hint){ hint.textContent = "Business logic graph unavailable: " + (businessRes.error || "unknown"); }
               renderGraphErd([], []);
@@ -4565,7 +4564,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const hint = document.getElementById("graphHint");
         if(hint){ hint.textContent = "Rebuilding graph..."; }
         try{
-          const data = await fetch(withToken("/api/graph/rebuild"), { method: "POST" }).then((r)=>r.json());
+          const data = await apiJson("/api/graph/rebuild", { method: "POST" });
           if(hint){ hint.textContent = data.ok ? "Graph rebuilt." : ("Rebuild failed: " + (data.error || "unknown")); }
         } catch(err){
           if(hint){ hint.textContent = "Rebuild failed: " + ((err && err.message) ? err.message : String(err)); }
@@ -4576,7 +4575,7 @@ export function buildMainTerminalHtml(token?: string): string {
         const hint = document.getElementById("graphHint");
         if(hint){ hint.textContent = "Manual reconcile in progress..."; }
         try{
-          const data = await fetch(withToken("/api/graph/reconcile"), { method: "POST" }).then((r)=>r.json());
+          const data = await apiJson("/api/graph/reconcile", { method: "POST" });
           if(hint){ hint.textContent = data.ok ? ("Reconcile complete: " + (data.report && data.report.status ? data.report.status : "ok")) : ("Reconcile failed: " + (data.error || "unknown")); }
         } catch(err){
           if(hint){ hint.textContent = "Reconcile failed: " + ((err && err.message) ? err.message : String(err)); }
@@ -4599,11 +4598,11 @@ export function buildMainTerminalHtml(token?: string): string {
         }
         if(hint){ hint.textContent = "Applying correction..."; }
         try{
-          const data = await fetch(withToken("/api/graph/corrections"), {
+          const data = await apiJson("/api/graph/corrections", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-          }).then((r)=>r.json());
+          });
           if(hint){
             hint.textContent = data.ok
               ? ("Applied " + (data.applied || 0) + " correction(s). Recap: " + ((data.report && data.report.status) || "ok"))

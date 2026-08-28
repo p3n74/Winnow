@@ -68,19 +68,56 @@ export function graphDbPath(projectRoot: string): string {
   return join(projectRoot, ".winnow", "graph", "graph.db");
 }
 
+function readStoredSchemaVersion(db: Database.Database): number | null {
+  const row = db.prepare("SELECT value_json FROM graph_meta WHERE key = 'schema_version'").get() as
+    | { value_json: string }
+    | undefined;
+  if (!row?.value_json) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(row.value_json) as unknown;
+    if (typeof parsed === "number" && Number.isInteger(parsed)) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function migrateGraphSchema(db: Database.Database, fromVersion: number): void {
+  if (fromVersion < 1) {
+    const nodeCols = db.prepare("PRAGMA table_info(nodes)").all() as Array<{ name: string }>;
+    if (!nodeCols.some((c) => c.name === "description_en")) {
+      db.exec("ALTER TABLE nodes ADD COLUMN description_en TEXT");
+    }
+  }
+}
+
 export function openProjectGraphDb(projectRoot: string): Database.Database {
   const path = graphDbPath(projectRoot);
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA_SQL);
-  const nodeCols = db.prepare("PRAGMA table_info(nodes)").all() as Array<{ name: string }>;
-  if (!nodeCols.some((c) => c.name === "description_en")) {
-    db.exec("ALTER TABLE nodes ADD COLUMN description_en TEXT");
+  const storedVersion = readStoredSchemaVersion(db);
+  if (storedVersion != null && storedVersion > SCHEMA_VERSION) {
+    db.close();
+    throw new Error(
+      `graph.db schema version ${storedVersion} is newer than this Winnow build (supports ${SCHEMA_VERSION}). Upgrade Winnow before opening this project graph.`,
+    );
   }
-  db.prepare(
-    "INSERT INTO graph_meta(key, value_json) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-  ).run(JSON.stringify(SCHEMA_VERSION));
+  if (storedVersion == null || storedVersion < SCHEMA_VERSION) {
+    const migrateAndStamp = db.transaction(() => {
+      migrateGraphSchema(db, storedVersion ?? 0);
+      db.prepare(
+        "INSERT INTO graph_meta(key, value_json) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+      ).run(JSON.stringify(SCHEMA_VERSION));
+    });
+    migrateAndStamp();
+  }
   db.prepare(
     "INSERT INTO graph_meta(key, value_json) VALUES('project_root', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
   ).run(JSON.stringify(projectRoot));
@@ -104,6 +141,7 @@ export function replaceInferredGraph(db: Database.Database, nodes: GraphNode[], 
       tags_json = excluded.tags_json,
       confidence = excluded.confidence,
       updated_at = excluded.updated_at
+    WHERE nodes.state <> 'user_locked'
   `);
   const upsertEdge = db.prepare(`
     INSERT INTO edges(id, from_id, to_id, kind, summary_en, weight, state, confidence, evidence_json, created_at, updated_at)
@@ -158,7 +196,7 @@ export function queryGraphSummary(db: Database.Database, projectRoot: string): G
   }
   return {
     projectRoot,
-    schemaVersion: SCHEMA_VERSION,
+    schemaVersion: readStoredSchemaVersion(db) ?? SCHEMA_VERSION,
     nodesTotal,
     edgesTotal,
     nodesByKind,
