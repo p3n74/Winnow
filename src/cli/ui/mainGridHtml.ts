@@ -187,6 +187,110 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .pane2View:not(.isHidden) { z-index: 1; }
       .pane2View .cursorHost { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
+      .webPreviewRoot { background: var(--bg); }
+      .webChrome {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        flex: 0 0 auto;
+      }
+      .webChrome button {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--text-strong);
+        border-radius: var(--radius-sm);
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: var(--font-sans);
+      }
+      .webChrome button:hover { background: var(--panel2); color: var(--text-neon); }
+      .webUrlForm {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+        gap: 6px;
+      }
+      .webUrlForm input {
+        flex: 1;
+        min-width: 0;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--text-strong);
+        border-radius: var(--radius-sm);
+        padding: 4px 8px;
+        font-size: 12px;
+        font-family: var(--font-mono, ui-monospace, monospace);
+      }
+      .webPresets {
+        display: flex;
+        gap: 4px;
+        padding: 4px 8px 6px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        flex: 0 0 auto;
+      }
+      .webPresets button {
+        border: 1px solid var(--line);
+        background: var(--bg);
+        color: var(--muted);
+        border-radius: var(--radius-sm);
+        padding: 2px 8px;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: var(--font-sans);
+      }
+      .webPresets button:hover { color: var(--text-neon); }
+      .webStage {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        background: #050505;
+      }
+      .webFrame {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #fff;
+      }
+      .webFrame.isHidden, .webChromeView.isHidden { display: none; }
+      .webChromeView {
+        display: block;
+        background: #111;
+        cursor: default;
+      }
+      .webPreviewRoot:fullscreen,
+      .webPreviewRoot.webFullscreenFallback {
+        background: #000;
+      }
+      .webPreviewRoot.webFullscreenFallback {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+      }
+      .webPreviewRoot:fullscreen .webPresets,
+      .webPreviewRoot:fullscreen .webHint,
+      .webPreviewRoot.webFullscreenFallback .webPresets,
+      .webPreviewRoot.webFullscreenFallback .webHint {
+        display: none;
+      }
+      .webHint {
+        margin: 0;
+        padding: 4px 8px 6px;
+        font-size: 10px;
+        color: var(--muted);
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
       .pane1Body {
         position: relative;
         min-width: 0;
@@ -1180,7 +1284,7 @@ export function buildMainTerminalHtml(token?: string): string {
         </div>
         <div class="toolbarRight">
           <span class="chip">1 ranger · trace · docs</span>
-          <span class="chip">2 agent · shell · graph · plans · processes · scripts</span>
+          <span class="chip">2 agent · web · shell · graph · plans · processes · scripts</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
           <span class="chip">5 shell</span>
@@ -1238,8 +1342,9 @@ export function buildMainTerminalHtml(token?: string): string {
           <div class="paneHead">
             <span class="paneTitle">2 Companion <span class="paneCmd" id="pane2ModeChip">winnow-agent-ui</span></span>
             <div style="display:flex;align-items:center;gap:10px">
-              <div class="paneTabs" role="tablist" aria-label="Agent UI, graph, plans, processes, and scripts">
+              <div class="paneTabs" role="tablist" aria-label="Agent UI, web preview, graph, plans, processes, and scripts">
                 <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane2-tab="workspace" id="pane2TabWorkspace">Agent</button>
+                <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="web" id="pane2TabWeb">Web</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="terminal" id="pane2TabTerminal">Shell</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="graph" id="pane2TabGraph">Graph</button>
                 <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane2-tab="plans" id="pane2TabPlans">Plans</button>
@@ -1256,6 +1361,31 @@ export function buildMainTerminalHtml(token?: string): string {
                 title="Winnow Agent workspace"
                 src="${token ? `/agent?token=${encodeURIComponent(token)}&embed=1` : "/agent?embed=1"}"
               ></iframe>
+            </div>
+            <div id="pane2Web" class="pane2View isHidden webPreviewRoot" aria-hidden="true">
+              <div class="webChrome">
+                <button type="button" id="webBack" title="Back">Back</button>
+                <button type="button" id="webForward" title="Forward">Forward</button>
+                <button type="button" id="webReload" title="Reload">Reload</button>
+                <button type="button" id="webFullscreen" title="Fullscreen the webpage viewer">Fullscreen</button>
+                <form id="webUrlForm" class="webUrlForm">
+                  <input id="webUrl" type="text" spellcheck="false" aria-label="Address" placeholder="http://localhost:3001" value="http://localhost:3001" />
+                  <button type="submit" id="webGo">Go</button>
+                </form>
+              </div>
+              <div class="webPresets">
+                <button type="button" data-web-port="8081">:8081</button>
+                <button type="button" data-web-port="3001">:3001</button>
+                <button type="button" data-web-port="3000">:3000</button>
+                <button type="button" data-web-port="5173">:5173</button>
+                <button type="button" data-web-port="8080">:8080</button>
+                <button type="button" data-web-port="4200">:4200</button>
+              </div>
+              <p class="webHint" id="webHint">Host Chromium renders localhost on this machine (Cursor-style). Falls back to HTTP proxy if Chrome is missing.</p>
+              <div id="webStage" class="webStage">
+                <canvas id="webChromeView" class="webChromeView isHidden" tabindex="0" aria-label="Host Chromium preview"></canvas>
+                <iframe id="webFrame" class="webFrame" title="Host web preview"></iframe>
+              </div>
             </div>
             <div id="pane2TerminalWrap" class="pane2View isHidden" aria-hidden="true">
               <div id="pane2term" class="term"></div>
@@ -1514,6 +1644,7 @@ export function buildMainTerminalHtml(token?: string): string {
       let planGraphViewBox = { x: 0, y: 0, w: 980, h: 720, baseW: 980, baseH: 720 };
       let planGraphFullscreenFallback = false;
       let planMdFullscreenFallback = false;
+      let webFullscreenFallback = false;
       let planGraphMode = (function(){
         try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
       })();
@@ -1541,6 +1672,227 @@ ${clientApiJavaScript()}
       function wsPath(paneId){
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         return withToken(protocol + "//" + location.host + "/ws/main/" + paneId);
+      }
+      const WEB_URL_KEY = "winnow.webPreviewUrl";
+      let webPreviewLoaded = false;
+      function stripWinnowTokenSearch(search){
+        if(!AUTH_TOKEN || !search){ return search || ""; }
+        const raw = String(search);
+        const trimmed = raw.charAt(0) === "?" ? raw.slice(1) : raw;
+        const params = new URLSearchParams(trimmed);
+        if(params.get("token") === AUTH_TOKEN){ params.delete("token"); }
+        const next = params.toString();
+        return next ? "?" + next : "";
+      }
+      function parseBrowseAddress(raw){
+        const trimmed = String(raw || "").trim();
+        if(!trimmed){ return { ok: false, error: "enter a URL" }; }
+        try {
+          const parsed = new URL(trimmed.includes("://") ? trimmed : "http://" + trimmed);
+          const host = parsed.hostname.toLowerCase();
+          if(parsed.protocol !== "http:" && parsed.protocol !== "https:"){
+            return { ok: false, error: "only http(s) URLs are allowed" };
+          }
+          if(host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]" && host !== "::1" && host !== "0.0.0.0"){
+            return { ok: false, error: "preview is limited to localhost on this machine" };
+          }
+          const port = parsed.port ? Number(parsed.port) : (parsed.protocol === "https:" ? 443 : 80);
+          const search = stripWinnowTokenSearch(parsed.search);
+          const href = parsed.origin + parsed.pathname + search + parsed.hash;
+          return { ok: true, href: href, port: port, path: (parsed.pathname || "/") + search };
+        } catch {
+          return { ok: false, error: "invalid URL" };
+        }
+      }
+      function previewIframeSrc(href){
+        const parsed = parseBrowseAddress(href);
+        if(!parsed.ok){ return "about:blank"; }
+        const rest = parsed.path === "/" ? "/" : parsed.path;
+        return "/__preview/" + parsed.port + rest;
+      }
+      function setWebHint(text){
+        const hint = document.getElementById("webHint");
+        if(hint){ hint.textContent = text; }
+      }
+      function chromePreviewWsUrl(){
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        return withToken(protocol + "//" + location.host + "/ws/preview/chrome");
+      }
+      let chromePreviewSocket = null;
+      let chromePreviewReady = false;
+      let chromePreviewPendingUrl = "";
+      function setWebSurface(mode){
+        const frame = document.getElementById("webFrame");
+        const canvas = document.getElementById("webChromeView");
+        if(frame){ frame.classList.toggle("isHidden", mode === "chrome"); }
+        if(canvas){ canvas.classList.toggle("isHidden", mode !== "chrome"); }
+        fitWebCanvas();
+      }
+      function isWebFullscreen(){
+        const pane = document.getElementById("pane2Web");
+        return (document.fullscreenElement === pane) || webFullscreenFallback;
+      }
+      function webStageSize(){
+        const stage = document.getElementById("webStage");
+        if(!stage){ return { width: 1280, height: 800 }; }
+        return {
+          width: Math.max(320, Math.round(stage.clientWidth) || 1280),
+          height: Math.max(240, Math.round(stage.clientHeight) || 800)
+        };
+      }
+      function fitWebCanvas(){
+        const stage = document.getElementById("webStage");
+        const canvas = document.getElementById("webChromeView");
+        if(!stage || !canvas || canvas.classList.contains("isHidden")){ return; }
+        const sw = Math.max(1, stage.clientWidth);
+        const sh = Math.max(1, stage.clientHeight);
+        const iw = Math.max(1, canvas.width);
+        const ih = Math.max(1, canvas.height);
+        const scale = Math.min(sw / iw, sh / ih);
+        canvas.style.width = Math.max(1, Math.round(iw * scale)) + "px";
+        canvas.style.height = Math.max(1, Math.round(ih * scale)) + "px";
+      }
+      function syncWebChromeViewport(){
+        if(!chromePreviewReady){ return; }
+        const size = webStageSize();
+        sendChrome({ type: "resize", width: size.width, height: size.height });
+        fitWebCanvas();
+      }
+      function updateWebFullscreenButton(){
+        const btn = document.getElementById("webFullscreen");
+        if(!btn){ return; }
+        const active = isWebFullscreen();
+        btn.textContent = active ? "Exit fullscreen" : "Fullscreen";
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      async function toggleWebFullscreen(){
+        const pane = document.getElementById("pane2Web");
+        if(!pane){ return; }
+        const after = function(){
+          updateWebFullscreenButton();
+          requestAnimationFrame(function(){ syncWebChromeViewport(); });
+        };
+        try {
+          if(document.fullscreenElement === pane){
+            await document.exitFullscreen();
+            after();
+            return;
+          }
+          if(typeof pane.requestFullscreen === "function" && !document.fullscreenElement){
+            await pane.requestFullscreen();
+            after();
+            return;
+          }
+        } catch (_err) {}
+        webFullscreenFallback = !webFullscreenFallback;
+        pane.classList.toggle("webFullscreenFallback", webFullscreenFallback);
+        after();
+      }
+      function sendChrome(payload){
+        if(chromePreviewSocket && chromePreviewSocket.readyState === 1){
+          chromePreviewSocket.send(JSON.stringify(payload));
+          return true;
+        }
+        return false;
+      }
+      function connectChromePreview(){
+        if(chromePreviewSocket && (chromePreviewSocket.readyState === 0 || chromePreviewSocket.readyState === 1)){ return; }
+        const ws = new WebSocket(chromePreviewWsUrl());
+        chromePreviewSocket = ws;
+        ws.addEventListener("message", function(event){
+          let msg = null;
+          try { msg = JSON.parse(event.data); } catch { return; }
+          if(msg.type === "ready"){
+            chromePreviewReady = true;
+            setWebSurface("chrome");
+            const size = webStageSize();
+            const input = document.getElementById("webUrl");
+            const href = chromePreviewPendingUrl || (input && input.value) || "http://localhost:3001";
+            sendChrome({ type: "open", url: href, width: size.width, height: size.height });
+            setWebHint("Host Chromium on this machine (Cursor-style). Remote tabs see pixels, not a website iframe.");
+            return;
+          }
+          if(msg.type === "frame" && msg.data){
+            const canvas = document.getElementById("webChromeView");
+            if(!canvas){ return; }
+            const ctx = canvas.getContext("2d");
+            if(!ctx){ return; }
+            const img = new Image();
+            img.onload = function(){
+              if(canvas.width !== img.width || canvas.height !== img.height){
+                canvas.width = img.width;
+                canvas.height = img.height;
+              }
+              ctx.drawImage(img, 0, 0);
+              fitWebCanvas();
+            };
+            img.src = "data:image/jpeg;base64," + msg.data;
+            return;
+          }
+          if(msg.type === "error"){
+            chromePreviewReady = false;
+            setWebSurface("iframe");
+            const input = document.getElementById("webUrl");
+            const frame = document.getElementById("webFrame");
+            const parsed = parseBrowseAddress((input && input.value) || chromePreviewPendingUrl);
+            if(parsed.ok && frame){ frame.src = previewIframeSrc(parsed.href); }
+            setWebHint("Chromium unavailable (" + (msg.error || "error") + "); using HTTP proxy.");
+          }
+        });
+        ws.addEventListener("close", function(){
+          chromePreviewReady = false;
+          chromePreviewSocket = null;
+        });
+      }
+      function navigateWebPreview(raw, persist){
+        const input = document.getElementById("webUrl");
+        const frame = document.getElementById("webFrame");
+        const parsed = parseBrowseAddress(raw);
+        if(!parsed.ok){
+          setWebHint(parsed.error);
+          return;
+        }
+        if(input){ input.value = parsed.href; }
+        if(persist){
+          try { localStorage.setItem(WEB_URL_KEY, parsed.href); } catch {}
+        }
+        chromePreviewPendingUrl = parsed.href;
+        apiJson("/api/preview/chrome").then(function(data){
+          if(data && data.available){
+            setWebSurface("chrome");
+            connectChromePreview();
+            const size = webStageSize();
+            if(sendChrome({ type: "open", url: parsed.href, width: size.width, height: size.height })){
+              setWebHint("Host Chromium rendering localhost:" + parsed.port + ".");
+            } else {
+              setWebHint("Starting host Chromium…");
+            }
+            return;
+          }
+          setWebSurface("iframe");
+          if(frame){ frame.src = previewIframeSrc(parsed.href); }
+          setWebHint("Proxying localhost:" + parsed.port + " through this Winnow (same-origin).");
+          apiJson("/api/preview/probe?port=" + encodeURIComponent(String(parsed.port))).then(function(probe){
+            if(!probe || probe.listening){ return; }
+            const attempts = probe.attempts || [];
+            const detail = attempts.map(function(a){ return a.label + (a.ok ? " ok" : " " + (a.error || "fail")); }).join("; ");
+            setWebHint("Nothing is listening on port " + parsed.port + " on this machine. " + detail);
+          }).catch(function(){});
+        }).catch(function(){
+          setWebSurface("iframe");
+          if(frame){ frame.src = previewIframeSrc(parsed.href); }
+        });
+      }
+      function ensureWebPreviewLoaded(){
+        if(webPreviewLoaded){ return; }
+        webPreviewLoaded = true;
+        let saved = "http://localhost:3001";
+        try {
+          saved = localStorage.getItem(WEB_URL_KEY) || saved;
+        } catch {}
+        const input = document.getElementById("webUrl");
+        if(input && !input.value){ input.value = saved; }
+        navigateWebPreview((input && input.value) || saved, false);
       }
       function openPane(paneId){
         const mount = document.getElementById("pane" + paneId);
@@ -1790,6 +2142,7 @@ ${clientApiJavaScript()}
       function setPane2Tab(mode){
         pane2Mode = mode;
         const wsEl = document.getElementById("pane2Workspace");
+        const webEl = document.getElementById("pane2Web");
         const tsEl = document.getElementById("pane2TerminalWrap");
         const graphEl = document.getElementById("pane2Graph");
         const plansEl = document.getElementById("pane2Plans");
@@ -1797,6 +2150,7 @@ ${clientApiJavaScript()}
         const scriptsEl = document.getElementById("pane2Scripts");
         const chip = document.getElementById("pane2ModeChip");
         const tw = document.getElementById("pane2TabWorkspace");
+        const tweb = document.getElementById("pane2TabWeb");
         const tt = document.getElementById("pane2TabTerminal");
         const tg = document.getElementById("pane2TabGraph");
         const tplans = document.getElementById("pane2TabPlans");
@@ -1804,19 +2158,22 @@ ${clientApiJavaScript()}
         const ts = document.getElementById("pane2TabScripts");
         const recon = document.getElementById("reconnectPane2");
         const isWs = mode === "workspace";
+        const isWeb = mode === "web";
         const isTerm = mode === "terminal";
         const isGraph = mode === "graph";
         const isPlans = mode === "plans";
         const isProc = mode === "processes";
         const isScripts = mode === "scripts";
-        if(wsEl && tsEl && graphEl && plansEl && procEl && scriptsEl){
+        if(wsEl && webEl && tsEl && graphEl && plansEl && procEl && scriptsEl){
           wsEl.classList.toggle("isHidden", !isWs);
+          webEl.classList.toggle("isHidden", !isWeb);
           tsEl.classList.toggle("isHidden", !isTerm);
           graphEl.classList.toggle("isHidden", !isGraph);
           plansEl.classList.toggle("isHidden", !isPlans);
           procEl.classList.toggle("isHidden", !isProc);
           scriptsEl.classList.toggle("isHidden", !isScripts);
           wsEl.setAttribute("aria-hidden", isWs ? "false" : "true");
+          webEl.setAttribute("aria-hidden", isWeb ? "false" : "true");
           tsEl.setAttribute("aria-hidden", isTerm ? "false" : "true");
           graphEl.setAttribute("aria-hidden", isGraph ? "false" : "true");
           plansEl.setAttribute("aria-hidden", isPlans ? "false" : "true");
@@ -1824,16 +2181,18 @@ ${clientApiJavaScript()}
           scriptsEl.setAttribute("aria-hidden", isScripts ? "false" : "true");
         }
         if(chip){
-          chip.textContent = isWs ? "winnow-agent-ui" : isTerm ? "shell" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
+          chip.textContent = isWs ? "winnow-agent-ui" : isWeb ? "host web" : isTerm ? "shell" : isGraph ? "project graph" : isPlans ? "plan board" : isScripts ? "guided scripts" : "managed processes";
         }
-        if(tw && tt && tg && tplans && tp && ts){
+        if(tw && tweb && tt && tg && tplans && tp && ts){
           tw.classList.toggle("paneTabActive", isWs);
+          tweb.classList.toggle("paneTabActive", isWeb);
           tt.classList.toggle("paneTabActive", isTerm);
           tg.classList.toggle("paneTabActive", isGraph);
           tplans.classList.toggle("paneTabActive", isPlans);
           tp.classList.toggle("paneTabActive", isProc);
           ts.classList.toggle("paneTabActive", isScripts);
           tw.setAttribute("aria-selected", isWs.toString());
+          tweb.setAttribute("aria-selected", isWeb.toString());
           tt.setAttribute("aria-selected", isTerm.toString());
           tg.setAttribute("aria-selected", isGraph.toString());
           tplans.setAttribute("aria-selected", isPlans.toString());
@@ -1884,6 +2243,9 @@ ${clientApiJavaScript()}
           plansRefreshTimer = setInterval(function(){
             void refreshPlans(true);
           }, 5000);
+        }
+        if(isWeb){
+          ensureWebPreviewLoaded();
         }
       }
       function renderPlanPreview(markdown){
@@ -4763,7 +5125,108 @@ ${clientApiJavaScript()}
         }
       });
       document.getElementById("pane2TabWorkspace")?.addEventListener("click",()=>setPane2Tab("workspace"));
+      document.getElementById("pane2TabWeb")?.addEventListener("click",()=>setPane2Tab("web"));
       document.getElementById("pane2TabTerminal")?.addEventListener("click",()=>setPane2Tab("terminal"));
+      document.getElementById("webUrlForm")?.addEventListener("submit",(event)=>{
+        event.preventDefault();
+        const input = document.getElementById("webUrl");
+        navigateWebPreview(input ? input.value : "", true);
+      });
+      document.getElementById("webBack")?.addEventListener("click",()=>{
+        if(chromePreviewReady && sendChrome({ type: "back" })){ return; }
+        try { document.getElementById("webFrame")?.contentWindow?.history.back(); } catch {}
+      });
+      document.getElementById("webForward")?.addEventListener("click",()=>{
+        if(chromePreviewReady && sendChrome({ type: "forward" })){ return; }
+        try { document.getElementById("webFrame")?.contentWindow?.history.forward(); } catch {}
+      });
+      document.getElementById("webReload")?.addEventListener("click",()=>{
+        if(chromePreviewReady && sendChrome({ type: "reload" })){ return; }
+        const frame = document.getElementById("webFrame");
+        if(frame && frame.src){ frame.src = frame.src; }
+      });
+      document.getElementById("webFullscreen")?.addEventListener("click",()=>{ void toggleWebFullscreen(); });
+      document.querySelectorAll("[data-web-port]").forEach((btn)=>{
+        btn.addEventListener("click",()=>{
+          const port = btn.getAttribute("data-web-port");
+          navigateWebPreview("http://localhost:" + port + "/", true);
+        });
+      });
+      document.getElementById("webFrame")?.addEventListener("load",()=>{
+        const frame = document.getElementById("webFrame");
+        const input = document.getElementById("webUrl");
+        try {
+          const loc = frame && frame.contentWindow ? frame.contentWindow.location : null;
+          if(!loc || loc.href === "about:blank"){ return; }
+          const prefixed = new RegExp("^/__preview/(\\\\d{1,5})(/.*)?$").exec(loc.pathname || "");
+          if(prefixed){
+            const next = "http://localhost:" + prefixed[1] + (prefixed[2] || "/") + stripWinnowTokenSearch(loc.search) + loc.hash;
+            if(input){ input.value = next; }
+            return;
+          }
+          if(input && loc.href){
+            try {
+              const shown = new URL(loc.href);
+              input.value = shown.origin + shown.pathname + stripWinnowTokenSearch(shown.search) + shown.hash;
+            } catch {
+              input.value = loc.href;
+            }
+          }
+        } catch {}
+      });
+      (function bindChromePreviewInput(){
+        const canvas = document.getElementById("webChromeView");
+        if(!canvas){ return; }
+        function point(event){
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+            canvasWidth: rect.width,
+            canvasHeight: rect.height
+          };
+        }
+        canvas.addEventListener("mousedown", function(event){
+          canvas.focus();
+          const p = point(event);
+          sendChrome({ type: "mouse", event: "down", x: p.x, y: p.y, canvasWidth: p.canvasWidth, canvasHeight: p.canvasHeight });
+        });
+        canvas.addEventListener("mouseup", function(event){
+          const p = point(event);
+          sendChrome({ type: "mouse", event: "up", x: p.x, y: p.y, canvasWidth: p.canvasWidth, canvasHeight: p.canvasHeight });
+        });
+        canvas.addEventListener("mousemove", function(event){
+          if(!event.buttons){ return; }
+          const p = point(event);
+          sendChrome({ type: "mouse", event: "move", x: p.x, y: p.y, canvasWidth: p.canvasWidth, canvasHeight: p.canvasHeight });
+        });
+        canvas.addEventListener("wheel", function(event){
+          event.preventDefault();
+          const p = point(event);
+          sendChrome({ type: "mouse", event: "wheel", x: p.x, y: p.y, canvasWidth: p.canvasWidth, canvasHeight: p.canvasHeight, deltaX: event.deltaX, deltaY: event.deltaY });
+        }, { passive: false });
+        canvas.addEventListener("keydown", function(event){
+          sendChrome({ type: "key", event: "down", key: event.key, code: event.code, text: event.key.length === 1 ? event.key : undefined });
+          if(event.key.length === 1){
+            sendChrome({ type: "key", event: "char", key: event.key, code: event.code, text: event.key });
+          }
+        });
+        canvas.addEventListener("keyup", function(event){
+          sendChrome({ type: "key", event: "up", key: event.key, code: event.code });
+        });
+        if(typeof ResizeObserver === "function"){
+          const stage = document.getElementById("webStage") || canvas;
+          let resizeTimer = null;
+          new ResizeObserver(function(){
+            if(resizeTimer){ clearTimeout(resizeTimer); }
+            resizeTimer = setTimeout(function(){
+              fitWebCanvas();
+              if(!chromePreviewReady){ return; }
+              syncWebChromeViewport();
+            }, 120);
+          }).observe(stage);
+        }
+      })();
       document.getElementById("pane2TabGraph")?.addEventListener("click",()=>{ openGraphOverlay(); });
       document.getElementById("pane2TabPlans")?.addEventListener("click",()=>setPane2Tab("plans"));
       document.getElementById("pane2TabProcesses")?.addEventListener("click",()=>setPane2Tab("processes"));
@@ -4995,10 +5458,25 @@ ${clientApiJavaScript()}
         if(evt.key === "Escape"){
           const modal = document.getElementById("planReconcileModal");
           if(modal && !modal.classList.contains("isHidden")){ closePlanReconcileModal(); }
+          if(webFullscreenFallback){
+            webFullscreenFallback = false;
+            document.getElementById("pane2Web")?.classList.remove("webFullscreenFallback");
+            updateWebFullscreenButton();
+            syncWebChromeViewport();
+          }
         }
       });
       document.getElementById("btnPlanMdFullscreen")?.addEventListener("click",()=>{ void togglePlanMdFullscreen(); });
-      document.addEventListener("fullscreenchange", ()=>{ updatePlanGraphFullscreenButton(); updatePlanMdFullscreenButton(); });
+      document.addEventListener("fullscreenchange", ()=>{
+        if(document.fullscreenElement && document.fullscreenElement !== document.getElementById("pane2Web")){
+          webFullscreenFallback = false;
+          document.getElementById("pane2Web")?.classList.remove("webFullscreenFallback");
+        }
+        updatePlanGraphFullscreenButton();
+        updatePlanMdFullscreenButton();
+        updateWebFullscreenButton();
+        syncWebChromeViewport();
+      });
       document.getElementById("procFilterInput")?.addEventListener("input",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procStatusFilter")?.addEventListener("change",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procCommandInput")?.addEventListener("keydown",(evt)=>{

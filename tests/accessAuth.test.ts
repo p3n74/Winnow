@@ -155,6 +155,16 @@ describe("resolveUiBindOptions", () => {
     expect(resolveUiBindOptions({ open: false }).openBrowser).toBe(false);
     expect(resolveUiBindOptions({ desktopShell: true }).openBrowser).toBe(false);
   });
+
+  it("skips token generation when --no-token is set", () => {
+    const remote = resolveUiBindOptions({ remote: true, noToken: true });
+    expect(remote.host).toBe("0.0.0.0");
+    expect(remote.token).toBeUndefined();
+    expect(remote.openBrowser).toBe(false);
+
+    const lan = resolveUiBindOptions({ host: "0.0.0.0", noToken: true, token: "ignored" });
+    expect(lan.token).toBeUndefined();
+  });
 });
 
 describe("generateAccessToken", () => {

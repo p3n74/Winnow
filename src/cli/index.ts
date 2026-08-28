@@ -31,7 +31,7 @@ type CliOptions = {
   port?: number;
   open?: boolean;
   host?: string;
-  token?: string;
+  token?: string | false;
   remote?: boolean;
   corsOrigin?: string;
   pane1Cmd?: string;
@@ -212,7 +212,8 @@ export function buildProgram(): Command {
     .option("--port <port>", "UI server port", Number, 3210)
     .option("--host <host>", "UI bind host (use 0.0.0.0 for LAN access)", "127.0.0.1")
     .option("--token <token>", "UI access token (query ?token=, Authorization Bearer, or cookie)")
-    .option("--remote", "bind 0.0.0.0, require an access token, do not auto-open a browser")
+    .option("--no-token", "do not require or generate a UI access token")
+    .option("--remote", "bind 0.0.0.0, require an access token unless --no-token, do not auto-open a browser")
     .option("--cors-origin <origin>", "allow CORS from this origin (off by default)")
     .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
     .option(
@@ -237,7 +238,8 @@ export function buildProgram(): Command {
       const desktopShell = Boolean(opts.shell);
       const bind = resolveUiBindOptions({
         host: opts.host,
-        token: opts.token,
+        token: typeof opts.token === "string" ? opts.token : undefined,
+        noToken: opts.token === false,
         remote: opts.remote,
         open: opts.open,
         desktopShell,
