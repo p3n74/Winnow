@@ -71,7 +71,7 @@ Winnow closes that gap:
 - **Managed processes** — start and monitor named commands, filter by status/tags, and inspect logs without leaving the companion pane.
 - **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions.
 - **Files** — directory listing, preview, and “open in editor” helpers from the UI server.
-- **Shared / LAN use** — optional `?token=…` gate and bindable `--host` (token auto-generated when binding `0.0.0.0` without one).
+- **Shared / LAN / remote** — optional access token (`?token=`, `Authorization: Bearer`, or cookie) and bindable `--host`. `--remote` binds `0.0.0.0`, requires a token (32-hex auto-generated if omitted), and skips auto-opening a browser. See [docs/remote-access.md](docs/remote-access.md).
 
 ### Data on disk
 
@@ -82,6 +82,7 @@ Winnow closes that gap:
 
 Recent highlights (newest first; use `git log` for the full story):
 
+- **Remote / reverse-proxy ready** — `--remote` binds the companion UI on the network with a longer access token, Bearer + cookie auth, and `GET /api/health` for a later Coolify (or other) reverse proxy. See [docs/remote-access.md](docs/remote-access.md).
 - **Node 22+ / N-API sqlite** — `better-sqlite3` 13 loads on Homebrew Node 26 without an ABI rebuild; `npm run ui` still probes `better-sqlite3` and `node-pty` and rebuilds them with the running Node if needed.
 - **Heuristic Engine** — graph-derived concept, workflow, file, and symbol hints are ranked against the user prompt, then prepended as a compact navigation seed. This guides the agent toward likely-relevant code paths first, reducing discovery time and making large-codebase workflows more targeted.
 - **Project graph** — HTTP APIs plus an interactive graph in the main grid (technical / business layers, neighborhood drill-down, corrections workflow).
@@ -149,11 +150,15 @@ Or directly:
 npm run dev -- ui
 ```
 
+For LAN or a later reverse proxy, see **[Remote access](docs/remote-access.md)** (`--remote`, tokens, `/api/health`).
+
 Optional UI flags:
 
 - `-- --port 3210`
 - `-- --host 0.0.0.0`
-- `-- --token ABC123` (access via `?token=ABC123`)
+- `-- --remote` (bind `0.0.0.0`, require a token, do not auto-open a browser)
+- `-- --token SECRET` (access via `?token=SECRET`, `Authorization: Bearer SECRET`, or cookie)
+- `-- --cors-origin https://example.com` (optional CORS; off by default)
 - `-- --no-open` (print the URL only; open it yourself)
 - `-- --shell` (open the same UI in a **standalone Electron window** instead of your default browser; first run may download Electron via `npx`)
 - `-- --pane1-cmd "ranger"`

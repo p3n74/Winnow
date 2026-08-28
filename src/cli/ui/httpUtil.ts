@@ -3,9 +3,31 @@ import { IncomingMessage, ServerResponse } from "node:http";
 /** Reject JSON bodies larger than this to avoid unbounded `body += chunk` (audit F3). */
 export const MAX_JSON_BODY_BYTES = 2_000_000;
 
+export type SecurityHeaderOptions = {
+  corsOrigin?: string;
+};
+
+export function applySecurityHeaders(res: ServerResponse, options: SecurityHeaderOptions = {}): void {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  const origin = options.corsOrigin?.trim();
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.setHeader("Vary", "Origin");
+  }
+}
+
+export function applyNoStore(res: ServerResponse): void {
+  res.setHeader("Cache-Control", "no-store");
+}
+
 export function sendJson(res: ServerResponse, statusCode: number, data: unknown): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  applyNoStore(res);
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.end(JSON.stringify(data));
 }
 
