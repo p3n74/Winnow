@@ -64,14 +64,14 @@ Winnow closes that gap:
 
 - **Dashboard** — system snapshot, disk summary, registered projects, usage runs and filters, and the last agent run recap.
 - **Agent workspace** — selectable models (including externally advertised lists where configured), resume picker for prior sessions, execution-mode style controls, streaming run timeline (thinking + chat), and run / cancel / stop wired to the agent API. Optional **Heuristic Engine** mode injects ranked project-graph context to narrow agent scope before broad repository scans.
-- **Main grid** — five configurable terminal panes (xterm + WebSocket PTYs), per-pane reconnect, and a **Workspace** companion with tabs for agent runs, shell, **Docs**, **Graph**, **Plans**, and **Processes**.
+- **Main grid** — five configurable terminal panes (xterm + WebSocket PTYs), per-pane reconnect, and a **Workspace** companion with tabs for agent runs, **Web** (host-machine localhost preview), shell, **Docs**, **Graph**, **Plans**, and **Processes**.
 - **Docs** — workspace-wide index of Markdown and PDF (`.winnow/docs-index.json`), refresh/reindex, rendered Markdown (sanitized) and in-browser PDF.
 - **Project graph** — SQLite-backed graph service exposed over HTTP: summary, nodes/edges, neighborhood expansion, rebuild/reconcile, corrections, and business-logic views; the grid UI supports technical vs business graph modes and file→function exploration.
 - **Planning workspace** — agent-managed plans stored under `.winnow/plans`, rendered as Markdown, normalized/reconciled through API flows, visualized as timeline/tree graphs, and mapped to GitHub issues when configured.
 - **Managed processes** — start and monitor named commands, filter by status/tags, and inspect logs without leaving the companion pane.
 - **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions.
 - **Files** — directory listing, preview, and “open in editor” helpers from the UI server.
-- **Shared / LAN / remote** — optional access token (`?token=`, `Authorization: Bearer`, or cookie) and bindable `--host`. `--remote` binds `0.0.0.0`, requires a token (32-hex auto-generated if omitted), and skips auto-opening a browser. See [docs/remote-access.md](docs/remote-access.md).
+- **Shared / LAN / remote** — optional access token (`?token=`, `Authorization: Bearer`, or cookie) and bindable `--host`. `--remote` binds `0.0.0.0`, requires a token (32-hex auto-generated if omitted) unless you pass `--no-token`, and skips auto-opening a browser. See [docs/remote-access.md](docs/remote-access.md).
 
 ### Data on disk
 
@@ -82,6 +82,7 @@ Winnow closes that gap:
 
 Recent highlights (newest first; use `git log` for the full story):
 
+- **Host web preview** — companion **Web** tab loads loopback dev servers (Vite, Next, Expo, etc.) in host Chromium (JPEG screencast, Cursor-style) with same-origin `/__preview/:port/` HTTP fallback, `--no-token`, and a fullscreen viewer. See [docs/remote-access.md](docs/remote-access.md).
 - **Remote / reverse-proxy ready** — `--remote` binds the companion UI on the network with a longer access token, Bearer + cookie auth, and `GET /api/health` for a later Coolify (or other) reverse proxy. See [docs/remote-access.md](docs/remote-access.md).
 - **Node 22+ / N-API sqlite** — `better-sqlite3` 13 loads on Homebrew Node 26 without an ABI rebuild; `npm run ui` still probes `better-sqlite3` and `node-pty` and rebuilds them with the running Node if needed.
 - **Heuristic Engine** — graph-derived concept, workflow, file, and symbol hints are ranked against the user prompt, then prepended as a compact navigation seed. This guides the agent toward likely-relevant code paths first, reducing discovery time and making large-codebase workflows more targeted.
@@ -156,8 +157,9 @@ Optional UI flags:
 
 - `-- --port 3210`
 - `-- --host 0.0.0.0`
-- `-- --remote` (bind `0.0.0.0`, require a token, do not auto-open a browser)
+- `-- --remote` (bind `0.0.0.0`, require a token unless `--no-token`, do not auto-open a browser)
 - `-- --token SECRET` (access via `?token=SECRET`, `Authorization: Bearer SECRET`, or cookie)
+- `-- --no-token` (do not require or generate an access token; UI is open to anyone who can reach the bind)
 - `-- --cors-origin https://example.com` (optional CORS; off by default)
 - `-- --no-open` (print the URL only; open it yourself)
 - `-- --shell` (open the same UI in a **standalone Electron window** instead of your default browser; first run may download Electron via `npx`)

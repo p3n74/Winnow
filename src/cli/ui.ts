@@ -114,6 +114,14 @@ import {
   shouldSetAccessCookie,
   UI_HEALTH_PAYLOAD,
 } from "./ui/accessAuth.js";
+import { findChromeExecutable, HostChromePreview } from "./ui/chromePreview.js";
+import {
+  isValidPreviewPort,
+  probeLoopbackPort,
+  proxyPreviewHttp,
+  proxyPreviewWebSocket,
+  resolvePreviewTarget,
+} from "./ui/previewProxy.js";
 import { agentStartRequestSchema, graphCorrectionsBodySchema, planCreateBodySchema } from "./ui/apiSchemas.js";
 import {
   AgentStartBlockedError,
@@ -876,6 +884,141 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   };
   const mainPaneSessions = new Map<PaneId, { ws: WebSocket; ptyProcess: pty.IPty }>();
   const mainPaneWs = new WebSocketServer({ noServer: true });
+  const chromePreviewWs = new WebSocketServer({ noServer: true });
+  let hostChrome: HostChromePreview | null = null;
+  let hostChromeLaunch: Promise<HostChromePreview> | null = null;
+
+  const chromePreviewClients = new Set<WebSocket>();
+
+  const ensureHostChrome = async (): Promise<HostChromePreview> => {
+    if (hostChrome) {
+      return hostChrome;
+    }
+    if (!hostChromeLaunch) {
+      hostChromeLaunch = HostChromePreview.tryLaunch()
+        .then((session) => {
+          session.onFrame((frame) => {
+            const payload = JSON.stringify({ type: "frame", data: frame.data, metadata: frame.metadata });
+            for (const client of chromePreviewClients) {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(payload);
+              }
+            }
+          });
+          return session;
+        })
+        .catch((error: unknown) => {
+          hostChromeLaunch = null;
+          throw error;
+        });
+    }
+    hostChrome = await hostChromeLaunch;
+    return hostChrome;
+  };
+
+  const closeHostChrome = (): void => {
+    const session = hostChrome;
+    hostChrome = null;
+    hostChromeLaunch = null;
+    if (session) {
+      void session.close();
+    }
+  };
+  process.once("exit", () => {
+    closeHostChrome();
+  });
+
+  chromePreviewWs.on("connection", (ws: WebSocket) => {
+    chromePreviewClients.add(ws);
+    const send = (payload: unknown): void => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    };
+    void (async () => {
+      try {
+        const chrome = await ensureHostChrome();
+        send({ type: "ready", chromePath: chrome.chromePath });
+      } catch (error) {
+        send({ type: "error", error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+    ws.on("message", (raw) => {
+      void (async () => {
+        let msg: {
+          type?: string;
+          url?: string;
+          width?: number;
+          height?: number;
+          event?: string;
+          x?: number;
+          y?: number;
+          canvasWidth?: number;
+          canvasHeight?: number;
+          deltaX?: number;
+          deltaY?: number;
+          key?: string;
+          code?: string;
+          text?: string;
+        };
+        try {
+          msg = JSON.parse(String(raw));
+        } catch {
+          return;
+        }
+        try {
+          const chrome = await ensureHostChrome();
+          if (msg.type === "open" && typeof msg.url === "string") {
+            if (msg.width && msg.height) {
+              await chrome.setViewport(msg.width, msg.height);
+            }
+            const nav = await chrome.navigate(msg.url);
+            send({ type: "status", url: nav.href, chrome: true });
+            return;
+          }
+          if (msg.type === "reload") {
+            await chrome.reload();
+            return;
+          }
+          if (msg.type === "back") {
+            await chrome.history(-1);
+            return;
+          }
+          if (msg.type === "forward") {
+            await chrome.history(1);
+            return;
+          }
+          if (msg.type === "resize" && msg.width && msg.height) {
+            await chrome.setViewport(msg.width, msg.height);
+            return;
+          }
+          if (msg.type === "mouse") {
+            const event =
+              msg.event === "down" ? "mousePressed" : msg.event === "up" ? "mouseReleased" : msg.event === "wheel" ? "mouseWheel" : "mouseMoved";
+            await chrome.mouse({
+              type: event,
+              x: Number(msg.x) || 0,
+              y: Number(msg.y) || 0,
+              canvasWidth: Number(msg.canvasWidth) || 1,
+              canvasHeight: Number(msg.canvasHeight) || 1,
+              deltaX: msg.deltaX,
+              deltaY: msg.deltaY,
+            });
+            return;
+          }
+          if (msg.type === "key" && msg.key && msg.code) {
+            const event = msg.event === "up" ? "keyUp" : msg.event === "char" ? "char" : "keyDown";
+            await chrome.key({ type: event, key: msg.key, code: msg.code, text: msg.text });
+          }
+        } catch (error) {
+          send({ type: "error", error: error instanceof Error ? error.message : String(error) });
+        }
+      })();
+    });
+    ws.on("close", () => {
+      chromePreviewClients.delete(ws);
+    });
+  });
   const logMainPane = (message: string): void => {
     process.stdout.write(`[winnow-ui][main-pane] ${message}\n`);
   };
@@ -2000,6 +2143,29 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     if (shouldSetAccessCookie(auth.via) && options.token) {
       res.setHeader("Set-Cookie", buildUiAccessCookie(options.token, isForwardedHttps(req.headers)));
+    }
+
+    const previewTarget = resolvePreviewTarget(url, req.headers, options.port, options.token);
+    if (previewTarget) {
+      proxyPreviewHttp(req, res, previewTarget);
+      return;
+    }
+
+    if (url.pathname === "/api/preview/probe" && req.method === "GET") {
+      const port = Number(url.searchParams.get("port"));
+      if (!isValidPreviewPort(port, options.port)) {
+        sendJson(res, 400, { ok: false, error: "invalid port" });
+        return;
+      }
+      const result = await probeLoopbackPort(port);
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
+
+    if (url.pathname === "/api/preview/chrome" && req.method === "GET") {
+      const chromePath = findChromeExecutable();
+      sendJson(res, 200, { ok: true, available: Boolean(chromePath), path: chromePath ?? null });
+      return;
     }
 
     if (url.pathname === "/api/workspace/cwd" && req.method === "GET") {
@@ -3546,18 +3712,29 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
-    if (!url.pathname.startsWith("/ws/main/")) {
-      socket.destroy();
-      return;
-    }
     if (!authorizeAccess(options.token, url, req.headers).ok) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
-    mainPaneWs.handleUpgrade(req, socket, head, (ws: WebSocket) => {
-      mainPaneWs.emit("connection", ws, req);
-    });
+    if (url.pathname.startsWith("/ws/main/")) {
+      mainPaneWs.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+        mainPaneWs.emit("connection", ws, req);
+      });
+      return;
+    }
+    if (url.pathname === "/ws/preview/chrome") {
+      chromePreviewWs.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+        chromePreviewWs.emit("connection", ws, req);
+      });
+      return;
+    }
+    const previewTarget = resolvePreviewTarget(url, req.headers, options.port, options.token);
+    if (previewTarget) {
+      proxyPreviewWebSocket(req, socket, head, previewTarget);
+      return;
+    }
+    socket.destroy();
   });
 
   await new Promise<void>((resolve) => {
@@ -3593,9 +3770,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   if (options.remote) {
     process.stdout.write("[winnow-ui] remote mode: bound for network access; browser not auto-opened\n");
   }
+  if (!options.token && (options.remote || options.host === "0.0.0.0")) {
+    process.stdout.write(
+      "[winnow-ui] warning: no access token (--no-token); anyone who can reach this bind can use the UI\n",
+    );
+  }
   if (options.remote || options.host === "0.0.0.0") {
     process.stdout.write(
-      "[winnow-ui] reverse proxy must forward WebSocket Upgrade for /ws/main/* and SSE for /api/agent/:id/stream\n",
+      "[winnow-ui] reverse proxy must forward WebSocket Upgrade for /ws/main/*, /ws/preview/chrome, SSE for /api/agent/:id/stream, and /__preview/*\n",
     );
   }
   process.stdout.write("[winnow-ui] press Ctrl+C to stop\n");

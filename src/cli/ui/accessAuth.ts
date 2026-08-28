@@ -124,6 +124,7 @@ export type UiBindInput = {
   host?: string;
   token?: string;
   remote?: boolean;
+  noToken?: boolean;
   open?: boolean;
   desktopShell?: boolean;
 };
@@ -138,13 +139,14 @@ export type UiBindResult = {
 /**
  * Resolve bind host, access token, and browser launch for `winnow ui`.
  * `--remote` forces a non-loopback bind (default 0.0.0.0) and skips auto-open.
+ * `--no-token` skips auto-generation and leaves the UI ungated.
  */
 export function resolveUiBindOptions(input: UiBindInput): UiBindResult {
   const remote = Boolean(input.remote);
   const requestedHost = (input.host ?? "127.0.0.1").trim() || "127.0.0.1";
   const host = remote && isLoopbackBindHost(requestedHost) ? "0.0.0.0" : requestedHost;
-  let token = input.token?.trim() || undefined;
-  if (!token && !isLoopbackBindHost(host)) {
+  let token = input.noToken ? undefined : input.token?.trim() || undefined;
+  if (!input.noToken && !token && !isLoopbackBindHost(host)) {
     token = generateAccessToken();
   }
   const openBrowser = input.desktopShell ? false : remote ? false : (input.open ?? true);
