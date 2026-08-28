@@ -1,6 +1,6 @@
 # Winnow Architecture
 
-Winnow is a thin wrapper over `cursor-agent`.
+Winnow is a thin wrapper over `cursor-agent`, plus a local companion UI.
 
 ## Pipeline
 
@@ -12,6 +12,16 @@ Winnow is a thin wrapper over `cursor-agent`.
    - translate stdout from English to Chinese (optional),
    - preserve stderr as-is.
 
+## Companion UI
+
+`winnow ui` serves the dashboard, main grid (PTY WebSockets), agent workspace, docs, graph, and plans from the **same machine** that holds the workspace. Cursor remains the source of truth for agent auth and quotas.
+
+- Default bind is loopback (`127.0.0.1`). `--host 0.0.0.0` is LAN. `--remote` is the network-facing mode (non-loopback bind, required access token, no auto-open browser).
+- When a token is set, clients present it as `?token=`, `Authorization: Bearer`, or the `winnow_ui` cookie. `GET /api/health` stays public for probes.
+- A later public site (for example Coolify on a VPS) should **reverse-proxy** this UI (HTTP + WebSocket `/ws/main/*` + SSE). That site is a separate service; Winnow does not terminate TLS or dial out to the VPS.
+
+See [remote-access.md](./remote-access.md) for the operator and proxy contract.
+
 ## Constraints
 
 - Cursor remains the source of truth for auth, model access, and quotas.
@@ -21,5 +31,4 @@ Winnow is a thin wrapper over `cursor-agent`.
 ## Future Extensions
 
 - Streaming chunk translation for lower latency.
-- Optional browser UI via `winnow ui` reusing the same backend session.
 - Persistent session replay and glossary-based terminology controls.

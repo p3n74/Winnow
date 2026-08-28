@@ -9,6 +9,7 @@ import { runInteractiveSession } from "./sessionMode.js";
 import { runDoctor } from "./doctor.js";
 import { runStatus } from "./status.js";
 import { runUiServer } from "./ui.js";
+import { resolveUiBindOptions } from "./ui/accessAuth.js";
 
 type CliOptions = {
   zh?: boolean;
@@ -31,6 +32,8 @@ type CliOptions = {
   open?: boolean;
   host?: string;
   token?: string;
+  remote?: boolean;
+  corsOrigin?: string;
   pane1Cmd?: string;
   pane2Cmd?: string;
   pane3Cmd?: string;
@@ -208,7 +211,9 @@ export function buildProgram(): Command {
     .description("Start lightweight local web companion UI")
     .option("--port <port>", "UI server port", Number, 3210)
     .option("--host <host>", "UI bind host (use 0.0.0.0 for LAN access)", "127.0.0.1")
-    .option("--token <token>", "6-char UI access token (required as ?token=...)")
+    .option("--token <token>", "UI access token (query ?token=, Authorization Bearer, or cookie)")
+    .option("--remote", "bind 0.0.0.0, require an access token, do not auto-open a browser")
+    .option("--cors-origin <origin>", "allow CORS from this origin (off by default)")
     .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
     .option(
       "--pane2-cmd <cmd>",
@@ -229,17 +234,23 @@ export function buildProgram(): Command {
     )
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
-      let token = opts.token?.trim();
-      if (!token && opts.host === "0.0.0.0") {
-        token = Math.random().toString(36).slice(2, 8).toUpperCase();
-      }
       const desktopShell = Boolean(opts.shell);
+      const bind = resolveUiBindOptions({
+        host: opts.host,
+        token: opts.token,
+        remote: opts.remote,
+        open: opts.open,
+        desktopShell,
+      });
+      const corsOrigin = opts.corsOrigin?.trim() || undefined;
       await runUiServer(config, {
         port: opts.port ?? 3210,
-        openBrowser: desktopShell ? false : (opts.open ?? true),
+        openBrowser: bind.openBrowser,
         desktopShell,
-        host: opts.host ?? "127.0.0.1",
-        token,
+        host: bind.host,
+        token: bind.token,
+        remote: bind.remote,
+        corsOrigin,
         paneCommands: {
           "1": opts.pane1Cmd ?? "ranger",
           "2": opts.pane2Cmd ?? "",

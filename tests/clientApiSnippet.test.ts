@@ -14,6 +14,7 @@ describe("clientApiJavaScript", () => {
     expect(js).toContain("JSON.parse");
     expect(js).toContain("non-json");
     expect(js).toContain("res.ok");
+    expect(js).toContain('headers.Authorization = "Bearer " + AUTH_TOKEN');
     expect(js).not.toContain("/api/plans/inbox");
   });
 

@@ -5,6 +5,10 @@ export type UiOptions = {
   desktopShell?: boolean;
   host: string;
   token?: string;
+  /** Network-facing bind (`--remote`): skip auto-open and print reverse-proxy hints. */
+  remote?: boolean;
+  /** When set, send CORS headers for this origin (off by default). */
+  corsOrigin?: string;
   paneCommands?: Record<"1" | "2" | "3" | "4" | "5", string>;
 };
 
