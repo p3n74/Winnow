@@ -38,6 +38,39 @@ type GraphRecapReport = {
   findings: string[];
 };
 
+const RECAP_REPORTS_KEEP = 100;
+
+export type RebuildLock = {
+  withRebuildLock: <T>(projectRoot: string, fn: () => Promise<T>) => Promise<T>;
+};
+
+/** Join in-flight rebuilds for the same root; queue a different root until the chain drains. */
+export function createRebuildLock(): RebuildLock {
+  let chain: Promise<void> = Promise.resolve();
+  const pendingByRoot = new Map<string, Promise<unknown>>();
+
+  return {
+    withRebuildLock<T>(projectRoot: string, fn: () => Promise<T>): Promise<T> {
+      const existing = pendingByRoot.get(projectRoot);
+      if (existing) {
+        return existing as Promise<T>;
+      }
+      const run = chain.then(fn, fn);
+      const tracked = run.finally(() => {
+        if (pendingByRoot.get(projectRoot) === tracked) {
+          pendingByRoot.delete(projectRoot);
+        }
+      });
+      pendingByRoot.set(projectRoot, tracked);
+      chain = tracked.then(
+        () => undefined,
+        () => undefined,
+      );
+      return tracked as Promise<T>;
+    },
+  };
+}
+
 function sanitizeIdPart(input: string): string {
   return input.replace(/[^a-zA-Z0-9_-]+/g, "_");
 }
@@ -75,6 +108,7 @@ function toGoalLabel(name: string): string {
 export class ProjectGraphService {
   private currentRoot: string | null = null;
   private db: Database.Database | null = null;
+  private readonly rebuildLock = createRebuildLock();
 
   private ensureDb(projectRoot: string): Database.Database {
     if (!this.db || this.currentRoot !== projectRoot) {
@@ -92,6 +126,16 @@ export class ProjectGraphService {
   }
 
   async rebuild(projectRoot: string): Promise<{
+    ok: true;
+    projectRoot: string;
+    generatedAt: string;
+    nodes: number;
+    edges: number;
+  }> {
+    return this.rebuildLock.withRebuildLock(projectRoot, () => this.rebuildNow(projectRoot));
+  }
+
+  private async rebuildNow(projectRoot: string): Promise<{
     ok: true;
     projectRoot: string;
     generatedAt: string;
@@ -227,7 +271,9 @@ export class ProjectGraphService {
         confidence=1.0,
         updated_at=excluded.updated_at
     `);
-    const updateNodeSummary = db.prepare("UPDATE nodes SET summary_en=?, updated_at=? WHERE id=?");
+    const updateNodeSummary = db.prepare(
+      "UPDATE nodes SET summary_en=?, state='user_locked', updated_at=? WHERE id=?",
+    );
     const insertCorrection = db.prepare(
       "INSERT INTO correction_events(ts, operation, payload_json) VALUES(?, ?, ?)",
     );
@@ -308,12 +354,23 @@ export class ProjectGraphService {
 
     const status: GraphRecapReport["status"] = findings.length === 0 ? "ok" : "conflict";
     const report: GraphRecapReport = { ts: now, source, status, findings };
-    db.prepare("INSERT INTO recap_reports(ts, source, status, report_json) VALUES(?, ?, ?, ?)").run(
-      now,
-      source,
-      status,
-      JSON.stringify(report),
-    );
+    const persistRecap = db.transaction(() => {
+      db.prepare("INSERT INTO recap_reports(ts, source, status, report_json) VALUES(?, ?, ?, ?)").run(
+        now,
+        source,
+        status,
+        JSON.stringify(report),
+      );
+      db.prepare(
+        `DELETE FROM recap_reports
+         WHERE id NOT IN (
+           SELECT id FROM (
+             SELECT id FROM recap_reports ORDER BY ts DESC, id DESC LIMIT ?
+           )
+         )`,
+      ).run(RECAP_REPORTS_KEEP);
+    });
+    persistRecap();
     return report;
   }
 

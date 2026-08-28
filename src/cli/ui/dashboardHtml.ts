@@ -1,6 +1,8 @@
 /**
  * Root dashboard HTML (`/`).
  */
+import { clientApiJavaScript } from "./clientApiSnippet.js";
+
 export function buildDashboardPageHtml(token: string | undefined): string {
   const authTokenLiteral = JSON.stringify(token ?? "");
   return `<!doctype html>
@@ -194,6 +196,31 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         color: var(--muted);
         margin: 0;
       }
+      .subagents-panel {
+        flex-shrink: 0;
+        max-height: 120px;
+        overflow: auto;
+        margin: 8px 0 0;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        background: var(--panel2);
+      }
+      .subagents-panel[hidden] { display: none !important; }
+      .subagents-head {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .subagent-row {
+        font-size: 11px;
+        line-height: 1.35;
+        margin-top: 2px;
+        color: var(--text);
+      }
+      .subagent-live { color: var(--accent); }
       textarea { width: 100%; min-height: 100px; resize: vertical; font-family: var(--font-mono); margin: 0; }
       #workspaceFiles, #dirEntries {
         overflow: auto;
@@ -1083,7 +1110,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
               <div class="title" style="margin:0">Disk &amp; project sizes</div>
               <div class="row small">
-                <button type="button" id="diskRefreshBtn" onclick="refreshDiskDashboard()">Refresh</button>
+                <button type="button" id="diskRefreshBtn" onclick="refreshDiskDashboard(true)">Refresh</button>
                 <span class="muted" id="diskMeasuredAt"></span>
               </div>
             </div>
@@ -1307,6 +1334,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
               <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
             </div>
+            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagents">
+              <div class="subagents-head">Subagents</div>
+              <div id="agentSubagentsLive"></div>
+            </section>
             <div class="small muted">Thinking trace</div>
             <pre id="agentThinking">No thinking trace yet.</pre>
             <div class="small muted">Chat history</div>
@@ -1332,11 +1363,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       const PAGE_PARAMS = new URLSearchParams(window.location.search);
       const EMBED_MODE = PAGE_PARAMS.get('embed') === '1';
       const INITIAL_VIEW = PAGE_PARAMS.get('view') || 'os';
-      function withToken(path){
-        if(!AUTH_TOKEN){ return path; }
-        const glue = path.includes('?') ? '&' : '?';
-        return path + glue + 'token=' + encodeURIComponent(AUTH_TOKEN);
-      }
+      let currentDashboardView = INITIAL_VIEW;
+${clientApiJavaScript()}
       function formatLocalDateTime(value, opts){
         const dt = new Date(value || '');
         if(!Number.isFinite(dt.getTime())){
@@ -1993,21 +2021,13 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         if(btn){ btn.disabled = true; }
         root.textContent = 'Scanning GitHub inbox...';
         try {
-          const plansData = await fetch(withToken('/api/plans')).then((r) => r.json());
-          const plans = plansData && Array.isArray(plansData.plans) ? plansData.plans : [];
-          if(!plans.length){
+          const inboxData = await apiJson('/api/plans/inbox');
+          const taskGroups = inboxData && Array.isArray(inboxData.inbox) ? inboxData.inbox : [];
+          if(!taskGroups.length){
             setGithubSummary(0, 0, 0);
             root.innerHTML = '<div class="muted">No plans found. Create a plan to start feeding the GitHub inbox.</div>';
             return;
           }
-          const taskGroups = await Promise.all(plans.slice(0, 12).map(async function(plan){
-            try {
-              const data = await fetch(withToken('/api/plans/' + encodeURIComponent(plan.id) + '/tasks')).then((r) => r.json());
-              return { plan: plan, tasks: data && Array.isArray(data.tasks) ? data.tasks : [] };
-            } catch (_err) {
-              return { plan: plan, tasks: [] };
-            }
-          }));
           let linked = 0;
           let needsSync = 0;
           let unlinked = 0;
@@ -2092,7 +2112,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         }
       }
 
-      async function refreshDiskDashboard() {
+      async function refreshDiskDashboard(force) {
         const c = document.getElementById('diskContent');
         const note = document.getElementById('diskNote');
         const at = document.getElementById('diskMeasuredAt');
@@ -2103,7 +2123,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         if (at) { at.textContent = ''; }
         if (note) { note.style.display = 'none'; }
         try {
-          const d = await fetch(withToken('/api/dashboard/disk')).then((r) => r.json());
+          const d = await fetch(withToken('/api/dashboard/disk' + (force ? '?refresh=1' : ''))).then((r) => r.json());
           if (d && d.ok) {
             const totL = d.volume && d.volume.ok && d.volume.totalBytes ? fmtBytes(d.volume.totalBytes) : '—';
             const freeL = d.volume && d.volume.ok ? fmtBytes(d.volume.freeBytes) : '—';
@@ -2182,16 +2202,22 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
 
       async function refresh(){
-        const state = await fetch(withToken('/api/state')).then(r=>r.json());
-        document.getElementById('status').textContent = JSON.stringify(state,null,2);
-        document.getElementById('backend').value = state.backend;
-        document.getElementById('model').value = state.model;
-        const logs = await fetch(withToken('/api/logs?limit=60')).then(r=>r.json());
-        document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
-        await refreshWorkspaceCwd();
+        try {
+          if(currentDashboardView !== 'agent' && currentDashboardView !== 'settings'){
+            const state = await apiJson('/api/state');
+            if(state && state.ok !== false){
+              document.getElementById('status').textContent = JSON.stringify(state,null,2);
+              document.getElementById('backend').value = state.backend;
+              document.getElementById('model').value = state.model;
+            }
+            const logs = await apiJson('/api/logs?limit=60');
+            document.getElementById('logs').textContent = (logs.logs || []).join('\\n') || 'No logs yet';
+          }
+          await refreshWorkspaceCwd();
+        } catch(_e) {}
       }
       async function refreshWorkspaceCwd(){
-        const data = await fetch(withToken('/api/workspace/cwd')).then(r=>r.json());
+        const data = await apiJson('/api/workspace/cwd');
         const inp = document.getElementById('workspacePathInput');
         if(inp){ inp.value = data.cwd || ''; }
         const hint = document.getElementById('workspaceCwdHint');
@@ -2391,6 +2417,55 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
+      let liveSubagentMap = {};
+      function renderSubagentsPanel(){
+        const panel = document.getElementById('agentSubagentsPanel');
+        const liveEl = document.getElementById('agentSubagentsLive');
+        if(liveEl){
+          liveEl.textContent = '';
+          const rows = Object.keys(liveSubagentMap).map(function(key){ return liveSubagentMap[key]; });
+          if(rows.length){
+            rows.forEach(function(row){
+              const el = document.createElement('div');
+              el.className = 'subagent-row subagent-live';
+              const status = row.status ? ' · ' + row.status : '';
+              const summary = row.summary ? ' — ' + row.summary : '';
+              el.textContent = (row.name || row.id || 'subagent') + status + summary;
+              liveEl.appendChild(el);
+            });
+          }
+          if(panel){
+            const show = rows.length > 0;
+            panel.hidden = !show;
+            panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+          }
+        }
+      }
+      function applyLiveSubagents(rows){
+        liveSubagentMap = {};
+        (rows || []).forEach(function(row){
+          if(!row){ return; }
+          const id = String(row.id || row.name || '');
+          if(!id){ return; }
+          liveSubagentMap[id] = row;
+        });
+        renderSubagentsPanel();
+      }
+      function noteLiveSubagentFromEvent(ev){
+        const content = String((ev && ev.content) || '');
+        if(!content.startsWith('subagent ')){ return; }
+        const rest = content.slice('subagent '.length);
+        const colon = rest.indexOf(':');
+        if(colon < 0){ return; }
+        const name = rest.slice(0, colon).trim();
+        const after = rest.slice(colon + 1).trim();
+        const space = after.indexOf(' ');
+        const status = space < 0 ? after : after.slice(0, space);
+        const summary = space < 0 ? '' : after.slice(space + 1).trim();
+        const id = name || 'subagent';
+        liveSubagentMap[id] = { id: id, name: name || id, status: status, summary: summary };
+        renderSubagentsPanel();
+      }
       function estimateTokens(chars){
         return Math.max(0, Math.ceil(chars / 4));
       }
@@ -2478,6 +2553,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         
         if (kind === 'tool' || kind === 'status' || kind === 'system') {
           pushTrace(ev.content || "");
+          if(kind === 'system'){ noteLiveSubagentFromEvent(ev); }
           return;
         }
 
@@ -2814,6 +2890,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           appendChat('system', msg);
           return;
         }
+        currentDashboardView = view;
         if(usageRefreshTimer){
           clearInterval(usageRefreshTimer);
           usageRefreshTimer = null;
@@ -2909,13 +2986,22 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
       async function pollAgent(){
         if(!activeSessionId){ return; }
-        const res = await fetch(withToken('/api/agent/' + activeSessionId)).then(r=>r.json());
+        let res;
+        try {
+          res = await apiJson('/api/agent/' + activeSessionId);
+        } catch(_e){ return; }
         if(!res.ok){ return; }
         const s = res.session;
+        if(!s){ return; }
         rememberCursorSessionId(s.id, s.cursorSessionId);
         document.getElementById('agentSessionInfo').textContent = 'session=' + s.id + ' status=' + s.status + (s.exitCode !== undefined ? (' exit=' + s.exitCode) : '');
         document.getElementById('agentStatusBadge').textContent = s.status;
-        agentMetrics.outputChars = (s.output || '').length + (s.errorOutput || '').length;
+        if(Array.isArray(s.liveSubagents)){
+          applyLiveSubagents(s.liveSubagents);
+        }
+        const outLen = typeof s.outputChars === 'number' ? s.outputChars : (s.output || '').length;
+        const errLen = typeof s.errorOutputChars === 'number' ? s.errorOutputChars : (s.errorOutput || '').length;
+        agentMetrics.outputChars = outLen + errLen;
         refreshMetrics();
         backfillConversationEvents(s.events);
         if(s.status !== 'running' && pollTimer){
@@ -3042,8 +3128,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           cancelBtn.disabled = true;
         }
         try{
-          const httpRes = await fetch(withToken('/api/agent/' + activeSessionId + '/stop'), { method: 'POST' });
-          const data = await httpRes.json();
+          const data = await apiJson('/api/agent/' + activeSessionId + '/stop', { method: 'POST' });
           if(data && data.ok && data.stopped){
             appendChat('system', 'Stop requested — winding down the agent process.');
           } else if(data && data.ok){
@@ -3075,29 +3160,36 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         const localSessionId = continueMode ? (pickedSession || selectedResumeSessionId || activeSessionId || '') : '';
         const baseArgs = (document.getElementById('agentArgs').value || '').trim();
         const cleanedArgs = baseArgs.replace(/(?:^|\s)--resume\s+\S+/g, '').trim();
+        const planSelect = document.getElementById('agentPlanSelect');
+        let planId = (planSelect && planSelect.value) ? planSelect.value : undefined;
+        if(!planId){
+          try { planId = localStorage.getItem('winnow-active-plan-id') || undefined; } catch(_e) {}
+        }
         const payload = {
           prompt,
           args: cleanedArgs,
           modelPreference: document.getElementById('agentModelPref').value,
           autonomyMode: document.getElementById('autonomyMode').checked,
           graphSeed: document.getElementById('graphSeedMode').checked,
+          planId: planId,
           sessionId: localSessionId || undefined,
           cursorSessionId: continueMode
             ? lastCursorSessionId || (isCursorChatId(localSessionId) ? localSessionId : undefined)
             : undefined,
+          executionMode: (document.getElementById('agentExecutionMode') && document.getElementById('agentExecutionMode').value) || 'cursor',
+          attachmentIds: (typeof agentAttachments !== 'undefined' && Array.isArray(agentAttachments)) ? agentAttachments.map(function(item){ return item.id; }) : [],
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
         applyAgentRunUi();
         let res = null;
         try {
-          const httpRes = await fetch(withToken('/api/agent/start'),{
+          res = await apiJson('/api/agent/start',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload),
             signal: agentStartAbort.signal,
           });
-          res = await httpRes.json();
           if(res && res.ok === true){
             agentSessionRunning = true;
           }
@@ -3127,6 +3219,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           selectedResumeSessionId = activeSessionId;
         } else {
           clearChat();
+          liveSubagentMap = {};
+          renderSubagentsPanel();
         }
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
@@ -3143,13 +3237,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
           chunkCount: 0,
         };
         refreshMetrics();
-        if(pollTimer){ clearInterval(pollTimer); }
-        pollTimer = setInterval(pollAgent, 1000);
+        if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
         attachStream(activeSessionId);
         pollAgent();
         // Refresh sidebar list but don't force a reload of the current session panel
         setTimeout(async () => {
-          const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
+          const data = await apiJson('/api/sessions?limit=25');
           updateResumeSelect(data.sessions || []);
           const rows = (data.sessions || []).map((s, idx) => {
             const isSelected = s.id === activeSessionId;
@@ -3181,7 +3274,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         }
       }
       async function refreshSessions(){
-        const data = await fetch(withToken('/api/sessions?limit=25')).then(r=>r.json());
+        const data = await apiJson('/api/sessions?limit=25');
         document.getElementById('sessionDirInfo').textContent = 'dir: ' + (data.dir || '(unknown)');
         updateResumeSelect(data.sessions || []);
         const rows = (data.sessions || []).map((s, idx) =>
@@ -3197,7 +3290,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       }
       async function loadSession(id){
         if(!id){ return; }
-        const data = await fetch(withToken('/api/sessions/' + id)).then(r=>r.json());
+        const data = await apiJson('/api/sessions/' + id);
         if(!data || data.error || !Array.isArray(data.messages)){ return; }
         selectedSyncedSession = id;
         selectedResumeSessionId = id;

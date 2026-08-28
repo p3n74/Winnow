@@ -1,8 +1,8 @@
-import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { openProjectSqlite } from "./projectDb.js";
 
 export type PlanRecord = {
   id: string;
@@ -229,19 +229,17 @@ export function parseTasksFromMarkdown(markdown: string): Omit<PlanTaskNode, "ma
 export class PlanStore {
   private readonly projectRoot: string;
   private readonly plansDir: string;
-  private readonly dbPath: string;
-  private db: InstanceType<typeof Database> | null = null;
+  private db: ReturnType<typeof openProjectSqlite> | null = null;
 
   constructor(projectRoot: string) {
     this.projectRoot = resolve(projectRoot);
     this.plansDir = join(this.projectRoot, ".winnow", "plans");
-    this.dbPath = join(this.projectRoot, ".winnow", "winnow.db");
   }
 
   init(): void {
     if (this.db) return;
     mkdirSync(this.plansDir, { recursive: true });
-    this.db = new Database(this.dbPath);
+    this.db = openProjectSqlite(this.projectRoot);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS plans (
         id           TEXT PRIMARY KEY,

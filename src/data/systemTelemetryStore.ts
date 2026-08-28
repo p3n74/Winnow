@@ -1,6 +1,5 @@
-import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
+import { openProjectSqlite } from "./projectDb.js";
 
 export type SystemTelemetrySample = {
   sampledAt: string;
@@ -13,17 +12,16 @@ export type SystemTelemetrySample = {
 };
 
 export class SystemTelemetryStore {
-  private readonly dbPath: string;
-  private db: InstanceType<typeof Database> | null = null;
+  private readonly projectRoot: string;
+  private db: ReturnType<typeof openProjectSqlite> | null = null;
 
   constructor(projectRoot: string) {
-    this.dbPath = join(resolve(projectRoot), ".winnow", "winnow.db");
+    this.projectRoot = resolve(projectRoot);
   }
 
   async init(): Promise<void> {
     if (this.db) return;
-    mkdirSync(dirname(this.dbPath), { recursive: true });
-    this.db = new Database(this.dbPath);
+    this.db = openProjectSqlite(this.projectRoot);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS system_telemetry (
         sampled_at         TEXT PRIMARY KEY,

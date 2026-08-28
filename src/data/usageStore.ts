@@ -53,6 +53,7 @@ export function openUsageDb(): InstanceType<typeof Database> | null {
     mkdirSync(dirname(path), { recursive: true });
     _db = new Database(path);
     _db.pragma("journal_mode = WAL");
+    _db.pragma("busy_timeout = 5000");
     _db.exec(SCHEMA);
     return _db;
   } catch (err) {

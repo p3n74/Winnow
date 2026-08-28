@@ -38,4 +38,30 @@ describe("buildAgentWindowPageHtml", () => {
     expect(html).not.toContain("pass <code>--resume");
     expect(html).not.toContain("effectiveArgs");
   });
+
+  it("shares apiJson and only 1Hz-polls the agent after SSE onerror", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    expect(html).toContain("async function apiJson");
+    expect(html).toContain("function withToken");
+    expect(html).toContain("streamSource.onerror");
+
+    const start = html.indexOf("async function startAgentRun");
+    const startEnd = html.indexOf("function appendPrompt", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(startEnd).toBeGreaterThan(start);
+    const startFn = html.slice(start, startEnd);
+    expect(startFn).toContain("attachStream");
+    expect(startFn).toContain("pollAgent()");
+    expect(startFn).not.toMatch(/setInterval\s*\(\s*pollAgent/);
+
+    const attach = html.indexOf("function attachStream");
+    const attachEnd = html.indexOf("function clearAgentFlavorTimer", attach);
+    const attachFn = html.slice(attach, attachEnd);
+    expect(attachFn).toMatch(/streamSource\.onerror[\s\S]{0,250}setInterval\s*\(\s*pollAgent\s*,\s*1000\s*\)/);
+
+    const intervalHits = [...html.matchAll(/setInterval\s*\(\s*pollAgent\s*,\s*1000\s*\)/g)];
+    expect(intervalHits.length).toBe(1);
+    const around = html.slice(Math.max(0, intervalHits[0].index! - 180), intervalHits[0].index! + 40);
+    expect(around).toContain("streamSource.onerror");
+  });
 });

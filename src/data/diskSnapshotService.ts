@@ -1,7 +1,10 @@
 import { readdir, lstat } from "node:fs/promises";
 import { statfs } from "node:fs/promises";
-import { join } from "node:path";
-import { listProjects } from "../config/projects.js";
+import { join, resolve } from "node:path";
+import { listProjects as listProjectsFromRegistry } from "../config/projects.js";
+import type { ProjectRecord } from "../config/projects.js";
+/** Same-module namespace so tests can `spyOn(module, "directorySizeBytes")`. */
+import * as diskSnapshotService from "./diskSnapshotService.js";
 
 export type ProjectSizeEntry = {
   path: string;
@@ -27,6 +30,34 @@ const DEFAULT_SKIP_DIR = new Set([
 
 const MAX_WALK_FILES = 400_000;
 const scanBudgetMs = 90_000;
+
+/** Default freshness window for the in-memory dashboard snapshot. */
+export const DISK_DASHBOARD_TTL_MS = 60_000;
+
+export type DiskDashboard = {
+  ok: boolean;
+  volume: VolumeStats;
+  projects: ProjectSizeEntry[];
+  measuredAt: string;
+  note?: string;
+};
+
+export type BuildDiskDashboardOpts = {
+  volumePath: string;
+  listProjects?: () => Promise<ProjectRecord[]>;
+  forceRefresh?: boolean;
+  nowMs?: number;
+  ttlMs?: number;
+};
+
+type DiskDashboardCache = {
+  measuredAtMs: number;
+  volumePath: string;
+  projectPathsKey: string;
+  snapshot: DiskDashboard;
+};
+
+let cache: DiskDashboardCache | null = null;
 
 /**
  * Best-effort directory size. Skips heavy/derived dirs for speed; may truncate on huge trees.
@@ -137,31 +168,64 @@ export async function volumeBytesForPath(rootPath: string): Promise<VolumeStats>
   }
 }
 
+function projectPathsKey(projects: ProjectRecord[]): string {
+  return [...new Set(projects.map((p) => resolve(p.path)))].sort().join("\n");
+}
+
+export function clearDiskDashboardCache(): void {
+  cache = null;
+}
+
 /**
  * Current disk usage for the workspace volume and per registered project (latest measurement only; not persisted).
+ * Returns a cached snapshot when the TTL has not expired and the resolved volume + project path set are unchanged.
  */
-export async function buildDiskDashboard(opts: { volumePath: string }): Promise<{
-  ok: boolean;
-  volume: VolumeStats;
-  projects: ProjectSizeEntry[];
-  measuredAt: string;
-  note?: string;
-}> {
-  const vol = await volumeBytesForPath(opts.volumePath);
+export async function buildDiskDashboard(opts: BuildDiskDashboardOpts): Promise<DiskDashboard> {
+  const nowMs = opts.nowMs ?? Date.now();
+  const ttlMs = opts.ttlMs ?? DISK_DASHBOARD_TTL_MS;
+  const forceRefresh = opts.forceRefresh === true;
+  const listProjects = opts.listProjects ?? listProjectsFromRegistry;
+  const resolvedVolume = resolve(opts.volumePath);
   const projects = await listProjects();
-  const sizes: ProjectSizeEntry[] = [];
-  for (const p of projects) {
-    const { sizeBytes, truncated } = await directorySizeBytes(p.path);
-    sizes.push({ path: p.path, name: p.name, sizeBytes, truncated });
+  const pathsKey = projectPathsKey(projects);
+
+  if (
+    !forceRefresh &&
+    cache &&
+    nowMs - cache.measuredAtMs < ttlMs &&
+    cache.volumePath === resolvedVolume &&
+    cache.projectPathsKey === pathsKey
+  ) {
+    return cache.snapshot;
   }
 
-  return {
-    ok: true,
-    volume: vol,
-    projects: sizes,
-    measuredAt: new Date().toISOString(),
-    note: sizes.some((s) => s.truncated)
-      ? "Some project sizes are estimates (very large trees are capped or time-limited; common vendor dirs are skipped)."
-      : undefined,
-  };
+  try {
+    const vol = await volumeBytesForPath(opts.volumePath);
+    const sizes: ProjectSizeEntry[] = [];
+    for (const p of projects) {
+      const { sizeBytes, truncated } = await diskSnapshotService.directorySizeBytes(p.path);
+      sizes.push({ path: p.path, name: p.name, sizeBytes, truncated });
+    }
+
+    const snapshot: DiskDashboard = {
+      ok: true,
+      volume: vol,
+      projects: sizes,
+      measuredAt: new Date(nowMs).toISOString(),
+      note: sizes.some((s) => s.truncated)
+        ? "Some project sizes are estimates (very large trees are capped or time-limited; common vendor dirs are skipped)."
+        : undefined,
+    };
+
+    cache = {
+      measuredAtMs: nowMs,
+      volumePath: resolvedVolume,
+      projectPathsKey: pathsKey,
+      snapshot,
+    };
+    return snapshot;
+  } catch (error) {
+    // Do not cache hard failures (thrown walks / unexpected errors) so a retry can recover.
+    throw error;
+  }
 }

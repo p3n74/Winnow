@@ -44,6 +44,7 @@ import { buildDiskDashboard } from "../data/diskSnapshotService.js";
 import { collectSystemLive } from "../data/systemTelemetry.js";
 import { SystemTelemetryStore } from "../data/systemTelemetryStore.js";
 import { ProcessManager } from "../data/processManager.js";
+import { closeProjectSqlite } from "../data/projectDb.js";
 import { buildEfficiencyAdvisories } from "../data/efficiencyAdvisor.js";
 import { PlanStore } from "../data/planStore.js";
 import { reconcilePlan, syncPlanTasksToGithub } from "../data/planGithubSync.js";
@@ -104,7 +105,15 @@ import {
   type ManagedProcessStartRequest,
   type UiOptions,
 } from "./ui/types.js";
-import { sendJson, readJsonBody } from "./ui/httpUtil.js";
+import { sendJson, readJsonBody, sendHandlerError } from "./ui/httpUtil.js";
+import { agentStartRequestSchema, graphCorrectionsBodySchema, planCreateBodySchema } from "./ui/apiSchemas.js";
+import {
+  MAX_STDOUT_LINE_BUFFER,
+  capSessionBuffers,
+  enqueueExclusiveWrite,
+  evictIdleSessions,
+  toSessionClientDto,
+} from "./ui/sessionDto.js";
 import { readCursorSession } from "./ui/cursorSessionRead.js";
 import { pickActiveAgentSession } from "./ui/agentTrace.js";
 import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
@@ -239,6 +248,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const info = await stat(real);
     if (!info.isDirectory()) {
       throw new Error(`Not a directory: ${real}`);
+    }
+    const previousRoot = uiWorkspace.dir;
+    if (previousRoot !== real) {
+      try {
+        await processManager.stopAll();
+      } catch (error) {
+        process.stderr.write(
+          `[winnow-ui] stopAll on workspace switch failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+      processManager.close();
+      closeProjectSqlite(previousRoot);
     }
     uiWorkspace.dir = real;
     processManager = new ProcessManager(uiWorkspace.dir);
@@ -708,9 +729,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
   }
 
+  const sessionRecordWriteChains = new Map<string, Promise<void>>();
+
   async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
     await mkdir(localSessionDir(), { recursive: true });
-    await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await writeFile(localSessionRecordPath(record.id), `${JSON.stringify(record)}\n`, "utf8");
   }
 
   async function repairLocalSessionIndexIfStale(): Promise<void> {
@@ -1173,21 +1196,42 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         ? `${[graphPreamble.trim(), planPreamble.trim()].filter(Boolean).join("\n\n---\n\n")}\n\n---\n\n## User request\n\n${prompt}`
         : prompt;
 
-    const persistRecord = () =>
-      writeLocalSessionRecord({
-        id,
-        projectRoot: uiWorkspace.dir,
-        startedAt,
-        endedAt: session.endedAt,
-        status: session.status,
-        args,
-        modelPreference,
-        prompt,
-        output: session.output,
-        errorOutput: session.errorOutput,
-        events: session.events,
-        cursorSessionId: session.cursorSessionId,
-      });
+    let persistTimer: ReturnType<typeof setTimeout> | undefined;
+    const persistRecord = (immediate = false) => {
+      capSessionBuffers(session);
+      const run = () =>
+        enqueueExclusiveWrite(sessionRecordWriteChains, id, () =>
+          writeLocalSessionRecord({
+            id,
+            projectRoot: uiWorkspace.dir,
+            startedAt,
+            endedAt: session.endedAt,
+            status: session.status,
+            args,
+            modelPreference,
+            prompt,
+            output: session.output,
+            errorOutput: session.errorOutput,
+            events: session.events,
+            cursorSessionId: session.cursorSessionId,
+          }),
+        );
+      if (immediate) {
+        if (persistTimer) {
+          clearTimeout(persistTimer);
+          persistTimer = undefined;
+        }
+        return run();
+      }
+      if (persistTimer) {
+        return Promise.resolve();
+      }
+      persistTimer = setTimeout(() => {
+        persistTimer = undefined;
+        void run();
+      }, 250);
+      return Promise.resolve();
+    };
 
     const pushEvent = (kind: AgentEvent["kind"], content: string) => {
       const event: AgentEvent = {
@@ -1223,7 +1267,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.error = "Start cancelled";
       session.endedAt = new Date().toISOString();
       pushEvent("status", "Start cancelled.");
-      void persistRecord();
+      void persistRecord(true);
       finalizeRun(id, "error", null, session.endedAt);
       void upsertLocalSessionIndex({
         id,
@@ -1264,7 +1308,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     ensureCursorWorkspaceLayoutSync(uiWorkspace.dir);
-    void persistRecord();
+    void persistRecord(true);
     void upsertLocalSessionIndex({
       id,
       startedAt,
@@ -1306,7 +1350,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         session.errorOutput += `${errorMessage}\n`;
         pushEvent("stderr", `${errorMessage}\n`);
         pushEvent("status", "❌ External run failed.");
-        void persistRecord();
+        void persistRecord(true);
         finalizeRun(id, "error", 1, session.endedAt);
         void upsertLocalSessionIndex({
           id,
@@ -1385,12 +1429,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           universalBaseUrl,
         });
         session.output += output;
+        capSessionBuffers(session);
         session.exitCode = 0;
         session.status = "done";
         session.endedAt = new Date().toISOString();
         pushEvent("assistant", output);
         pushEvent("status", "✓ External run completed.");
-        void persistRecord();
+        void persistRecord(true);
         finalizeRun(id, "done", 0, session.endedAt);
         void upsertLocalSessionIndex({
           id,
@@ -1425,13 +1470,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       session.error = error.message;
       session.endedAt = new Date().toISOString();
       pushEvent("status", `spawn error: ${error.message}`);
-      void persistRecord();
+      void persistRecord(true);
       finalizeRun(id, "error", 1, session.endedAt);
     });
 
     let stdoutBuffer = "";
     child.stdout?.on("data", (buf: Buffer) => {
       stdoutBuffer += buf.toString("utf8");
+      if (stdoutBuffer.length > MAX_STDOUT_LINE_BUFFER) {
+        const dropped = stdoutBuffer.length - MAX_STDOUT_LINE_BUFFER;
+        stdoutBuffer = stdoutBuffer.slice(-MAX_STDOUT_LINE_BUFFER);
+        pushEvent("status", `stdout line buffer exceeded; dropped ${dropped} chars without a newline.`);
+      }
       const lines = stdoutBuffer.split("\n");
       stdoutBuffer = lines.pop() || "";
 
@@ -1484,6 +1534,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               const text = assistantTextFromStreamEvent(data);
               if (text) {
                 session.output += text;
+                capSessionBuffers(session);
                 pushEvent("assistant", text);
               }
             }
@@ -1558,6 +1609,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           }
         } catch {
           session.output += `${line}\n`;
+          capSessionBuffers(session);
           pushEvent("assistant", `${line}\n`);
         }
       }
@@ -1566,6 +1618,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     child.stderr?.on("data", (buf: Buffer) => {
       const chunk = buf.toString("utf8");
       session.errorOutput += chunk;
+      capSessionBuffers(session);
       pushEvent("stderr", chunk);
       void persistRecord();
     });
@@ -1586,7 +1639,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             ? "✨ Session closed successfully."
             : `❌ Session ended with error (exit code: ${session.exitCode})`;
         pushEvent("status", msg);
-        void persistRecord();
+        void persistRecord(true);
         finalizeRun(id, session.status, session.exitCode ?? null, session.endedAt);
         void upsertLocalSessionIndex({
           id,
@@ -1604,6 +1657,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         });
         pushStreamEvent(id, "done", { sessionId: id });
         closeStreamClients(id);
+        evictIdleSessions(sessions);
       })();
     });
 
@@ -1651,6 +1705,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     if (kind === "assistant") {
       session.output += content.endsWith("\n") ? content : `${content}\n`;
+      capSessionBuffers(session);
     }
     pushStreamEvent(sessionId, "timeline", { sessionId, event });
     pushStreamEvent(sessionId, "status", { status: session.status, sessionId });
@@ -1796,6 +1851,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   };
 
   const server = createServer(async (req, res) => {
+    try {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
     if (!isAuthorized(url)) {
       sendJson(res, 401, { ok: false, error: "unauthorized: invalid or missing token" });
@@ -1891,6 +1947,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       try {
         const body = await buildDiskDashboard({
           volumePath: uiWorkspace.dir,
+          forceRefresh: url.searchParams.get("refresh") === "1",
         });
         sendJson(res, 200, { ...body, workspaceRoot: uiWorkspace.dir });
       } catch (error) {
@@ -1905,6 +1962,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/plans/inbox" && req.method === "GET") {
+      const plans = await listPlans();
+      const inbox = plans.slice(0, 12).map((plan) => ({
+        plan,
+        tasks: planStore.listTasks(plan.id),
+      }));
+      sendJson(res, 200, { ok: true, inbox });
+      return;
+    }
+
     if (url.pathname === "/api/plans" && req.method === "GET") {
       const plans = await listPlans();
       sendJson(res, 200, { ok: true, plans });
@@ -1913,11 +1980,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     if (url.pathname === "/api/plans" && req.method === "POST") {
       try {
-        const body = (await readJsonBody(req)) as {
-          title?: string;
-          markdown?: string;
-          status?: "draft" | "active" | "blocked" | "done";
-        };
+        const parsedBody = planCreateBodySchema.safeParse(await readJsonBody(req));
+        if (!parsedBody.success) {
+          sendJson(res, 400, { ok: false, error: parsedBody.error.issues[0]?.message ?? "invalid plan body" });
+          return;
+        }
+        const body = parsedBody.data;
         const plan = planStore.create({
           title: String(body.title || "").trim() || "Untitled plan",
           markdown: body.markdown,
@@ -2443,13 +2511,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     if (url.pathname === "/api/graph/corrections" && req.method === "POST") {
       try {
-        const body = (await readJsonBody(req)) as { operations?: unknown[] };
-        const operations = Array.isArray(body.operations) ? (body.operations as any[]) : [];
-        if (operations.length === 0) {
-          sendJson(res, 400, { ok: false, error: "operations array is required" });
+        const parsed = graphCorrectionsBodySchema.safeParse(await readJsonBody(req));
+        if (!parsed.success) {
+          sendJson(res, 400, { ok: false, error: parsed.error.issues[0]?.message ?? "invalid corrections" });
           return;
         }
-        const result = graphService.applyCorrections(uiWorkspace.dir, operations as any);
+        const result = graphService.applyCorrections(uiWorkspace.dir, parsed.data.operations);
         sendJson(res, 200, result);
       } catch (error) {
         sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -2650,7 +2717,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/pdf");
           res.setHeader("Content-Length", String(info.size));
-          createReadStream(abs).pipe(res);
+          const stream = createReadStream(abs);
+          stream.on("error", (error) => {
+            sendHandlerError(res, error);
+          });
+          stream.pipe(res);
           return;
         }
         sendJson(res, 400, { ok: false, error: "unsupported file type" });
@@ -3056,11 +3127,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       };
       res.on("close", onClientGone);
       try {
-        const payload = (await readJsonBody(req)) as AgentStartRequest;
-        if (!payload.prompt?.trim()) {
-          sendJson(res, 400, { ok: false, error: "prompt is required" });
+        const parsedStart = agentStartRequestSchema.safeParse(await readJsonBody(req));
+        if (!parsedStart.success) {
+          sendJson(res, 400, { ok: false, error: parsedStart.error.issues[0]?.message ?? "prompt is required" });
           return;
         }
+        const payload = parsedStart.data as AgentStartRequest;
         const session = await startAgentSession(payload, { signal: abortFromDisconnect.signal });
         sendJson(res, 200, { ok: true, sessionId: session.id, cursorSessionId: session.cursorSessionId || null });
       } catch (error) {
@@ -3117,13 +3189,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       }
       sendJson(res, 200, {
         ok: true,
-        session: {
-          id: picked.id,
-          status: picked.status,
-          startedAt: picked.startedAt,
-          endedAt: picked.endedAt,
-          events: (picked.events ?? []).slice(-500),
-        },
+        session: toSessionClientDto(picked),
       });
       return;
     }
@@ -3188,7 +3254,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         sendJson(res, 404, { ok: false, error: "session not found" });
         return;
       }
-      sendJson(res, 200, { ok: true, session });
+      const dto = toSessionClientDto(session);
+      sendJson(res, 200, {
+        ok: true,
+        session: {
+          ...dto,
+          output: dto.outputTail,
+          errorOutput: dto.errorOutputTail,
+        },
+      });
       return;
     }
 
@@ -3215,6 +3289,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     res.statusCode = 404;
     res.end("Not found");
+    } catch (error) {
+      sendHandlerError(res, error);
+    }
   });
 
   server.on("upgrade", (req, socket, head) => {

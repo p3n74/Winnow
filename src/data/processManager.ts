@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { platform } from "node:os";
-import Database from "better-sqlite3";
+import { openProjectSqlite } from "./projectDb.js";
 
 export type ManagedProcessStatus = "running" | "done" | "error" | "stopped";
 
@@ -67,9 +67,22 @@ function normalizeTags(input: string[] | undefined): string[] {
   return [...set].slice(0, 8);
 }
 
+function pidIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+    return code === "EPERM";
+  }
+}
+
 export class ProcessManager {
   private readonly projectRoot: string;
-  private readonly dbPath: string;
   private readonly logsDir: string;
   private readonly records = new Map<string, ManagedProcessRecord>();
   private readonly liveChildren = new Map<string, ChildProcess>();
@@ -80,19 +93,18 @@ export class ProcessManager {
       onClose?: (code: number | null, signal: NodeJS.Signals | null) => void;
     }
   >();
-  private db: InstanceType<typeof Database> | null = null;
+  private db: ReturnType<typeof openProjectSqlite> | null = null;
 
   constructor(projectRoot: string) {
     this.projectRoot = resolve(projectRoot);
     const processRoot = join(this.projectRoot, ".winnow");
-    this.dbPath = join(processRoot, "winnow.db");
     this.logsDir = join(processRoot, "logs");
   }
 
   async init(): Promise<void> {
     await mkdir(this.logsDir, { recursive: true });
     if (!this.db) {
-      this.db = new Database(this.dbPath);
+      this.db = openProjectSqlite(this.projectRoot);
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS managed_processes (
           id            TEXT PRIMARY KEY,
@@ -136,12 +148,14 @@ export class ProcessManager {
       lastOutput: string;
     }>;
     for (const row of rows) {
+      const pid = typeof row.pid === "number" ? row.pid : null;
+      const stillRunning = row.status === "running" && pid != null && pidIsAlive(pid);
       const normalized: ManagedProcessRecord = {
         ...row,
         projectRoot: this.projectRoot,
-        pid: typeof row.pid === "number" ? row.pid : null,
-        status: row.status === "running" ? "error" : row.status,
-        endedAt: row.status === "running" ? nowIso() : row.endedAt,
+        pid,
+        status: row.status === "running" && !stillRunning ? "error" : row.status,
+        endedAt: row.status === "running" && !stillRunning ? nowIso() : row.endedAt,
         tags: (() => {
           try {
             const parsed = JSON.parse(row.tagsJson);
@@ -152,7 +166,7 @@ export class ProcessManager {
         })(),
         lastOutput: row.lastOutput ?? "",
       };
-      if (row.status === "running") {
+      if (row.status === "running" && !stillRunning) {
         normalized.exitCode = row.exitCode ?? null;
       }
       this.records.set(normalized.id, normalized);
@@ -466,6 +480,30 @@ export class ProcessManager {
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  async stopAll(): Promise<void> {
+    const runningIds = [...this.records.values()]
+      .filter((record) => record.status === "running")
+      .map((record) => record.id);
+    for (const id of runningIds) {
+      if (this.liveChildren.has(id)) {
+        await this.stopLadder(id);
+      } else {
+        this.stop(id);
+      }
+    }
+  }
+
+  /**
+   * Clears in-memory maps. Does not close the shared project SQLite handle;
+   * callers use `closeProjectSqlite` (and `stopAll` first if children are live).
+   */
+  close(): void {
+    this.records.clear();
+    this.liveChildren.clear();
+    this.outputHooks.clear();
+    this.db = null;
   }
 
   async readLog(id: string, tailLines: number): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
