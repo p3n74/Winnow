@@ -46,15 +46,18 @@ export function resolveExecutableOnPath(command: string): string | null {
 }
 
 export function resolveSpawnCommand(command: string): ResolvedSpawn {
+  if (process.platform !== "win32") {
+    return { command, prefixArgs: [], shell: false };
+  }
   const resolved = resolveExecutableOnPath(command) || command;
-  if (process.platform === "win32" && /\.ps1$/i.test(resolved)) {
+  if (/\.ps1$/i.test(resolved)) {
     return {
       command: windowsPowershell(),
       prefixArgs: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved],
       shell: false,
     };
   }
-  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved)) {
+  if (/\.(cmd|bat)$/i.test(resolved)) {
     const siblingPs1 = resolved.replace(/\.(cmd|bat)$/i, ".ps1");
     if (existsSync(siblingPs1)) {
       return {
@@ -68,7 +71,7 @@ export function resolveSpawnCommand(command: string): ResolvedSpawn {
   return {
     command: resolved,
     prefixArgs: [],
-    shell: process.platform === "win32" && !/\.exe$/i.test(resolved),
+    shell: !/\.exe$/i.test(resolved),
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bashHasCommand,
+  installDeadPtyResizeGuard,
   isDeadPtyResizeError,
   paneLaunchScript,
   quoteExecutableForBash,
@@ -23,6 +24,12 @@ describe("dead PTY resize", () => {
   it("detects the node-pty Windows resize error", () => {
     expect(isDeadPtyResizeError(new Error("Cannot resize a pty that has already exited"))).toBe(true);
     expect(isDeadPtyResizeError(new Error("spawn failed"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("does not install an uncaughtException handler on Unix", () => {
+    const before = process.listenerCount("uncaughtException");
+    installDeadPtyResizeGuard();
+    expect(process.listenerCount("uncaughtException")).toBe(before);
   });
 
   it("swallows dead-pty resize throws", () => {
