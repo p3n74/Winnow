@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { applyProfileDefaults } from "../config/defaults.js";
 import { loadDotenvFromDisk } from "../config/dotenvFile.js";
@@ -10,6 +12,7 @@ import { runDoctor } from "./doctor.js";
 import { runStatus } from "./status.js";
 import { runUiServer } from "./ui.js";
 import { resolveUiBindOptions } from "./ui/accessAuth.js";
+import { defaultPaneCommand } from "./ui/types.js";
 
 type CliOptions = {
   zh?: boolean;
@@ -215,18 +218,18 @@ export function buildProgram(): Command {
     .option("--no-token", "do not require or generate a UI access token")
     .option("--remote", "bind 0.0.0.0, require an access token unless --no-token, do not auto-open a browser")
     .option("--cors-origin <origin>", "allow CORS from this origin (off by default)")
-    .option("--pane1-cmd <cmd>", "pane 1 command", "ranger")
+    .option("--pane1-cmd <cmd>", "pane 1 command", defaultPaneCommand("1"))
     .option(
       "--pane2-cmd <cmd>",
       "pane 2 shell: optional command run before interactive shell (empty = plain shell only)",
       "",
     )
-    .option("--pane3-cmd <cmd>", "pane 3 command", "htop")
-    .option("--pane4-cmd <cmd>", "pane 4 command", "netwatch")
+    .option("--pane3-cmd <cmd>", "pane 3 command", defaultPaneCommand("3"))
+    .option("--pane4-cmd <cmd>", "pane 4 command", defaultPaneCommand("4"))
     .option(
       "--pane5-cmd <cmd>",
       "pane 5 command",
-      process.platform === "win32" ? "" : process.env.SHELL || "zsh",
+      defaultPaneCommand("5"),
     )
     .option("--no-open", "do not auto-open browser")
     .option(
@@ -254,11 +257,11 @@ export function buildProgram(): Command {
         remote: bind.remote,
         corsOrigin,
         paneCommands: {
-          "1": opts.pane1Cmd ?? "ranger",
-          "2": opts.pane2Cmd ?? "",
-          "3": opts.pane3Cmd ?? "htop",
-          "4": opts.pane4Cmd ?? "netwatch",
-          "5": opts.pane5Cmd ?? (process.platform === "win32" ? "" : (process.env.SHELL ?? "zsh")),
+          "1": opts.pane1Cmd ?? defaultPaneCommand("1"),
+          "2": opts.pane2Cmd ?? defaultPaneCommand("2"),
+          "3": opts.pane3Cmd ?? defaultPaneCommand("3"),
+          "4": opts.pane4Cmd ?? defaultPaneCommand("4"),
+          "5": opts.pane5Cmd ?? defaultPaneCommand("5"),
         },
       });
     });
@@ -266,6 +269,19 @@ export function buildProgram(): Command {
   return program;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  buildProgram().parse(process.argv);
+function isCliEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    const invoked = pathToFileURL(path.resolve(entry)).href;
+    return path.normalize(invoked).toLowerCase() === path.normalize(import.meta.url).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntrypoint()) {
+  void buildProgram().parseAsync(process.argv);
 }
