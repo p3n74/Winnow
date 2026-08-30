@@ -93,4 +93,77 @@ describe("buildAgentWindowPageHtml", () => {
     expect(html).toContain("other folder · ");
     expect(html).toContain("data.cwd");
   });
+
+  it("recreates the Cursor mode picker, slash palette, and Custom Mode badge in the composer", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+
+    // Cursor mode picker
+    expect(html).toContain('id="agentCursorMode"');
+    expect(html).toContain('<option value="agent">Agent</option>');
+    expect(html).toContain('<option value="ask">Ask</option>');
+    expect(html).toContain('<option value="plan">Plan</option>');
+
+    // Slash palette overlay
+    expect(html).toContain('id="agentSlashPalette"');
+    expect(html).toContain('id="agentSlashPaletteList"');
+
+    // Custom Mode badge
+    expect(html).toContain('id="agentCustomModeBadge"');
+    expect(html).toContain('id="agentCustomModeName"');
+    expect(html).toContain('id="agentCustomModeClear"');
+
+    // localStorage keys
+    expect(html).toContain("winnow.agentCursorMode");
+    expect(html).toContain("winnow.agentCustomModeSkill");
+
+    // startAgentRun payload fields
+    expect(html).toContain("cursorMode:");
+    expect(html).toContain("slashInvocations");
+    expect(html).toContain("customModeSkill");
+
+    // Slash catalog fetch
+    expect(html).toContain("/api/agent/slash-catalog");
+
+    // Relabeled fields
+    expect(html).toMatch(/<label>Backend<\/label>/);
+    expect(html).toContain("Winnow plan");
+
+    // Existing "Mode" label now refers to Cursor mode, not the backend select
+    expect(html).not.toMatch(/<label>Mode<\/label>\s*<select id="agentExecutionMode">/);
+  });
+
+  it("keeps agentPrompt keydown handling for Cmd+Enter run, palette navigation, and Shift+Tab cycling", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    const start = html.indexOf('document.getElementById("agentPrompt").addEventListener("keydown"');
+    expect(start).toBeGreaterThan(-1);
+    const end = html.indexOf("});", html.indexOf("cycleCursorMode();", start));
+    const keydownFn = html.slice(start, end + 3);
+    expect(keydownFn).toContain("startAgentRun();");
+    expect(keydownFn).toContain("ArrowDown");
+    expect(keydownFn).toContain("ArrowUp");
+    expect(keydownFn).toContain("Escape");
+    expect(keydownFn).toContain("Backspace");
+    expect(keydownFn).toContain("selectSlashPaletteItem(slashHighlightIndex, evt.altKey)");
+    expect(keydownFn).toContain('evt.key === "Tab" && evt.shiftKey');
+    expect(keydownFn).toContain("cycleCursorMode();");
+  });
+
+  it("wires slashInvocations and customModeSkill into the startAgentRun payload and clears invocations after success", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    const start = html.indexOf("async function startAgentRun");
+    const end = html.indexOf("function appendPrompt", start);
+    const startFn = html.slice(start, end);
+    expect(startFn).toContain('cursorMode: document.getElementById("agentCursorMode")?.value || "agent"');
+    expect(startFn).toContain("slashInvocations: pendingSlashInvocations.slice()");
+    expect(startFn).toContain('customModeSkill: (pinnedCustomModeSkill || "").trim() || undefined');
+    expect(startFn).toContain("pendingSlashInvocations.length === 0 && !pinnedCustomModeSkill");
+    expect(startFn).toContain("pendingSlashInvocations = [];");
+  });
+
+  it("applies catalog mode rows by name so mode:ask is not treated as agent", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    expect(html).toContain("setCursorMode(item.name || item.id)");
+    expect(html).not.toContain("setCursorMode(item.id);");
+    expect(html).toContain("catalogHasModes");
+  });
 });

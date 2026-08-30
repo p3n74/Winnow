@@ -10,6 +10,34 @@ describe("agentStartRequestSchema", () => {
   it("rejects unknown executionMode", () => {
     expect(agentStartRequestSchema.safeParse({ prompt: "hi", executionMode: "cloud" }).success).toBe(false);
   });
+
+  it("accepts cursorMode ask and rejects debug", () => {
+    expect(agentStartRequestSchema.safeParse({ prompt: "hi", cursorMode: "ask" }).success).toBe(true);
+    expect(agentStartRequestSchema.safeParse({ prompt: "hi", cursorMode: "plan" }).success).toBe(true);
+    expect(agentStartRequestSchema.safeParse({ prompt: "hi", cursorMode: "debug" }).success).toBe(false);
+  });
+
+  it("allows an empty prompt only when a slash invocation or custom mode carries the request", () => {
+    expect(
+      agentStartRequestSchema.safeParse({
+        prompt: "",
+        slashInvocations: [{ kind: "command", id: "command:deploy-staging" }],
+      }).success,
+    ).toBe(true);
+    expect(agentStartRequestSchema.safeParse({ prompt: "  ", customModeSkill: "tdd" }).success).toBe(true);
+    expect(agentStartRequestSchema.safeParse({ prompt: "", slashInvocations: [] }).success).toBe(false);
+    expect(agentStartRequestSchema.safeParse({ prompt: "  ", customModeSkill: "  " }).success).toBe(false);
+  });
+
+  it("rejects malformed slash invocations", () => {
+    expect(
+      agentStartRequestSchema.safeParse({ prompt: "hi", slashInvocations: [{ kind: "mode", id: "mode:ask" }] })
+        .success,
+    ).toBe(false);
+    expect(
+      agentStartRequestSchema.safeParse({ prompt: "hi", slashInvocations: [{ kind: "skill", id: "" }] }).success,
+    ).toBe(false);
+  });
 });
 
 describe("graphCorrectionsBodySchema", () => {

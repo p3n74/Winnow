@@ -36,10 +36,12 @@ import {
   queryRuns,
   querySummary,
   queryTimeseries,
+  recomputeAllRunCosts,
   recordRunUsage,
   upsertRunStart,
   usageDbStatus,
 } from "../data/usageStore.js";
+import { getDefaultUsdPerMillion, pricingOverridePath, setDefaultUsdPerMillion } from "../data/pricing.js";
 import { buildDiskDashboard } from "../data/diskSnapshotService.js";
 import { collectSystemLive } from "../data/systemTelemetry.js";
 import { SystemTelemetryStore } from "../data/systemTelemetryStore.js";
@@ -80,6 +82,13 @@ import {
   resolveStoredAttachments,
   saveAttachment,
 } from "../cursor/attachments.js";
+import {
+  ASK_MODE_PROMPT_PREFIX,
+  PLAN_MODE_PROMPT_PREFIX,
+  ensureCursorModeArg,
+  normalizeCursorMode,
+} from "../cursor/cursorMode.js";
+import { expandSlashPrompt, listSlashCatalog } from "../cursor/slashCatalog.js";
 import {
   extractLiveSubagentEvents,
   listSubagentDefinitionFiles,
@@ -1348,6 +1357,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     let diskErrorOutput = "";
     let diskStartedAt = new Date().toISOString();
     let diskCursorSessionId = "";
+    let diskCursorMode = "";
     if (!existing) {
       try {
         const recordPath = localSessionRecordPath(id);
@@ -1358,6 +1368,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         diskErrorOutput = record.errorOutput || "";
         diskStartedAt = record.startedAt || diskStartedAt;
         diskCursorSessionId = record.cursorSessionId || "";
+        diskCursorMode = record.cursorMode || "";
       } catch {
         // New session or failed to read
       }
@@ -1375,13 +1386,18 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         "Continue needs a Cursor chat UUID so the model can load native thread context. Uncheck continue to start a new chat, or run this session once so Winnow can store the id from cursor-agent.",
       );
     }
+    // Cursor IDE mode (agent/ask/plan), not the execution backend. Agent passes no `--mode`.
+    const cursorMode = normalizeCursorMode(payload.cursorMode ?? diskCursorMode);
     const args =
       executionMode === "cursor"
-        ? ensureExecutionArgs(
-            ensureModelArg(baseArgs, payload.modelPreference ?? "default"),
-            autonomyEnabled,
-            resumeSessionId,
-            spawnCwd,
+        ? ensureCursorModeArg(
+            ensureExecutionArgs(
+              ensureModelArg(baseArgs, payload.modelPreference ?? "default"),
+              autonomyEnabled,
+              resumeSessionId,
+              spawnCwd,
+            ),
+            cursorMode,
           )
         : [];
     let session: AgentSession;
@@ -1428,7 +1444,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     const attachmentBlock = buildAttachmentPromptBlock(
       resolveStoredAttachments(uiWorkspace.dir, attachmentIds).map((item) => item.absPath),
     );
-    const prompt = attachmentBlock ? `${payload.prompt}\n\n${attachmentBlock}` : payload.prompt;
+    const customModeSkill = String(payload.customModeSkill || "").trim();
+    const slashExpanded = expandSlashPrompt({
+      projectRoot: spawnCwd,
+      userHomedir: homedir(),
+      invocations: payload.slashInvocations,
+      customModeSkill,
+      userPrompt: payload.prompt,
+    });
+    const prompt = attachmentBlock ? `${slashExpanded}\n\n${attachmentBlock}` : slashExpanded;
     const planId = String(payload.planId || "").trim();
     const graphSeedEnabled = payload.graphSeed !== false && !resumeSessionId;
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
@@ -1445,10 +1469,14 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       planContext && planContext.ok
         ? `## Active plan context\n\nPlan: ${planContext.title}\nPlan ID: ${planContext.id}\n\n${planContext.markdown.slice(0, 12000)}`
         : "";
-    const effectivePrompt =
+    // Belt and suspenders: `--print` keeps write/shell tools, so ask/plan also ship as prompt text.
+    const cursorModePreamble =
+      cursorMode === "ask" ? ASK_MODE_PROMPT_PREFIX : cursorMode === "plan" ? PLAN_MODE_PROMPT_PREFIX : "";
+    const composedPrompt =
       graphPreamble.trim().length > 0 || planPreamble.trim().length > 0
         ? `${[graphPreamble.trim(), planPreamble.trim()].filter(Boolean).join("\n\n---\n\n")}\n\n---\n\n## User request\n\n${prompt}`
         : prompt;
+    const effectivePrompt = cursorModePreamble ? `${cursorModePreamble}\n\n---\n\n${composedPrompt}` : composedPrompt;
 
     let persistTimer: ReturnType<typeof setTimeout> | undefined;
     const persistRecord = (immediate = false) => {
@@ -1468,6 +1496,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             errorOutput: session.errorOutput,
             events: session.events,
             cursorSessionId: session.cursorSessionId,
+            cursorMode,
+            customModeSkill: customModeSkill || undefined,
           }),
         );
       if (immediate) {
@@ -1664,6 +1694,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
                 },
               ]
             : [];
+        // External providers get no cursor-agent flags, so ask/plan is prompt-only here.
+        const cursorModeBlock = cursorModePreamble
+          ? [{ role: "system" as const, content: cursorModePreamble }]
+          : [];
         const messages: ExternalChatMessage[] = [
           {
             role: "system",
@@ -1672,6 +1706,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               "If context is insufficient, say exactly what additional files or commands are needed.",
           },
           { role: "system", content: contextBlock },
+          ...cursorModeBlock,
           ...graphSeedBlock,
           ...history,
         ];
@@ -2920,6 +2955,40 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname === "/api/pricing" && req.method === "GET") {
+      const rates = getDefaultUsdPerMillion();
+      sendJson(res, 200, {
+        ok: true,
+        inputUsdPerMillion: rates.inPerMillion,
+        outputUsdPerMillion: rates.outPerMillion,
+        path: pricingOverridePath(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/pricing" && req.method === "POST") {
+      try {
+        const body = (await readJsonBody(req)) as {
+          inputUsdPerMillion?: unknown;
+          outputUsdPerMillion?: unknown;
+        };
+        const inputUsdPerMillion = Number(body.inputUsdPerMillion);
+        const outputUsdPerMillion = Number(body.outputUsdPerMillion);
+        const rates = setDefaultUsdPerMillion(inputUsdPerMillion, outputUsdPerMillion);
+        const recomputed = recomputeAllRunCosts();
+        sendJson(res, 200, {
+          ok: true,
+          message: `Saved default rates and recalculated cost on ${recomputed.updated} run(s).`,
+          inputUsdPerMillion: rates.inPerMillion,
+          outputUsdPerMillion: rates.outPerMillion,
+          recomputed: recomputed.updated,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (url.pathname === "/api/workspace/cwd" && req.method === "POST") {
       try {
         const payload = (await readJsonBody(req)) as { path?: string; reset?: boolean };
@@ -3534,6 +3603,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       } finally {
         res.removeListener("close", onClientGone);
       }
+      return;
+    }
+
+    if (url.pathname === "/api/agent/slash-catalog" && req.method === "GET") {
+      sendJson(res, 200, { ok: true, items: listSlashCatalog(uiWorkspace.dir, homedir()) });
       return;
     }
 

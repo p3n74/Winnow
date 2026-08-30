@@ -171,7 +171,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       body.agent-controls-collapsed .agent-controls-compact {
         margin-bottom: 0;
       }
-      #agentCollapsedModel {
+      #agentCollapsedModel,
+      #agentCollapsedCursorMode {
         display: none;
         min-width: 0;
         overflow: hidden;
@@ -180,7 +181,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-weight: 600;
         color: var(--text-neon);
       }
-      body.agent-controls-collapsed #agentCollapsedModel {
+      body.agent-controls-collapsed #agentCollapsedModel,
+      body.agent-controls-collapsed #agentCollapsedCursorMode {
         display: inline;
       }
       input, select, button, textarea {
@@ -403,6 +405,94 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         border-top: 1px solid var(--vscode-panel-border);
         padding: 10px 12px 12px;
         background: var(--bg);
+      }
+      .composer-prompt-wrap {
+        position: relative;
+      }
+      .custom-mode-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+        padding: 3px 8px;
+        border: 1px solid var(--accent);
+        border-radius: 999px;
+        background: var(--panel2);
+        color: var(--text-neon);
+        font-size: 11px;
+      }
+      .custom-mode-badge[hidden] {
+        display: none;
+      }
+      .custom-mode-badge-label {
+        color: var(--muted);
+        font-style: italic;
+      }
+      .custom-mode-badge-clear {
+        padding: 0 5px;
+        min-width: 0;
+        line-height: 14px;
+        font-size: 11px;
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+      }
+      .custom-mode-badge-clear:hover {
+        color: var(--text-neon);
+      }
+      .slash-palette {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 100%;
+        margin-bottom: 6px;
+        max-height: 240px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #050505;
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+        z-index: 20;
+      }
+      .slash-palette.slash-palette-below {
+        bottom: auto;
+        top: 100%;
+        margin-bottom: 0;
+        margin-top: 6px;
+      }
+      .slash-palette[hidden] {
+        display: none;
+      }
+      .slash-palette-list {
+        padding: 4px;
+      }
+      .slash-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .slash-row.is-active {
+        background: var(--line-faint);
+        color: var(--text-neon);
+      }
+      .slash-row-name {
+        color: var(--text-neon);
+        font-weight: 700;
+        font-family: ui-monospace, Menlo, monospace;
+        flex-shrink: 0;
+      }
+      .slash-row-desc {
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .slash-empty {
+        padding: 10px;
       }
       #agentAttachmentStrip {
         display: none;
@@ -661,6 +751,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <button type="button" class="secondary" id="btnOpenThreads" aria-expanded="false" aria-controls="agentThreadsBody" title="Open agent list">Agents</button>
                 <button type="button" class="secondary" id="btnToggleAgentControls" aria-expanded="true" aria-controls="agentControls">Controls</button>
                 <span id="agentCollapsedModel" class="small muted"></span>
+                <span id="agentCollapsedCursorMode" class="small muted"></span>
                 <span class="statusBadge" id="agentStatusBadge">idle</span>
                 <span id="agentRunningCount" class="small muted"></span>
                 <span id="agentSessionInfo">No active session.</span>
@@ -668,6 +759,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               <div id="agentControls" data-agent-controls>
               <div class="row small">
                 <label>Mode</label>
+                <select id="agentCursorMode">
+                  <option value="agent">Agent</option>
+                  <option value="ask">Ask</option>
+                  <option value="plan">Plan</option>
+                </select>
+                <label>Backend</label>
                 <select id="agentExecutionMode">
                   <option value="cursor">cursor</option>
                   <option value="external">external</option>
@@ -701,7 +798,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 <option value="">(new session)</option>
               </select>
               <div class="row small" style="margin-top: 8px">
-                <label>Plan</label>
+                <label>Winnow plan</label>
                 <select id="agentPlanSelect" style="min-width: 220px; flex: 1">
                   <option value="">(no plan scope)</option>
                 </select>
@@ -741,7 +838,17 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
             <div class="chat-scroll"><div id="chatHistory"></div></div>
             <div class="composer">
               <div id="agentAttachmentStrip" hidden></div>
-              <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent…"></textarea>
+              <div class="composer-prompt-wrap">
+                <div id="agentCustomModeBadge" class="custom-mode-badge" hidden>
+                  <span class="custom-mode-badge-label">Custom Mode:</span>
+                  <span id="agentCustomModeName"></span>
+                  <button type="button" id="agentCustomModeClear" class="custom-mode-badge-clear" aria-label="Clear custom mode">×</button>
+                </div>
+                <div id="agentSlashPalette" class="slash-palette" hidden role="listbox" aria-label="Slash commands">
+                  <div id="agentSlashPaletteList" class="slash-palette-list"></div>
+                </div>
+                <textarea id="agentPrompt" placeholder="Describe the task for Cursor agent… (try / for commands)"></textarea>
+              </div>
               <input type="file" id="agentAttachInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden />
               <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
                 <div class="agent-run-loading-top">
@@ -1112,6 +1219,7 @@ ${clientApiJavaScript()}
         if (res.ok) {
           await refreshAgentCwdBanner();
           await refreshSessions();
+          refreshSlashCatalog();
         }
       }
       async function resetAgentCwd() {
@@ -1127,6 +1235,7 @@ ${clientApiJavaScript()}
         if (res.ok) {
           await refreshAgentCwdBanner();
           await refreshSessions();
+          refreshSlashCatalog();
         }
       }
       let activeSessionId = null;
@@ -1929,7 +2038,7 @@ ${clientApiJavaScript()}
       }
       async function startAgentRun() {
         const prompt = document.getElementById("agentPrompt").value.trim();
-        if (!prompt) {
+        if (!prompt && pendingSlashInvocations.length === 0 && !pinnedCustomModeSkill) {
           appendChat("system", "Prompt is required.");
           return;
         }
@@ -1957,6 +2066,9 @@ ${clientApiJavaScript()}
             : undefined,
           executionMode: (document.getElementById("agentExecutionMode")?.value || "cursor"),
           attachmentIds: agentAttachments.map((item) => item.id),
+          cursorMode: document.getElementById("agentCursorMode")?.value || "agent",
+          slashInvocations: pendingSlashInvocations.slice(),
+          customModeSkill: (pinnedCustomModeSkill || "").trim() || undefined,
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -1992,6 +2104,7 @@ ${clientApiJavaScript()}
           appendChat("system", "Failed to start: " + JSON.stringify(res));
           return;
         }
+        pendingSlashInvocations = [];
         activeSessionId = res.sessionId;
         draftThread = false;
         runningSessionIds.add(res.sessionId);
@@ -2040,6 +2153,290 @@ ${clientApiJavaScript()}
         if (!area.disabled) {
           area.focus();
         }
+      }
+      const CURSOR_MODE_KEY = "winnow.agentCursorMode";
+      const CUSTOM_MODE_SKILL_KEY = "winnow.agentCustomModeSkill";
+      let pendingSlashInvocations = [];
+      let slashCatalogItems = [];
+      let slashCatalogFetchAttempted = false;
+      let pinnedCustomModeSkill = "";
+      let slashPaletteOpen = false;
+      let slashTriggerIndex = -1;
+      let slashQuery = "";
+      let slashHighlightIndex = 0;
+      let slashFilteredItems = [];
+      function builtinCursorModeItems() {
+        return [
+          { kind: "mode", id: "agent", name: "agent", description: "Agent — edit + tools (default)" },
+          { kind: "mode", id: "ask", name: "ask", description: "Ask — read-only" },
+          { kind: "mode", id: "plan", name: "plan", description: "Plan — research then plan" },
+        ];
+      }
+      function winnowFallbackSlashItems() {
+        return [
+          {
+            kind: "winnow",
+            id: "winnow:implement-tests",
+            name: "implement-tests",
+            description: "Implement the requested change with tests, then summarize what changed.",
+          },
+          {
+            kind: "winnow",
+            id: "winnow:review",
+            name: "review",
+            description: "Review this code for bugs and edge cases, then propose a minimal patch.",
+          },
+          {
+            kind: "winnow",
+            id: "winnow:refactor",
+            name: "refactor",
+            description: "Refactor this code for readability without changing behavior.",
+          },
+        ];
+      }
+      async function ensureSlashCatalogLoaded() {
+        if (slashCatalogFetchAttempted) {
+          return;
+        }
+        slashCatalogFetchAttempted = true;
+        try {
+          const data = await apiJson("/api/agent/slash-catalog");
+          slashCatalogItems = data && data.ok && Array.isArray(data.items) ? data.items : winnowFallbackSlashItems();
+        } catch (_err) {
+          slashCatalogItems = winnowFallbackSlashItems();
+        }
+        renderSlashPalette();
+      }
+      function refreshSlashCatalog() {
+        slashCatalogFetchAttempted = false;
+        void ensureSlashCatalogLoaded();
+      }
+      function filterSlashPaletteItems(query) {
+        const catalog = Array.isArray(slashCatalogItems) ? slashCatalogItems : [];
+        const catalogHasModes = catalog.some((item) => item && item.kind === "mode");
+        const items = catalogHasModes ? catalog : builtinCursorModeItems().concat(catalog);
+        const q = String(query || "").trim().toLowerCase();
+        if (!q) {
+          return items;
+        }
+        return items.filter((item) => {
+          const name = String((item && item.name) || (item && item.id) || "").toLowerCase();
+          const desc = String((item && item.description) || "").toLowerCase();
+          return name.includes(q) || desc.includes(q);
+        });
+      }
+      function positionSlashPalette() {
+        const overlay = document.getElementById("agentSlashPalette");
+        const ta = document.getElementById("agentPrompt");
+        if (!overlay || !ta) {
+          return;
+        }
+        const rect = ta.getBoundingClientRect();
+        overlay.classList.toggle("slash-palette-below", rect.top < 260);
+      }
+      function renderSlashPalette() {
+        const overlay = document.getElementById("agentSlashPalette");
+        const list = document.getElementById("agentSlashPaletteList");
+        if (!overlay || !list) {
+          return;
+        }
+        if (!slashPaletteOpen) {
+          overlay.hidden = true;
+          return;
+        }
+        slashFilteredItems = filterSlashPaletteItems(slashQuery);
+        if (slashHighlightIndex >= slashFilteredItems.length) {
+          slashHighlightIndex = Math.max(0, slashFilteredItems.length - 1);
+        }
+        list.innerHTML = "";
+        if (!slashFilteredItems.length) {
+          const empty = document.createElement("div");
+          empty.className = "slash-empty small muted";
+          empty.textContent = "No matches.";
+          list.appendChild(empty);
+        } else {
+          slashFilteredItems.forEach((item, idx) => {
+            const row = document.createElement("div");
+            row.className = "slash-row" + (idx === slashHighlightIndex ? " is-active" : "");
+            row.setAttribute("role", "option");
+            const name = document.createElement("span");
+            name.className = "slash-row-name";
+            name.textContent = "/" + String((item && item.name) || (item && item.id) || "");
+            const desc = document.createElement("span");
+            desc.className = "slash-row-desc";
+            desc.textContent = (item && item.description) || "";
+            row.appendChild(name);
+            row.appendChild(desc);
+            row.addEventListener("mousedown", (evt) => {
+              evt.preventDefault();
+              selectSlashPaletteItem(idx, evt.altKey);
+            });
+            list.appendChild(row);
+          });
+        }
+        overlay.hidden = false;
+        positionSlashPalette();
+      }
+      function openSlashPalette(triggerIndex, query) {
+        slashPaletteOpen = true;
+        slashTriggerIndex = triggerIndex;
+        slashQuery = query || "";
+        slashHighlightIndex = 0;
+        void ensureSlashCatalogLoaded();
+        renderSlashPalette();
+      }
+      function closeSlashPalette() {
+        slashPaletteOpen = false;
+        slashTriggerIndex = -1;
+        slashQuery = "";
+        slashHighlightIndex = 0;
+        const overlay = document.getElementById("agentSlashPalette");
+        if (overlay) {
+          overlay.hidden = true;
+        }
+      }
+      function removeSlashTokenFromPrompt() {
+        const ta = document.getElementById("agentPrompt");
+        if (!ta || slashTriggerIndex < 0) {
+          return;
+        }
+        const value = ta.value;
+        const before = value.slice(0, slashTriggerIndex);
+        const after = value.slice(slashTriggerIndex + 1 + slashQuery.length);
+        ta.value = before + after;
+        const caret = before.length;
+        ta.setSelectionRange(caret, caret);
+        ta.focus();
+      }
+      function handleSlashPaletteInput() {
+        const ta = document.getElementById("agentPrompt");
+        if (!ta) {
+          return;
+        }
+        const caret = typeof ta.selectionStart === "number" ? ta.selectionStart : ta.value.length;
+        const beforeCaret = ta.value.slice(0, caret);
+        const match = beforeCaret.match(/(?:^|\\s)\\/(\\S*)$/);
+        if (match) {
+          const query = match[1];
+          const slashIndex = beforeCaret.length - query.length - 1;
+          if (!slashPaletteOpen) {
+            openSlashPalette(slashIndex, query);
+          } else {
+            slashTriggerIndex = slashIndex;
+            slashQuery = query;
+            slashHighlightIndex = 0;
+            renderSlashPalette();
+          }
+        } else if (slashPaletteOpen) {
+          closeSlashPalette();
+        }
+      }
+      function persistCursorMode(mode) {
+        try {
+          localStorage.setItem(CURSOR_MODE_KEY, mode);
+        } catch (_err) {}
+      }
+      function syncCollapsedCursorModeLabel() {
+        const select = document.getElementById("agentCursorMode");
+        const label = document.getElementById("agentCollapsedCursorMode");
+        if (!label) {
+          return;
+        }
+        const value = (select && select.value) || "agent";
+        const names = { agent: "Agent", ask: "Ask", plan: "Plan" };
+        label.textContent = names[value] || value;
+      }
+      function setCursorMode(mode) {
+        const select = document.getElementById("agentCursorMode");
+        if (!select) {
+          return;
+        }
+        const valid = ["agent", "ask", "plan"];
+        const next = valid.includes(mode) ? mode : "agent";
+        select.value = next;
+        persistCursorMode(next);
+        syncCollapsedCursorModeLabel();
+      }
+      function restoreCursorMode() {
+        let mode = "agent";
+        try {
+          const stored = localStorage.getItem(CURSOR_MODE_KEY);
+          if (stored === "agent" || stored === "ask" || stored === "plan") {
+            mode = stored;
+          }
+        } catch (_err) {}
+        setCursorMode(mode);
+      }
+      function cycleCursorMode() {
+        const order = ["agent", "plan", "ask"];
+        const select = document.getElementById("agentCursorMode");
+        const current = (select && select.value) || "agent";
+        const idx = order.indexOf(current);
+        const next = order[(idx + 1) % order.length];
+        setCursorMode(next);
+      }
+      function renderCustomModeBadge() {
+        const badge = document.getElementById("agentCustomModeBadge");
+        const nameEl = document.getElementById("agentCustomModeName");
+        if (!badge) {
+          return;
+        }
+        if (pinnedCustomModeSkill) {
+          if (nameEl) {
+            nameEl.textContent = pinnedCustomModeSkill;
+          }
+          badge.hidden = false;
+        } else {
+          badge.hidden = true;
+        }
+      }
+      function pinCustomModeSkill(name) {
+        const trimmed = String(name || "").trim();
+        if (!trimmed) {
+          return;
+        }
+        pinnedCustomModeSkill = trimmed;
+        try {
+          localStorage.setItem(CUSTOM_MODE_SKILL_KEY, trimmed);
+        } catch (_err) {}
+        renderCustomModeBadge();
+      }
+      function clearCustomModeSkill() {
+        pinnedCustomModeSkill = "";
+        try {
+          localStorage.removeItem(CUSTOM_MODE_SKILL_KEY);
+        } catch (_err) {}
+        renderCustomModeBadge();
+      }
+      function restoreCustomModeSkill() {
+        try {
+          pinnedCustomModeSkill = localStorage.getItem(CUSTOM_MODE_SKILL_KEY) || "";
+        } catch (_err) {
+          pinnedCustomModeSkill = "";
+        }
+        renderCustomModeBadge();
+      }
+      function selectSlashPaletteItem(idx, altKey) {
+        const item = slashFilteredItems[idx];
+        if (!item) {
+          closeSlashPalette();
+          return;
+        }
+        if (item.kind === "mode") {
+          setCursorMode(item.name || item.id);
+          removeSlashTokenFromPrompt();
+          closeSlashPalette();
+          return;
+        }
+        if (altKey && (item.kind === "skill" || item.kind === "builtin-skill")) {
+          pinCustomModeSkill(item.name || item.id);
+          removeSlashTokenFromPrompt();
+          closeSlashPalette();
+          return;
+        }
+        pendingSlashInvocations.push({ kind: item.kind, id: item.id });
+        removeSlashTokenFromPrompt();
+        closeSlashPalette();
       }
       async function refreshSessions() {
         const data = await apiJson("/api/sessions?limit=25");
@@ -2399,6 +2796,13 @@ ${clientApiJavaScript()}
           updateExecutionModeUi();
         });
       }
+      const cursorModeSelect = document.getElementById("agentCursorMode");
+      if (cursorModeSelect) {
+        cursorModeSelect.addEventListener("change", () => {
+          persistCursorMode(cursorModeSelect.value || "agent");
+          syncCollapsedCursorModeLabel();
+        });
+      }
       if (sessionSelect) {
         sessionSelect.addEventListener("change", () => {
           const value = sessionSelect.value || "";
@@ -2430,6 +2834,40 @@ ${clientApiJavaScript()}
           }
           evt.preventDefault();
           startAgentRun();
+          return;
+        }
+        if (slashPaletteOpen) {
+          if (evt.key === "ArrowDown") {
+            evt.preventDefault();
+            slashHighlightIndex = Math.min(Math.max(slashFilteredItems.length - 1, 0), slashHighlightIndex + 1);
+            renderSlashPalette();
+            return;
+          }
+          if (evt.key === "ArrowUp") {
+            evt.preventDefault();
+            slashHighlightIndex = Math.max(0, slashHighlightIndex - 1);
+            renderSlashPalette();
+            return;
+          }
+          if (evt.key === "Enter") {
+            evt.preventDefault();
+            selectSlashPaletteItem(slashHighlightIndex, evt.altKey);
+            return;
+          }
+          if (evt.key === "Escape") {
+            evt.preventDefault();
+            closeSlashPalette();
+            return;
+          }
+          if (evt.key === "Backspace" && !slashQuery) {
+            closeSlashPalette();
+            return;
+          }
+          return;
+        }
+        if (evt.key === "Tab" && evt.shiftKey) {
+          evt.preventDefault();
+          cycleCursorMode();
         }
       });
       document.getElementById("agentPrompt").addEventListener("paste", (evt) => {
@@ -2484,13 +2922,35 @@ ${clientApiJavaScript()}
           attachInput.value = "";
         });
       }
-      document.getElementById("agentPrompt").addEventListener("input", syncAgentLoadingHeight);
+      document.getElementById("agentPrompt").addEventListener("input", () => {
+        syncAgentLoadingHeight();
+        handleSlashPaletteInput();
+      });
       window.addEventListener("resize", syncAgentLoadingHeight);
+      document.addEventListener("mousedown", (evt) => {
+        if (!slashPaletteOpen) {
+          return;
+        }
+        const overlay = document.getElementById("agentSlashPalette");
+        const ta = document.getElementById("agentPrompt");
+        if (overlay && overlay.contains(evt.target)) {
+          return;
+        }
+        if (ta && ta.contains(evt.target)) {
+          return;
+        }
+        closeSlashPalette();
+      });
+      document.getElementById("agentCustomModeClear")?.addEventListener("click", () => {
+        clearCustomModeSkill();
+      });
       if (EMBED_MODE) {
         document.body.classList.add("embed");
       }
       initAgentControlsCollapse();
       initThreadsCollapse();
+      restoreCursorMode();
+      restoreCustomModeSkill();
       bootstrapCursorAndModels();
       document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
       document.getElementById("btnStartResolver")?.addEventListener("click", () => { void startResolverAgent(); });
