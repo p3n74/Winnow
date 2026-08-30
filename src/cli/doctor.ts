@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { WinnowConfig } from "../config/schema.js";
+import { spawnCommand } from "../cursor/spawnCommand.js";
 import { isNativeAbiMismatch, NATIVE_PACKAGES } from "../../scripts/nativeAbi.mjs";
 
 function runCommand(command: string, args: string[]): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnCommand(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout?.on("data", (buf: Buffer) => {
       output += buf.toString("utf8");

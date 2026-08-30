@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import pty from "node-pty";
+import { spawnCommand } from "../cursor/spawnCommand.js";
 import { loadConfigFromEnv, WinnowConfig } from "../config/schema.js";
 import { getStatusSnapshot } from "./status.js";
 import {
@@ -115,6 +116,13 @@ import {
   type UiOptions,
 } from "./ui/types.js";
 import { sendJson, readJsonBody, sendHandlerError, applySecurityHeaders, applyNoStore } from "./ui/httpUtil.js";
+import {
+  installDeadPtyResizeGuard,
+  paneLaunchScript,
+  quoteExecutableForBash,
+  safePtyResize,
+  safePtyWrite,
+} from "./ui/ptyUtil.js";
 import {
   authorizeAccess,
   buildUiAccessCookie,
@@ -244,6 +252,7 @@ function spawnDesktopShell(loadUrl: string): void {
 }
 
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
+  installDeadPtyResizeGuard();
   let config = { ...baseConfig };
   const winnowLaunchRoot = resolve(process.cwd());
   const uiWorkspace = { dir: winnowLaunchRoot };
@@ -413,7 +422,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   function spawnCursorCapture(args: string[], timeoutMs = 20000): Promise<string> {
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
     return new Promise((resolvePromise) => {
-      const child = spawn(cursorExe, args, {
+      const child = spawnCommand(cursorExe, args, {
         stdio: ["ignore", "pipe", "pipe"],
         cwd: uiWorkspace.dir,
         env: process.env,
@@ -431,7 +440,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       });
       const finish = () => {
         clearTimeout(timer);
-        resolvePromise(`${stdout}\n${stderr}`.trim());
+        resolvePromise((stdout.trim() || stderr).trim());
       };
       child.on("error", (error) => {
         clearTimeout(timer);
@@ -482,7 +491,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     const cursorExe = (config.cursorCommand || "").trim() || "cursor-agent";
     cursorLoginOutput = "";
-    cursorLoginChild = spawn(cursorExe, ["login"], {
+    cursorLoginChild = spawnCommand(cursorExe, ["login"], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: uiWorkspace.dir,
       env: process.env,
@@ -1078,7 +1087,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const spawnMainPane = (paneId: PaneId): pty.IPty => {
     const shell = resolveInteractiveShellForPty();
     const rawCommand = (paneCommands[paneId] || "").trim();
-    const launchScript = rawCommand ? `${rawCommand}; exec ${shell}` : `exec ${shell}`;
+    const quotedShell = quoteExecutableForBash(shell);
+    const launchScript = paneLaunchScript(shell, rawCommand, quotedShell);
+    if (rawCommand && launchScript.startsWith("exec ")) {
+      logMainPane(`pane=${paneId} ${rawCommand} not on PATH; starting shell`);
+    }
     try {
       // Use `-c` (not `-lc`) so panes start as normal interactive shells without forcing a login-shell profile pass.
       return pty.spawn(shell, ["-c", launchScript], {
@@ -1166,9 +1179,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           return;
         }
         if (message.type === "input" && typeof message.data === "string") {
-          live.ptyProcess.write(message.data);
+          safePtyWrite(live.ptyProcess, message.data);
         } else if (message.type === "resize" && Number.isFinite(message.cols) && Number.isFinite(message.rows)) {
-          live.ptyProcess.resize(Math.max(20, Number(message.cols)), Math.max(6, Number(message.rows)));
+          safePtyResize(live.ptyProcess, Number(message.cols), Number(message.rows));
         }
       } catch {
         // ignore malformed client message
@@ -1747,7 +1760,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       "status",
       `Spawn: ${cursorExe} ${args.join(" ")} | modelPreference=${modelPreference || "(empty)"}`,
     );
-    const child = spawn(cursorExe, args, {
+    const child = spawnCommand(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: spawnCwd,
       env: process.env,
@@ -3757,7 +3770,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       applyNoStore(res);
-      res.end(buildMainTerminalHtml(options.token));
+      res.end(buildMainTerminalHtml(options.token, paneCommands));
       return;
     }
 
