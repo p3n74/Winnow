@@ -14,32 +14,13 @@ export type UiOptions = {
 
 export type PaneId = "1" | "2" | "3" | "4" | "5";
 
-export function defaultPaneCommand(paneId: PaneId): string {
-  if (process.platform === "win32") {
-    return "";
-  }
-  if (paneId === "1") {
-    return "ranger";
-  }
-  if (paneId === "3") {
-    return "htop";
-  }
-  if (paneId === "4") {
-    return "netwatch";
-  }
-  if (paneId === "5") {
-    return process.env.SHELL || "zsh";
-  }
-  return "";
-}
-
 export const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
-  "1": defaultPaneCommand("1"),
+  "1": "ranger",
   /** Pane 2 is the embed workspace (iframe); the shell PTY is opened only from the Workspace↔Terminal tab in that pane. */
-  "2": defaultPaneCommand("2"),
-  "3": defaultPaneCommand("3"),
-  "4": defaultPaneCommand("4"),
-  "5": defaultPaneCommand("5"),
+  "2": "",
+  "3": "htop",
+  "4": "netwatch",
+  "5": process.platform === "win32" ? "" : process.env.SHELL || "zsh",
 };
 
 export type ProfileUpdateRequest = {

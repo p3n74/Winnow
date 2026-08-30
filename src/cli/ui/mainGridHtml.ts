@@ -2,26 +2,8 @@
  * Main grid (pane terminals) HTML served at `/main`.
  */
 import { clientApiJavaScript } from "./clientApiSnippet.js";
-import type { PaneId } from "./types.js";
 
-const DISPLAY_PANE_COMMANDS: Record<PaneId, string> = {
-  "1": "ranger",
-  "2": "",
-  "3": "htop",
-  "4": "netwatch",
-  "5": "shell",
-};
-
-function paneCmdLabel(paneId: PaneId, paneCommands?: Partial<Record<PaneId, string>>): string {
-  const raw = (paneCommands?.[paneId] ?? DISPLAY_PANE_COMMANDS[paneId]).trim();
-  return raw || "shell";
-}
-
-export function buildMainTerminalHtml(token?: string, paneCommands?: Partial<Record<PaneId, string>>): string {
-  const pane1Cmd = paneCmdLabel("1", paneCommands);
-  const pane3Cmd = paneCmdLabel("3", paneCommands);
-  const pane4Cmd = paneCmdLabel("4", paneCommands);
-  const pane5Cmd = paneCmdLabel("5", paneCommands);
+export function buildMainTerminalHtml(token?: string): string {
   return `<!doctype html>
 <html>
   <head>
@@ -1301,11 +1283,11 @@ export function buildMainTerminalHtml(token?: string, paneCommands?: Partial<Rec
           <span class="chip chipAgentCount" id="toolbarAgentCount" hidden></span>
         </div>
         <div class="toolbarRight">
-          <span class="chip">1 ${pane1Cmd} · trace · docs</span>
+          <span class="chip">1 ranger · trace · docs</span>
           <span class="chip">2 agent · web · shell · graph · plans · processes · scripts</span>
-          <span class="chip">3 ${pane3Cmd}</span>
-          <span class="chip">4 ${pane4Cmd}</span>
-          <span class="chip">5 ${pane5Cmd}</span>
+          <span class="chip">3 htop</span>
+          <span class="chip">4 netwatch</span>
+          <span class="chip">5 shell</span>
         </div>
       </div>
       <div class="root">
@@ -1313,7 +1295,7 @@ export function buildMainTerminalHtml(token?: string, paneCommands?: Partial<Rec
         <div id="pane1Wrap" class="pane">
           <div class="paneInner">
             <div class="paneHead">
-              <span class="paneTitle">1 File Browser <span class="paneCmd">${pane1Cmd}</span></span>
+              <span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span>
               <div style="display:flex;align-items:center;gap:10px">
                 <div class="paneTabs" role="tablist" aria-label="File browser, agent trace, and docs">
                   <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
@@ -1349,10 +1331,10 @@ export function buildMainTerminalHtml(token?: string, paneCommands?: Partial<Rec
         </div>
         <div id="gridLeftBottom" class="leftBottom">
           <div class="leftBottomLeft">
-            <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">${pane3Cmd}</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
-            <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">4 Network <span class="paneCmd">${pane4Cmd}</span></span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
+            <div id="pane3Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">3 Monitor <span class="paneCmd">htop</span></span><button class="reconnect" data-pane="3">Reconnect</button></div><div id="pane3" class="term"></div></div></div>
+            <div id="pane4Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">4 Network <span class="paneCmd">netwatch</span></span><button class="reconnect" data-pane="4">Reconnect</button></div><div id="pane4" class="term"></div></div></div>
           </div>
-          <div id="pane5Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">5 Terminal <span class="paneCmd">${pane5Cmd}</span></span><button class="reconnect" data-pane="5">Reconnect</button></div><div id="pane5" class="term"></div></div></div>
+          <div id="pane5Wrap" class="pane"><div class="paneInner"><div class="paneHead"><span class="paneTitle">5 Terminal <span class="paneCmd">shell</span></span><button class="reconnect" data-pane="5">Reconnect</button></div><div id="pane5" class="term"></div></div></div>
         </div>
       </div>
       <div id="pane2Wrap" class="pane">

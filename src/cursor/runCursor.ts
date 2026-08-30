@@ -1,5 +1,5 @@
+import { spawn } from "node:child_process";
 import { Writable } from "node:stream";
-import { spawnCommand } from "./spawnCommand.js";
 
 type RunCursorOptions = {
   command: string;
@@ -17,7 +17,7 @@ export async function runCursorAgent({
   stderr = process.stderr,
 }: RunCursorOptions): Promise<number> {
   return new Promise<number>((resolve, reject) => {
-    const child = spawnCommand(command, args, {
+    const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });

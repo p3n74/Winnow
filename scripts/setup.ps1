@@ -35,20 +35,6 @@ function Test-WingetPackageInstalled {
     return ($LASTEXITCODE -eq 0)
 }
 
-function Invoke-Npm {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$NpmArgs)
-    $nodeDir = Split-Path -Parent (Get-Command node).Source
-    $npmCmd = Join-Path $nodeDir "npm.cmd"
-    if (-not (Test-Path $npmCmd)) {
-        throw "npm.cmd not found next to node at $nodeDir"
-    }
-    # npm.ps1 reads $MyInvocation.Statement, which StrictMode treats as missing.
-    & $npmCmd @NpmArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "npm $($NpmArgs -join ' ') failed with exit code $LASTEXITCODE"
-    }
-}
-
 function Install-WingetPackage {
     param(
         [string]$Id,
@@ -123,13 +109,13 @@ Write-WinnowSetup "Optional tools (ranger, htop) are not installed automatically
 Write-WinnowSetup "Use WSL, Scoop, or custom pane commands if you need those binaries."
 
 Write-WinnowSetup "Installing npm dependencies..."
-Invoke-Npm install
+npm install
 
 Write-WinnowSetup "Building TypeScript (dist/)..."
-Invoke-Npm run build
+npm run build
 
 Write-WinnowSetup "Rebuilding native modules (better-sqlite3, node-pty) for $(node -v)..."
-Invoke-Npm rebuild better-sqlite3 node-pty
+npm rebuild better-sqlite3 node-pty
 
 function Install-WinnowUiLauncher {
     $binDir = Join-Path $env:USERPROFILE ".local\bin"

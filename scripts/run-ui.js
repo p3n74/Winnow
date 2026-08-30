@@ -59,25 +59,15 @@ function nativesReady() {
   return { ok: true, output: "" };
 }
 
-function spawnInherited(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: root,
-    stdio: "inherit",
-    env: runningNodeEnv(),
-    // .cmd shims (npm/npx) cannot be spawned without a shell on Windows.
-    shell: process.platform === "win32",
-  });
-  if (result.error) {
-    process.stderr.write(`[winnow-ui] failed to spawn ${command}: ${result.error.message}\n`);
-  }
-  return result;
-}
-
 function rebuildNativeModules() {
   process.stdout.write(
     `[winnow-ui] Rebuilding ${NATIVE_PACKAGES.join(", ")} for Node ${process.version}...\n`,
   );
-  return spawnInherited(siblingBin("npm"), ["rebuild", ...NATIVE_PACKAGES]);
+  return spawnSync(siblingBin("npm"), ["rebuild", ...NATIVE_PACKAGES], {
+    cwd: root,
+    stdio: "inherit",
+    env: runningNodeEnv(),
+  });
 }
 
 function ensureNativeModules() {
@@ -121,16 +111,9 @@ if (!ensureNativeModules()) {
 
 process.stdout.write(`[winnow-ui] using node ${process.version}\n`);
 
-const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
-const uiEntry = path.join("src", "cli", "index.ts");
-const ui = existsSync(tsxCli)
-  ? spawnSync(process.execPath, [tsxCli, uiEntry, "ui", ...extraArgs], {
-      cwd: root,
-      stdio: "inherit",
-      env: runningNodeEnv(),
-    })
-  : spawnInherited(siblingBin("npx"), ["tsx", uiEntry, "ui", ...extraArgs]);
-if (ui.error) {
-  process.stderr.write(`[winnow-ui] failed to start UI: ${ui.error.message}\n`);
-}
+const ui = spawnSync(siblingBin("npx"), ["tsx", path.join("src", "cli", "index.ts"), "ui", ...extraArgs], {
+  cwd: root,
+  stdio: "inherit",
+  env: runningNodeEnv(),
+});
 process.exit(ui.status === null ? 1 : ui.status);
