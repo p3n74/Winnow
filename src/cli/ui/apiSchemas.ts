@@ -1,18 +1,42 @@
 import { z } from "zod";
 import type { GraphEdge } from "../../graph/types.js";
 
-export const agentStartRequestSchema = z.object({
-  prompt: z.string().trim().min(1),
-  args: z.string().optional(),
-  modelPreference: z.string().optional(),
-  autonomyMode: z.boolean().optional(),
-  graphSeed: z.boolean().optional(),
-  planId: z.string().optional(),
-  sessionId: z.string().optional(),
-  cursorSessionId: z.string().optional(),
-  executionMode: z.enum(["cursor", "external"]).optional(),
-  attachmentIds: z.array(z.string()).optional(),
-});
+export const agentStartRequestSchema = z
+  .object({
+    // May be empty when a slash invocation or a pinned Custom Mode carries the request.
+    prompt: z.string(),
+    args: z.string().optional(),
+    modelPreference: z.string().optional(),
+    autonomyMode: z.boolean().optional(),
+    graphSeed: z.boolean().optional(),
+    planId: z.string().optional(),
+    sessionId: z.string().optional(),
+    cursorSessionId: z.string().optional(),
+    executionMode: z.enum(["cursor", "external"]).optional(),
+    attachmentIds: z.array(z.string()).optional(),
+    cursorMode: z.enum(["agent", "ask", "plan"]).optional(),
+    slashInvocations: z
+      .array(
+        z.object({
+          kind: z.enum(["command", "skill", "winnow", "builtin-skill"]),
+          id: z.string().min(1),
+        }),
+      )
+      .optional(),
+    customModeSkill: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.prompt.trim().length > 0) {
+      return;
+    }
+    if ((value.slashInvocations?.length ?? 0) > 0) {
+      return;
+    }
+    if ((value.customModeSkill ?? "").trim().length > 0) {
+      return;
+    }
+    ctx.addIssue({ code: "custom", path: ["prompt"], message: "prompt is required" });
+  });
 
 const graphEdgeKindSchema = z.enum([
   "contains",

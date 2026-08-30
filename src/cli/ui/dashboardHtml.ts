@@ -260,6 +260,71 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       .quickbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
       .quickbar button { padding: 4px 10px; font-size: 12px; border-radius: 99px; }
       .runRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; }
+      #agentPromptWrap { position: relative; }
+      .custom-mode-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 6px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--accent);
+        background: var(--panel2);
+        font-size: 11px;
+        color: var(--text-strong);
+      }
+      .custom-mode-badge[hidden] { display: none !important; }
+      .custom-mode-badge-label { color: var(--muted); font-weight: 500; }
+      .custom-mode-badge-clear {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+        line-height: 1;
+        padding: 0 2px;
+      }
+      .custom-mode-badge-clear:hover { color: var(--accent); background: transparent; }
+      .slash-palette {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: calc(100% + 6px);
+        z-index: 40;
+        max-height: 240px;
+        overflow-y: auto;
+        border: 1px solid var(--accent);
+        border-radius: var(--radius-sm);
+        background: #050505;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(34, 211, 238, 0.15);
+        padding: 4px;
+      }
+      .slash-palette[hidden] { display: none !important; }
+      .slash-palette-list { display: flex; flex-direction: column; gap: 2px; }
+      .slash-palette-item {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 5px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text);
+      }
+      .slash-palette-item:hover { background: var(--line-faint); }
+      .slash-palette-item--active { background: var(--line-faint); border: 1px solid var(--line-hot); }
+      .slash-palette-item-name { color: var(--accent); font-family: var(--font-mono); font-weight: 600; }
+      .slash-palette-item-kind { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .slash-palette-item-desc {
+        color: var(--muted);
+        font-size: 11px;
+        flex: 1 1 auto;
+        text-align: right;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .slash-palette-empty { padding: 8px; }
       .heuristic-engine {
         display: inline-flex;
         align-items: center;
@@ -1147,7 +1212,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
 
           <div id="usageTokenSection" class="panel dashboard-only flex-panel dashboard-panel dashboard-usage">
             <div class="title">Token usage (global)</div>
-            <p class="hint" id="usageDbHint">Costs are <strong>estimates</strong> from token counts. Set per-model USD per 1k tokens in <code>~/.winnow/pricing.json</code>.</p>
+            <p class="hint" id="usageDbHint">Costs are <strong>estimates</strong> from token counts. Set default input/output USD per million tokens in Settings.</p>
             <div id="usageUnavailable" class="muted small" style="display:none;padding:8px 0"></div>
             <div id="usageMainWrap">
               <div class="metrics dashboardMetrics" id="usageKpis">
@@ -1302,6 +1367,29 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             <pre id="envSaveHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
           </div>
           <div class="panel settings-only flex-panel" style="display:none">
+            <div class="title">Token pricing</div>
+            <p class="hint">
+              Default USD per million tokens for estimated run costs on the dashboard.
+              Applies to Auto/Composer and any model without a specific override in
+              <code>~/.winnow/pricing.json</code>. Saving recalculates stored run costs.
+            </p>
+            <div class="env-fields">
+              <div class="env-row">
+                <label for="pricingInputPerMillion">Input tokens (USD / million)</label>
+                <input id="pricingInputPerMillion" type="number" min="0" step="0.01" inputmode="decimal" />
+              </div>
+              <div class="env-row">
+                <label for="pricingOutputPerMillion">Output tokens (USD / million)</label>
+                <input id="pricingOutputPerMillion" type="number" min="0" step="0.01" inputmode="decimal" />
+              </div>
+            </div>
+            <div class="row small" style="margin-top:12px">
+              <button type="button" id="btnSavePricing">Save pricing</button>
+              <button type="button" class="secondary" id="btnReloadPricing">Reload</button>
+            </div>
+            <pre id="pricingSaveHint" class="small muted" style="margin:0;min-height:1.2em"></pre>
+          </div>
+          <div class="panel settings-only flex-panel" style="display:none">
             <div class="title">External model providers</div>
             <p class="hint">Smoke-test each provider key first; verified providers unlock model options in Agent/Main Grid. Use Universal for any OpenAI-compatible external API.</p>
             <div id="providerSettingsRows"></div>
@@ -1316,6 +1404,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               <button type="button" id="btnCursorLogin" class="secondary" style="display:none">Log in to Cursor</button>
             </div>
             <div class="runRow small">
+              <label>Mode</label>
+              <select id="agentCursorMode">
+                <option value="agent">Agent</option>
+                <option value="ask">Ask</option>
+                <option value="plan">Plan</option>
+              </select>
               <label>Model Pref</label>
               <select id="agentModelPref">
                 <option value="">Loading models…</option>
@@ -1369,7 +1463,17 @@ export function buildDashboardPageHtml(token: string | undefined): string {
             <pre id="agentThinking">No thinking trace yet.</pre>
             <div class="small muted">Chat history</div>
             <div id="chatHistory"></div>
-            <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
+            <div id="agentPromptWrap">
+              <div id="agentCustomModeBadge" class="custom-mode-badge" hidden>
+                <span class="custom-mode-badge-label">Custom Mode:</span>
+                <span id="agentCustomModeName"></span>
+                <button type="button" id="agentCustomModeClear" class="custom-mode-badge-clear" aria-label="Clear custom mode">×</button>
+              </div>
+              <div id="agentSlashPalette" class="slash-palette" hidden>
+                <div id="agentSlashPaletteList" class="slash-palette-list"></div>
+              </div>
+              <textarea id="agentPrompt" placeholder="Describe the coding task for Cursor agent...\n\nGood prompt pattern:\n- Goal\n- Constraints\n- Files to touch\n- Validation steps"></textarea>
+            </div>
             <div id="agentRunLoadingBanner" class="agent-run-loading" role="status" aria-live="polite" aria-hidden="true">
               <div class="agent-run-loading-top">
                 <span class="agent-run-spinner-lg" aria-hidden="true"></span>
@@ -2703,6 +2807,49 @@ ${clientApiJavaScript()}
         lastTraceAtMs = Date.now();
       }
 
+      async function refreshPricingEditor(){
+        const hint = document.getElementById('pricingSaveHint');
+        const inEl = document.getElementById('pricingInputPerMillion');
+        const outEl = document.getElementById('pricingOutputPerMillion');
+        if(!inEl || !outEl){ return; }
+        try {
+          const data = await fetch(withToken('/api/pricing')).then((r) => r.json());
+          if(!data.ok){
+            if(hint){ hint.textContent = data.error || 'Failed to load pricing'; }
+            return;
+          }
+          inEl.value = data.inputUsdPerMillion == null ? '' : String(data.inputUsdPerMillion);
+          outEl.value = data.outputUsdPerMillion == null ? '' : String(data.outputUsdPerMillion);
+        } catch(err){
+          if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
+        }
+      }
+
+      async function savePricingFromForm(){
+        const hint = document.getElementById('pricingSaveHint');
+        const inEl = document.getElementById('pricingInputPerMillion');
+        const outEl = document.getElementById('pricingOutputPerMillion');
+        const inputUsdPerMillion = Number(inEl && inEl.value !== '' ? inEl.value : 0);
+        const outputUsdPerMillion = Number(outEl && outEl.value !== '' ? outEl.value : 0);
+        if(hint){ hint.textContent = 'Saving…'; }
+        try {
+          const res = await fetch(withToken('/api/pricing'),{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ inputUsdPerMillion, outputUsdPerMillion }),
+          }).then((r) => r.json());
+          if(!res.ok){
+            if(hint){ hint.textContent = res.error || JSON.stringify(res); }
+            return;
+          }
+          if(inEl){ inEl.value = String(res.inputUsdPerMillion); }
+          if(outEl){ outEl.value = String(res.outputUsdPerMillion); }
+          if(hint){ hint.textContent = res.message || 'Saved.'; }
+        } catch(err){
+          if(hint){ hint.textContent = (err && err.message) ? err.message : String(err); }
+        }
+      }
+
       async function refreshEnvEditor(){
         const root = document.getElementById('envFields');
         const hint = document.getElementById('envSaveHint');
@@ -2998,6 +3145,7 @@ ${clientApiJavaScript()}
           agentOnly.forEach(el => el.style.display = 'none');
           settingsOnly.forEach(el => el.style.display = '');
           void refreshEnvEditor();
+          void refreshPricingEditor();
           void refreshProviderSettings();
         }
       }
@@ -3197,9 +3345,219 @@ ${clientApiJavaScript()}
           }
         }
       }
+      const CURSOR_MODE_CYCLE = ['agent', 'plan', 'ask'];
+      const FALLBACK_SLASH_ITEMS = [
+        { kind: 'mode', id: 'agent', name: 'agent', description: 'Default agent mode (edit + tools)' },
+        { kind: 'mode', id: 'plan', name: 'plan', description: 'Research then plan before editing' },
+        { kind: 'mode', id: 'ask', name: 'ask', description: 'Read-only mode' },
+        { kind: 'winnow', id: 'winnow:implement-tests', name: 'implement-tests', description: 'Implement the requested change with tests' },
+        { kind: 'winnow', id: 'winnow:review', name: 'review', description: 'Review code for bugs and edge cases' },
+        { kind: 'winnow', id: 'winnow:refactor', name: 'refactor', description: 'Refactor safely without changing behavior' },
+      ];
+      let pendingSlashInvocations = [];
+      let pinnedCustomModeSkill = '';
+      let slashCatalogItems = null;
+      let slashCatalogFetchPromise = null;
+      let slashPaletteOpen = false;
+      let slashPaletteTriggerStart = -1;
+      let slashPaletteFiltered = [];
+      let slashPaletteActiveIndex = 0;
+
+      function persistLocal(key, value){
+        try { localStorage.setItem(key, value); } catch(_e) {}
+      }
+      function readLocal(key){
+        try { return localStorage.getItem(key) || ''; } catch(_e) { return ''; }
+      }
+      function setCursorMode(mode, persist){
+        const select = document.getElementById('agentCursorMode');
+        const normalized = CURSOR_MODE_CYCLE.includes(mode) ? mode : 'agent';
+        if(select){ select.value = normalized; }
+        if(persist !== false){ persistLocal('winnow.agentCursorMode', normalized); }
+      }
+      function cycleCursorMode(){
+        const select = document.getElementById('agentCursorMode');
+        const current = (select && select.value) || 'agent';
+        const idx = CURSOR_MODE_CYCLE.indexOf(current);
+        const next = CURSOR_MODE_CYCLE[(idx < 0 ? 0 : idx + 1) % CURSOR_MODE_CYCLE.length];
+        setCursorMode(next);
+      }
+      function pinCustomMode(name){
+        const trimmed = String(name || '').trim();
+        if(!trimmed){ return; }
+        pinnedCustomModeSkill = trimmed;
+        persistLocal('winnow.agentCustomModeSkill', trimmed);
+        renderCustomModeBadge();
+      }
+      function clearCustomMode(){
+        pinnedCustomModeSkill = '';
+        persistLocal('winnow.agentCustomModeSkill', '');
+        renderCustomModeBadge();
+      }
+      function renderCustomModeBadge(){
+        const badge = document.getElementById('agentCustomModeBadge');
+        const nameEl = document.getElementById('agentCustomModeName');
+        if(!badge || !nameEl){ return; }
+        if(pinnedCustomModeSkill){
+          nameEl.textContent = pinnedCustomModeSkill;
+          badge.hidden = false;
+        } else {
+          nameEl.textContent = '';
+          badge.hidden = true;
+        }
+      }
+      function restoreCursorModeAndCustomMode(){
+        const savedMode = readLocal('winnow.agentCursorMode');
+        if(savedMode){ setCursorMode(savedMode, false); }
+        const savedSkill = readLocal('winnow.agentCustomModeSkill');
+        if(savedSkill){
+          pinnedCustomModeSkill = savedSkill;
+          renderCustomModeBadge();
+        }
+      }
+      async function ensureSlashCatalogLoaded(){
+        if(slashCatalogItems){ return slashCatalogItems; }
+        if(slashCatalogFetchPromise){ return slashCatalogFetchPromise; }
+        slashCatalogFetchPromise = (async () => {
+          try {
+            const data = await apiJson('/api/agent/slash-catalog');
+            if(data && data.ok && Array.isArray(data.items) && data.items.length){
+              slashCatalogItems = data.items;
+            } else {
+              slashCatalogItems = FALLBACK_SLASH_ITEMS;
+            }
+          } catch(_e){
+            slashCatalogItems = FALLBACK_SLASH_ITEMS;
+          }
+          return slashCatalogItems;
+        })();
+        return slashCatalogFetchPromise;
+      }
+      function computeSlashQuery(){
+        const area = document.getElementById('agentPrompt');
+        if(!area || slashPaletteTriggerStart < 0){ return ''; }
+        const pos = area.selectionStart == null ? area.value.length : area.selectionStart;
+        if(pos < slashPaletteTriggerStart){ return ''; }
+        return area.value.slice(slashPaletteTriggerStart + 1, pos);
+      }
+      function renderSlashPaletteItems(){
+        const listEl = document.getElementById('agentSlashPaletteList');
+        if(!listEl){ return; }
+        const items = slashCatalogItems || FALLBACK_SLASH_ITEMS;
+        const query = computeSlashQuery().toLowerCase();
+        slashPaletteFiltered = items.filter((item) => {
+          if(!query){ return true; }
+          const hay = ((item.name || '') + ' ' + (item.id || '') + ' ' + (item.description || '')).toLowerCase();
+          return hay.includes(query);
+        });
+        if(slashPaletteActiveIndex >= slashPaletteFiltered.length){ slashPaletteActiveIndex = 0; }
+        listEl.innerHTML = '';
+        if(!slashPaletteFiltered.length){
+          const empty = document.createElement('div');
+          empty.className = 'slash-palette-empty small muted';
+          empty.textContent = 'No matches';
+          listEl.appendChild(empty);
+          return;
+        }
+        slashPaletteFiltered.forEach((item, idx) => {
+          const row = document.createElement('div');
+          row.className = 'slash-palette-item' + (idx === slashPaletteActiveIndex ? ' slash-palette-item--active' : '');
+          row.setAttribute('data-idx', String(idx));
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'slash-palette-item-name';
+          nameSpan.textContent = '/' + (item.name || item.id || '');
+          const kindSpan = document.createElement('span');
+          kindSpan.className = 'slash-palette-item-kind';
+          kindSpan.textContent = item.kind || '';
+          row.appendChild(nameSpan);
+          row.appendChild(kindSpan);
+          if(item.description){
+            const descSpan = document.createElement('span');
+            descSpan.className = 'slash-palette-item-desc';
+            descSpan.textContent = item.description;
+            row.appendChild(descSpan);
+          }
+          row.addEventListener('mousedown', (evt) => {
+            evt.preventDefault();
+            applySlashSelection(item, evt.altKey);
+          });
+          listEl.appendChild(row);
+        });
+      }
+      function openSlashPaletteAt(triggerStart){
+        slashPaletteOpen = true;
+        slashPaletteTriggerStart = triggerStart;
+        slashPaletteActiveIndex = 0;
+        const el = document.getElementById('agentSlashPalette');
+        if(el){ el.hidden = false; }
+        renderSlashPaletteItems();
+        ensureSlashCatalogLoaded().then(() => {
+          if(slashPaletteOpen){ renderSlashPaletteItems(); }
+        });
+      }
+      function closeSlashPalette(){
+        slashPaletteOpen = false;
+        slashPaletteTriggerStart = -1;
+        slashPaletteActiveIndex = 0;
+        const el = document.getElementById('agentSlashPalette');
+        if(el){ el.hidden = true; }
+      }
+      function moveSlashPaletteActive(delta){
+        if(!slashPaletteFiltered.length){ return; }
+        slashPaletteActiveIndex = (slashPaletteActiveIndex + delta + slashPaletteFiltered.length) % slashPaletteFiltered.length;
+        renderSlashPaletteItems();
+      }
+      function removeSlashTriggerText(){
+        const area = document.getElementById('agentPrompt');
+        if(!area || slashPaletteTriggerStart < 0){ return; }
+        const pos = area.selectionStart == null ? area.value.length : area.selectionStart;
+        const before = area.value.slice(0, slashPaletteTriggerStart);
+        const after = area.value.slice(pos);
+        area.value = before + after;
+        const caret = before.length;
+        area.setSelectionRange(caret, caret);
+        area.focus();
+      }
+      function applySlashSelection(item, isAlt){
+        if(!item){ closeSlashPalette(); return; }
+        removeSlashTriggerText();
+        if(item.kind === 'mode'){
+          setCursorMode(item.name || item.id);
+          closeSlashPalette();
+          return;
+        }
+        if(isAlt && (item.kind === 'skill' || item.kind === 'builtin-skill')){
+          pinCustomMode(item.name || item.id);
+          closeSlashPalette();
+          return;
+        }
+        pendingSlashInvocations.push({ kind: item.kind, id: item.id });
+        closeSlashPalette();
+      }
+      function selectActiveSlashItem(isAlt){
+        const item = slashPaletteFiltered[slashPaletteActiveIndex];
+        applySlashSelection(item, isAlt);
+      }
+      function updateSlashPaletteFromInput(){
+        const area = document.getElementById('agentPrompt');
+        if(!area){ return; }
+        const pos = area.selectionStart == null ? area.value.length : area.selectionStart;
+        const textBeforeCursor = area.value.slice(0, pos);
+        const match = textBeforeCursor.match(/(?:^|\\s)\\/([^\\s]*)$/);
+        if(!match){
+          if(slashPaletteOpen){ closeSlashPalette(); }
+          return;
+        }
+        const triggerStart = pos - match[1].length - 1;
+        if(!slashPaletteOpen || slashPaletteTriggerStart !== triggerStart){
+          openSlashPaletteAt(triggerStart);
+        } else {
+          renderSlashPaletteItems();
+        }
+      }
       async function startAgentRun(){
         const prompt = document.getElementById('agentPrompt').value.trim();
-        if(!prompt){
+        if(!prompt && pendingSlashInvocations.length === 0 && !pinnedCustomModeSkill){
           appendChat('system', 'Prompt is required.');
           return;
         }
@@ -3231,6 +3589,9 @@ ${clientApiJavaScript()}
             : undefined,
           executionMode: (document.getElementById('agentExecutionMode') && document.getElementById('agentExecutionMode').value) || 'cursor',
           attachmentIds: (typeof agentAttachments !== 'undefined' && Array.isArray(agentAttachments)) ? agentAttachments.map(function(item){ return item.id; }) : [],
+          cursorMode: (document.getElementById('agentCursorMode') && document.getElementById('agentCursorMode').value) || 'agent',
+          slashInvocations: pendingSlashInvocations.slice(),
+          customModeSkill: (pinnedCustomModeSkill || '').trim() || undefined,
         };
         agentStartAbort = new AbortController();
         agentStartInFlight = true;
@@ -3267,6 +3628,7 @@ ${clientApiJavaScript()}
         }
         activeSessionId = res.sessionId;
         rememberCursorSessionId(res.sessionId, res.cursorSessionId);
+        pendingSlashInvocations = [];
         clearPrompt();
         if(continueMode){
           selectedResumeSessionId = activeSessionId;
@@ -3279,7 +3641,7 @@ ${clientApiJavaScript()}
         lastTraceAtMs = Date.now();
         const block = document.getElementById('agentThinking');
         if (block) block.textContent = "";
-        appendChat('user', prompt);
+        appendChat('user', prompt || '(slash command)');
         pushTrace('session started');
         document.getElementById('agentStatusBadge').textContent = 'running';
         document.getElementById('agentSessionInfo').textContent = 'session=' + activeSessionId + ' status=running';
@@ -3403,6 +3765,8 @@ ${clientApiJavaScript()}
       }
       document.getElementById('btnSaveEnv')?.addEventListener('click', () => { void saveEnvFromForm(); });
       document.getElementById('btnReloadEnv')?.addEventListener('click', () => { void refreshEnvEditor(); });
+      document.getElementById('btnSavePricing')?.addEventListener('click', () => { void savePricingFromForm(); });
+      document.getElementById('btnReloadPricing')?.addEventListener('click', () => { void refreshPricingEditor(); });
       const sessionSelect = document.getElementById('agentSessionSelect');
       if(sessionSelect){
         sessionSelect.addEventListener('change', () => {
@@ -3434,9 +3798,44 @@ ${clientApiJavaScript()}
           }
           evt.preventDefault();
           startAgentRun();
+          return;
+        }
+        if(slashPaletteOpen){
+          if(evt.key === 'ArrowDown'){
+            evt.preventDefault();
+            moveSlashPaletteActive(1);
+            return;
+          }
+          if(evt.key === 'ArrowUp'){
+            evt.preventDefault();
+            moveSlashPaletteActive(-1);
+            return;
+          }
+          if(evt.key === 'Enter'){
+            evt.preventDefault();
+            selectActiveSlashItem(evt.altKey);
+            return;
+          }
+          if(evt.key === 'Escape'){
+            evt.preventDefault();
+            closeSlashPalette();
+            return;
+          }
+          return;
+        }
+        if(evt.key === 'Tab' && evt.shiftKey){
+          evt.preventDefault();
+          cycleCursorMode();
         }
       });
       document.getElementById('agentPrompt').addEventListener('input', syncAgentLoadingHeight);
+      document.getElementById('agentPrompt').addEventListener('input', updateSlashPaletteFromInput);
+      document.getElementById('agentPrompt').addEventListener('click', () => { if(slashPaletteOpen){ updateSlashPaletteFromInput(); } });
+      document.getElementById('agentCursorMode')?.addEventListener('change', (evt) => {
+        setCursorMode(evt.target.value);
+      });
+      document.getElementById('agentCustomModeClear')?.addEventListener('click', () => { clearCustomMode(); });
+      restoreCursorModeAndCustomMode();
       window.addEventListener('resize', syncAgentLoadingHeight);
       const projectFilter = document.getElementById('projectFilter');
       if(projectFilter){

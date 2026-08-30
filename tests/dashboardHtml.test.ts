@@ -58,6 +58,18 @@ describe("buildDashboardPageHtml", () => {
     expect(html).toContain("void refreshDiskDashboard()");
   });
 
+  it("exposes token pricing controls on the settings view", () => {
+    const html = buildDashboardPageHtml(undefined);
+    expect(html).toContain('id="pricingInputPerMillion"');
+    expect(html).toContain('id="pricingOutputPerMillion"');
+    expect(html).toContain("USD / million");
+    expect(html).toContain("async function refreshPricingEditor");
+    expect(html).toContain("async function savePricingFromForm");
+    expect(html).toContain("withToken('/api/pricing')");
+    expect(html).toContain("void refreshPricingEditor()");
+    expect(html).toContain("Set default input/output USD per million tokens in Settings.");
+  });
+
   it("skips 3s /api/state and /api/logs polling on agent and settings views", () => {
     const html = buildDashboardPageHtml(undefined);
     expect(html).toContain("currentDashboardView");
@@ -77,5 +89,42 @@ describe("buildDashboardPageHtml", () => {
     expect(html).toContain("/api/agent/running");
     expect(html).toContain("1 agent running");
     expect(html).toContain("Agents keep working after you change the working directory.");
+  });
+
+  it("adds a Cursor mode picker, slash palette, and custom mode badge to the Agent Workspace", () => {
+    const html = buildDashboardPageHtml(undefined);
+    expect(html).toContain('id="agentCursorMode"');
+    expect(html).toContain('id="agentSlashPalette"');
+    expect(html).toContain('id="agentSlashPaletteList"');
+    expect(html).toContain('id="agentCustomModeBadge"');
+    expect(html).toContain('id="agentCustomModeName"');
+    expect(html).toContain('id="agentCustomModeClear"');
+    expect(html).toContain('id="agentPrompt"');
+    expect(html).toContain("/api/agent/slash-catalog");
+    expect(html).toContain("winnow.agentCursorMode");
+    expect(html).toContain("winnow.agentCustomModeSkill");
+    expect(html).toContain("setCursorMode(item.name || item.id)");
+  });
+
+  it("sends cursorMode, slashInvocations, and customModeSkill from startAgentRun", () => {
+    const html = buildDashboardPageHtml(undefined);
+    const startFn = sliceBetween(html, "async function startAgentRun", "function appendPrompt");
+    expect(startFn).toContain("cursorMode:");
+    expect(startFn).toContain("slashInvocations");
+    expect(startFn).toContain("customModeSkill");
+    expect(startFn).toContain("pendingSlashInvocations");
+    // existing controls must still be respected
+    expect(startFn).toContain("attachStream");
+    expect(startFn).toContain("pollAgent()");
+  });
+
+  it("cycles Cursor mode with Shift+Tab and keeps Ctrl/Cmd+Enter running", () => {
+    const html = buildDashboardPageHtml(undefined);
+    const keydownIdx = html.indexOf("document.getElementById('agentPrompt').addEventListener('keydown'");
+    expect(keydownIdx).toBeGreaterThan(-1);
+    const keydownFn = html.slice(keydownIdx, html.indexOf("addEventListener('input'", keydownIdx));
+    expect(keydownFn).toContain("startAgentRun();");
+    expect(keydownFn).toContain("cycleCursorMode");
+    expect(keydownFn).toContain("evt.shiftKey");
   });
 });

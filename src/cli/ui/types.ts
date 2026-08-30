@@ -44,6 +44,12 @@ export type AgentStartRequest = {
   executionMode?: "cursor" | "external";
   /** Filename stems (UUIDs) of files previously stored via POST /api/attachments. */
   attachmentIds?: string[];
+  /** Cursor IDE mode. `agent` (default) passes no `--mode` flag. */
+  cursorMode?: import("../../cursor/cursorMode.js").CursorAgentMode;
+  /** One-shot `/` palette selections expanded into the prompt for this turn only. */
+  slashInvocations?: import("../../cursor/slashCatalog.js").SlashInvocation[];
+  /** Skill name pinned as a Custom Mode; re-injected on every turn until dismissed. */
+  customModeSkill?: string;
 };
 
 export type AgentEvent = {
@@ -123,4 +129,8 @@ export type LocalSessionRecord = {
   errorOutput: string;
   events?: AgentEvent[];
   cursorSessionId?: string;
+  /** Cursor IDE mode used for the last turn, so Continue does not silently drop it. */
+  cursorMode?: import("../../cursor/cursorMode.js").CursorAgentMode;
+  /** Skill name pinned as a Custom Mode for this chat. */
+  customModeSkill?: string;
 };

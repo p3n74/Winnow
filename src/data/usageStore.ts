@@ -164,6 +164,33 @@ export function recordRunUsage(runId: string, usage: RecordRunUsageInput): void 
   ).run(newIn, newOut, model ?? null, cost, runId);
 }
 
+export function recomputeAllRunCosts(): { updated: number } {
+  const db = openUsageDb();
+  if (!db) {
+    return { updated: 0 };
+  }
+  const rows = db.prepare(
+    `SELECT id, model, model_pref, input_tokens, output_tokens FROM runs`,
+  ).all() as Array<{
+    id: string;
+    model: string | null;
+    model_pref: string | null;
+    input_tokens: number;
+    output_tokens: number;
+  }>;
+  const upd = db.prepare(`UPDATE runs SET cost_usd = ? WHERE id = ?`);
+  const apply = db.transaction(() => {
+    let n = 0;
+    for (const row of rows) {
+      const cost = estimateCostUsd(row.model || row.model_pref, row.input_tokens, row.output_tokens);
+      upd.run(cost, row.id);
+      n += 1;
+    }
+    return n;
+  });
+  return { updated: apply() };
+}
+
 export function finalizeRun(
   runId: string,
   status: "running" | "done" | "error",
