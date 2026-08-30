@@ -62,7 +62,7 @@ let deadPtyResizeGuardInstalled = false;
 
 /** node-pty can throw this from a deferred Windows resize after the PTY has exited. */
 export function installDeadPtyResizeGuard(): void {
-  if (deadPtyResizeGuardInstalled) {
+  if (process.platform !== "win32" || deadPtyResizeGuardInstalled) {
     return;
   }
   deadPtyResizeGuardInstalled = true;
