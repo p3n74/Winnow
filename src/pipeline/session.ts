@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import { WinnowConfig } from "../config/schema.js";
 import { createTranslator } from "../translator/factory.js";
 import { runCursorAgent } from "../cursor/runCursor.js";
+import { spawnCommand } from "../cursor/spawnCommand.js";
 import { SessionLogger } from "../logging/sessionLogger.js";
 
 type SessionOptions = {
@@ -58,7 +58,7 @@ function readStdinIfPiped(): Promise<string | undefined> {
 
 async function runAndCapture(command: string, args: string[], stdinText?: string) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnCommand(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });
@@ -96,7 +96,7 @@ async function runWithStreamingTranslation(
   const translator = createTranslator(config);
 
   return new Promise<number>((resolve, reject) => {
-    const child = spawn(config.cursorCommand, args, {
+    const child = spawnCommand(config.cursorCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });
