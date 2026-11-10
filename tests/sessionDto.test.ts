@@ -5,6 +5,7 @@ import {
   capSessionBuffers,
   countRunningSessions,
   enqueueExclusiveWrite,
+  ensureHeadlessPrintArgs,
   ensureHeadlessWorkspaceArgs,
   evictIdleSessions,
   listRunningSessions,
@@ -138,19 +139,39 @@ describe("listRunningSessions", () => {
   });
 });
 
+describe("ensureHeadlessPrintArgs", () => {
+  it("adds --trust and --approve-mcps when missing", () => {
+    expect(ensureHeadlessPrintArgs(["--print"])).toEqual([
+      "--print",
+      "--trust",
+      "--approve-mcps",
+    ]);
+  });
+
+  it("does not duplicate existing flags", () => {
+    expect(
+      ensureHeadlessPrintArgs(["--approve-mcps", "--trust", "--print"]),
+    ).toEqual(["--approve-mcps", "--trust", "--print"]);
+  });
+});
+
 describe("ensureHeadlessWorkspaceArgs", () => {
-  it("adds --workspace and --trust when missing", () => {
+  it("adds --workspace, --trust, and --approve-mcps when missing", () => {
     expect(ensureHeadlessWorkspaceArgs(["--print"], "/tmp/proj")).toEqual([
       "--print",
       "--workspace",
       "/tmp/proj",
       "--trust",
+      "--approve-mcps",
     ]);
   });
 
-  it("does not duplicate existing --workspace or --trust", () => {
+  it("does not duplicate existing --workspace, --trust, or --approve-mcps", () => {
     expect(
-      ensureHeadlessWorkspaceArgs(["--workspace", "/keep", "--trust", "--print"], "/tmp/other"),
-    ).toEqual(["--workspace", "/keep", "--trust", "--print"]);
+      ensureHeadlessWorkspaceArgs(
+        ["--workspace", "/keep", "--trust", "--approve-mcps", "--print"],
+        "/tmp/other",
+      ),
+    ).toEqual(["--workspace", "/keep", "--trust", "--approve-mcps", "--print"]);
   });
 });

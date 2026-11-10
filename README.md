@@ -69,8 +69,10 @@ Winnow closes that gap:
 - **Project graph** — SQLite-backed graph service exposed over HTTP: summary, nodes/edges, neighborhood expansion, rebuild/reconcile, corrections, and business-logic views; the grid UI supports technical vs business graph modes and file→function exploration.
 - **Planning workspace** — agent-managed plans stored under `.winnow/plans`, rendered as Markdown, normalized/reconciled through API flows, visualized as timeline/tree graphs, and mapped to GitHub issues when configured.
 - **Managed processes** — start and monitor named commands, filter by status/tags, and inspect logs without leaving the companion pane.
-- **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions.
+- **Workspace** — current working directory controls (with optional Cursor workspace bootstrap under `.cursor/`), git change list, and selective **stage** actions. Accepts SSH targets (`user@host:/path` or `ssh://…`); see [docs/ssh-workspace.md](docs/ssh-workspace.md).
+- **MCP (manual)** — uses Cursor’s `.cursor/mcp.json` / `~/.cursor/mcp.json`; UI headless runs pass `--approve-mcps`. See [docs/mcp.md](docs/mcp.md).
 - **Files** — directory listing, preview, and “open in editor” helpers from the UI server.
+- **SSH workspaces** — OpenSSH + sshfs so local `cursor-agent` (this machine) can edit a remote folder; PTY panes still SSH. Distinct from `--remote` LAN bind. Graph/docs/plans/fs are gated on SSH until a later phase.
 - **Shared / LAN / remote** — optional access token (`?token=`, `Authorization: Bearer`, or cookie) and bindable `--host`. `--remote` binds `0.0.0.0`, requires a token (32-hex auto-generated if omitted) unless you pass `--no-token`, and skips auto-opening a browser. See [docs/remote-access.md](docs/remote-access.md).
 
 ### Data on disk
@@ -82,6 +84,8 @@ Winnow closes that gap:
 
 Recent highlights (newest first; use `git log` for the full story):
 
+- **SSH workspaces** — `winnow ui --ssh user@host:/path` mounts the remote folder with sshfs and runs `cursor-agent` on this machine. Terminals still use SSH. This is not `--remote` (LAN bind). See [docs/ssh-workspace.md](docs/ssh-workspace.md).
+- **MCP (manual config)** — headless agent runs auto-approve MCP; configure servers in Cursor `mcp.json`. See [docs/mcp.md](docs/mcp.md).
 - **Host web preview** — companion **Web** tab loads loopback dev servers (Vite, Next, Expo, etc.) in host Chromium (JPEG screencast, Cursor-style) with same-origin `/__preview/:port/` HTTP fallback, `--no-token`, and a fullscreen viewer. See [docs/remote-access.md](docs/remote-access.md).
 - **Remote / reverse-proxy ready** — `--remote` binds the companion UI on the network with a longer access token, Bearer + cookie auth, and `GET /api/health` for a later Coolify (or other) reverse proxy. See [docs/remote-access.md](docs/remote-access.md).
 - **Node 22+ / N-API sqlite** — `better-sqlite3` 13 loads on Homebrew Node 26 without an ABI rebuild; `npm run ui` still probes `better-sqlite3` and `node-pty` and rebuilds them with the running Node if needed.

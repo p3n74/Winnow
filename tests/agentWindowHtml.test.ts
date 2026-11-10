@@ -166,4 +166,19 @@ describe("buildAgentWindowPageHtml", () => {
     expect(html).not.toContain("setCursorMode(item.id);");
     expect(html).toContain("catalogHasModes");
   });
+
+  it("accepts SSH workspace paths in the agent cwd control", () => {
+    const html = buildAgentWindowPageHtml(undefined);
+    expect(html).toContain("user@host:/abs/path");
+    expect(html).toContain("SSH workspace");
+    expect(html).toContain('id="agentSshPanel"');
+    expect(html).toContain('id="agentSshHost"');
+    expect(html).toContain("Connect SSH");
+    expect(html).toContain("Local <code>cursor-agent</code>");
+    expect(html).toContain("connectAgentSshWorkspace");
+    expect(html).toContain('id="agentSshPassword"');
+    expect(html).toContain('id="agentSshPasswordModal"');
+    expect(html).not.toContain("Identity file");
+    expect(html).not.toContain("agentSshIdentity");
+  });
 });

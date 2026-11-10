@@ -328,6 +328,23 @@ export function buildMainTerminalHtml(token?: string): string {
         word-break: break-word;
       }
       .docsRoot { padding: 0 10px 10px; gap: 8px; }
+      #pane1Docs:fullscreen,
+      #pane1Docs.docsFullscreenFallback {
+        background: var(--bg);
+        padding: 10px;
+        gap: 8px;
+      }
+      #pane1Docs.docsFullscreenFallback {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        visibility: visible;
+        pointer-events: auto;
+      }
+      #pane1Docs:fullscreen .docsHint,
+      #pane1Docs.docsFullscreenFallback .docsHint {
+        display: none;
+      }
       .docsToolbar {
         display: flex;
         flex-wrap: wrap;
@@ -1283,7 +1300,7 @@ export function buildMainTerminalHtml(token?: string): string {
           <span class="chip chipAgentCount" id="toolbarAgentCount" hidden></span>
         </div>
         <div class="toolbarRight">
-          <span class="chip">1 ranger · trace · docs</span>
+          <span class="chip">1 ranger · live · trace · docs</span>
           <span class="chip">2 agent · web · shell · graph · plans · processes · scripts</span>
           <span class="chip">3 htop</span>
           <span class="chip">4 netwatch</span>
@@ -1297,8 +1314,9 @@ export function buildMainTerminalHtml(token?: string): string {
             <div class="paneHead">
               <span class="paneTitle">1 File Browser <span class="paneCmd">ranger</span></span>
               <div style="display:flex;align-items:center;gap:10px">
-                <div class="paneTabs" role="tablist" aria-label="File browser, agent trace, and docs">
+                <div class="paneTabs" role="tablist" aria-label="File browser, live file, agent trace, and docs">
                   <button type="button" class="paneTab paneTabActive" role="tab" aria-selected="true" data-pane1-tab="browser" id="pane1TabBrowser">Browser</button>
+                  <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="live" id="pane1TabLive">Live</button>
                   <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="trace" id="pane1TabTrace">Trace <span id="pane1TraceCount" class="muted"></span></button>
                   <button type="button" class="paneTab" role="tab" aria-selected="false" data-pane1-tab="docs" id="pane1TabDocs">Docs</button>
                 </div>
@@ -1310,6 +1328,9 @@ export function buildMainTerminalHtml(token?: string): string {
               <div id="pane1Browser" class="pane1View" aria-hidden="false">
                 <div id="pane1" class="term"></div>
               </div>
+              <div id="pane1Live" class="pane1View isHidden" aria-hidden="true">
+                <div id="pane6" class="term"></div>
+              </div>
               <div id="pane1TraceWrap" class="pane1View isHidden" aria-hidden="true">
                 <pre id="pane1Trace">No active agent session.</pre>
               </div>
@@ -1319,6 +1340,7 @@ export function buildMainTerminalHtml(token?: string): string {
                   <select id="docsFileSelect" class="docsSelect" aria-label="Markdown and PDF files">
                     <option value="">(select file)</option>
                   </select>
+                  <button type="button" class="reconnect" id="btnDocsFullscreen" aria-pressed="false" title="View the selected document full screen">Fullscreen</button>
                 </div>
                 <p id="docsHint" class="docsHint muted">Index is built under <code>.winnow/docs-index.json</code>. Use Refresh index after adding files.</p>
                 <div class="docsBody">
@@ -1645,6 +1667,7 @@ export function buildMainTerminalHtml(token?: string): string {
       let planGraphFullscreenFallback = false;
       let planMdFullscreenFallback = false;
       let webFullscreenFallback = false;
+      let docsFullscreenFallback = false;
       let planGraphMode = (function(){
         try { return localStorage.getItem("winnow.planGraphMode") || "timeline"; } catch { return "timeline"; }
       })();
@@ -1664,7 +1687,7 @@ export function buildMainTerminalHtml(token?: string): string {
         displayNodes: [],
         displayEdges: [],
       };
-      const panes = ["1","3","4","5"];
+      const panes = ["1","3","4","5","6"];
       const paneState = new Map();
       const PANE2_ID = "2";
       const PLAN_SELECTION_KEY = "winnow-active-plan-id";
@@ -2082,37 +2105,97 @@ ${clientApiJavaScript()}
         void pollToolbarAgentCount();
         setInterval(pollToolbarAgentCount, 2000);
       }
+      function isDocsFullscreen(){
+        const pane = document.getElementById("pane1Docs");
+        return (document.fullscreenElement === pane) || docsFullscreenFallback;
+      }
+      function updateDocsFullscreenButton(){
+        const btn = document.getElementById("btnDocsFullscreen");
+        if(!btn){ return; }
+        const active = isDocsFullscreen();
+        btn.textContent = active ? "Exit fullscreen" : "Fullscreen";
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      async function exitDocsFullscreen(){
+        const pane = document.getElementById("pane1Docs");
+        if(document.fullscreenElement === pane){
+          try { await document.exitFullscreen(); } catch (_err) {}
+        }
+        if(docsFullscreenFallback){
+          docsFullscreenFallback = false;
+          pane?.classList.remove("docsFullscreenFallback");
+        }
+        updateDocsFullscreenButton();
+      }
+      async function toggleDocsFullscreen(){
+        const pane = document.getElementById("pane1Docs");
+        if(!pane){ return; }
+        try {
+          if(document.fullscreenElement === pane){
+            await document.exitFullscreen();
+            updateDocsFullscreenButton();
+            return;
+          }
+          if(typeof pane.requestFullscreen === "function" && !document.fullscreenElement){
+            await pane.requestFullscreen();
+            updateDocsFullscreenButton();
+            return;
+          }
+        } catch (_err) {}
+        docsFullscreenFallback = !docsFullscreenFallback;
+        pane.classList.toggle("docsFullscreenFallback", docsFullscreenFallback);
+        updateDocsFullscreenButton();
+      }
       function setPane1Tab(mode){
-        pane1Mode = mode === "trace" ? "trace" : mode === "docs" ? "docs" : "browser";
+        pane1Mode = mode === "trace" ? "trace" : mode === "docs" ? "docs" : mode === "live" ? "live" : "browser";
         const isBrowser = pane1Mode === "browser";
+        const isLive = pane1Mode === "live";
         const isTrace = pane1Mode === "trace";
         const isDocs = pane1Mode === "docs";
         const browserEl = document.getElementById("pane1Browser");
+        const liveEl = document.getElementById("pane1Live");
         const traceEl = document.getElementById("pane1TraceWrap");
         const docsEl = document.getElementById("pane1Docs");
         const tb = document.getElementById("pane1TabBrowser");
+        const tl = document.getElementById("pane1TabLive");
         const tt = document.getElementById("pane1TabTrace");
         const td = document.getElementById("pane1TabDocs");
         const recon = document.getElementById("reconnectPane1");
-        if(browserEl && traceEl && docsEl){
+        const cmd = document.querySelector("#pane1Wrap .paneCmd");
+        if(!isDocs){ void exitDocsFullscreen(); }
+        if(browserEl && liveEl && traceEl && docsEl){
           browserEl.classList.toggle("isHidden", !isBrowser);
+          liveEl.classList.toggle("isHidden", !isLive);
           traceEl.classList.toggle("isHidden", !isTrace);
           docsEl.classList.toggle("isHidden", !isDocs);
           browserEl.setAttribute("aria-hidden", isBrowser ? "false" : "true");
+          liveEl.setAttribute("aria-hidden", isLive ? "false" : "true");
           traceEl.setAttribute("aria-hidden", isTrace ? "false" : "true");
           docsEl.setAttribute("aria-hidden", isDocs ? "false" : "true");
         }
-        if(tb && tt && td){
+        if(tb && tl && tt && td){
           tb.classList.toggle("paneTabActive", isBrowser);
+          tl.classList.toggle("paneTabActive", isLive);
           tt.classList.toggle("paneTabActive", isTrace);
           td.classList.toggle("paneTabActive", isDocs);
           tb.setAttribute("aria-selected", String(isBrowser));
+          tl.setAttribute("aria-selected", String(isLive));
           tt.setAttribute("aria-selected", String(isTrace));
           td.setAttribute("aria-selected", String(isDocs));
         }
-        if(recon){ recon.hidden = !isBrowser; }
-        if(isBrowser){
-          requestAnimationFrame(resizeAll);
+        if(cmd){ cmd.textContent = isLive ? "livefile" : "ranger"; }
+        if(recon){
+          recon.hidden = !(isBrowser || isLive);
+          recon.setAttribute("data-pane", isLive ? "6" : "1");
+        }
+        if(isBrowser || isLive){
+          requestAnimationFrame(()=>{
+            resizeAll();
+            if(isLive){
+              const cur = paneState.get("6");
+              if(cur && cur.term){ cur.term.focus(); }
+            }
+          });
         }
         if(isTrace){
           void pollPane1TraceActive();
@@ -5108,6 +5191,7 @@ ${clientApiJavaScript()}
         if(hint){ hint.textContent = relPath; }
       }
       document.getElementById("pane1TabBrowser")?.addEventListener("click",()=>setPane1Tab("browser"));
+      document.getElementById("pane1TabLive")?.addEventListener("click",()=>setPane1Tab("live"));
       document.getElementById("pane1TabTrace")?.addEventListener("click",()=>setPane1Tab("trace"));
       document.getElementById("pane1TabDocs")?.addEventListener("click",()=>setPane1Tab("docs"));
       document.getElementById("btnPane1Expand")?.addEventListener("click",()=>setPane1Expanded(!pane1Expanded));
@@ -5464,6 +5548,11 @@ ${clientApiJavaScript()}
             updateWebFullscreenButton();
             syncWebChromeViewport();
           }
+          if(docsFullscreenFallback){
+            docsFullscreenFallback = false;
+            document.getElementById("pane1Docs")?.classList.remove("docsFullscreenFallback");
+            updateDocsFullscreenButton();
+          }
         }
       });
       document.getElementById("btnPlanMdFullscreen")?.addEventListener("click",()=>{ void togglePlanMdFullscreen(); });
@@ -5472,11 +5561,17 @@ ${clientApiJavaScript()}
           webFullscreenFallback = false;
           document.getElementById("pane2Web")?.classList.remove("webFullscreenFallback");
         }
+        if(document.fullscreenElement && document.fullscreenElement !== document.getElementById("pane1Docs")){
+          docsFullscreenFallback = false;
+          document.getElementById("pane1Docs")?.classList.remove("docsFullscreenFallback");
+        }
         updatePlanGraphFullscreenButton();
         updatePlanMdFullscreenButton();
         updateWebFullscreenButton();
+        updateDocsFullscreenButton();
         syncWebChromeViewport();
       });
+      document.getElementById("btnDocsFullscreen")?.addEventListener("click",()=>{ void toggleDocsFullscreen(); });
       document.getElementById("procFilterInput")?.addEventListener("input",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procStatusFilter")?.addEventListener("change",()=>{ void refreshManagedProcesses(); });
       document.getElementById("procCommandInput")?.addEventListener("keydown",(evt)=>{

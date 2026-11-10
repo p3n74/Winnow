@@ -151,14 +151,26 @@ export function enqueueExclusiveWrite(
   return job;
 }
 
+/**
+ * Flags required for non-interactive `--print` runs so workspace prompts and MCP
+ * approval cannot block piped stdio. Safe to call whenever `--print` is in effect.
+ */
+export function ensureHeadlessPrintArgs(args: string[]): string[] {
+  const next = [...args];
+  if (!next.includes("--trust")) {
+    next.push("--trust");
+  }
+  if (!next.includes("--approve-mcps")) {
+    next.push("--approve-mcps");
+  }
+  return next;
+}
+
 /** Pin headless cursor-agent to a workspace so a later UI cwd change does not retarget the child. */
 export function ensureHeadlessWorkspaceArgs(args: string[], workspaceDir: string): string[] {
   const next = [...args];
   if (workspaceDir && !next.includes("--workspace")) {
     next.push("--workspace", workspaceDir);
   }
-  if (!next.includes("--trust")) {
-    next.push("--trust");
-  }
-  return next;
+  return ensureHeadlessPrintArgs(next);
 }

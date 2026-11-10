@@ -30,6 +30,24 @@ import {
 } from "./projectDocsIndex.js";
 import { listProjects, registerProject } from "../config/projects.js";
 import {
+  formatWorkspaceRef,
+  looksLikeSshWorkspace,
+  parseWorkspaceInput,
+  SSH_GATED_FEATURE_ERROR,
+  type SshWorkspaceRef,
+  sshDestination,
+  workspaceCapabilities,
+  workspaceDisplayName,
+} from "../workspace/workspaceRef.js";
+import {
+  buildSshArgv,
+  ensureSshControlDir,
+  probeSshWorkspace,
+} from "../ssh/openSsh.js";
+import { mountSshfs, unmountSshfs } from "../ssh/sshfsMount.js";
+import { remotePathExpr } from "../ssh/remoteQuote.js";
+import { createAskpassSession, isSshAuthFailure, type AskpassSession } from "../ssh/askpass.js";
+import {
   finalizeRun,
   queryFilters,
   queryLastAgentRun,
@@ -65,6 +83,7 @@ import {
   resolveCursorResumeId,
 } from "../cursor/sessionUtils.js";
 import {
+  cursorModelLabelsMatch,
   parseCursorModelsOutput,
   type CursorModelOption,
 } from "../cursor/modelCatalog.js";
@@ -115,6 +134,7 @@ import {
   type UiOptions,
 } from "./ui/types.js";
 import { sendJson, readJsonBody, sendHandlerError, applySecurityHeaders, applyNoStore } from "./ui/httpUtil.js";
+import { resolveLivefileLaunch } from "./ui/livefileLaunch.js";
 import {
   authorizeAccess,
   buildUiAccessCookie,
@@ -156,6 +176,7 @@ import { buildMainTerminalHtml } from "./ui/mainGridHtml.js";
 import { buildDashboardPageHtml } from "./ui/dashboardHtml.js";
 import { buildAgentGraphContextPreamble } from "../graph/agentGraphSeed.js";
 import { ProjectGraphService } from "../graph/service.js";
+import { listConfiguredMcpServers } from "../cursor/mcpConfig.js";
 import { smokeTestProvider } from "../translator/providerSmoke.js";
 import { ExternalChatMessage, runExternalChatCompletion } from "../translator/externalChat.js";
 import {
@@ -246,7 +267,20 @@ function spawnDesktopShell(loadUrl: string): void {
 export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions): Promise<void> {
   let config = { ...baseConfig };
   const winnowLaunchRoot = resolve(process.cwd());
-  const uiWorkspace = { dir: winnowLaunchRoot };
+  type UiWorkspaceState = {
+    kind: "local" | "ssh";
+    dir: string;
+    ssh?: SshWorkspaceRef;
+    localArtifactRoot: string;
+    /** Local sshfs mount of the remote folder; local cursor-agent uses this as --workspace. */
+    mountPath?: string;
+  };
+  const uiWorkspace: UiWorkspaceState = {
+    kind: "local",
+    dir: winnowLaunchRoot,
+    localArtifactRoot: winnowLaunchRoot,
+  };
+  let sshAskpass: AskpassSession | null = null;
   const graphService = new ProjectGraphService();
   let processManager = new ProcessManager(uiWorkspace.dir);
   let telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
@@ -278,6 +312,98 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return resolve(uiWorkspace.dir, expanded);
   }
 
+  function agentWorkspaceDir(): string {
+    if (uiWorkspace.kind === "ssh" && uiWorkspace.mountPath) {
+      return uiWorkspace.mountPath;
+    }
+    return uiWorkspace.dir;
+  }
+
+  function sessionFilesRoot(logicalProjectRoot?: string): string {
+    if (uiWorkspace.kind === "ssh") {
+      return uiWorkspace.localArtifactRoot;
+    }
+    return logicalProjectRoot || uiWorkspace.dir;
+  }
+
+  function workspaceCwdPayload() {
+    const caps = workspaceCapabilities(uiWorkspace.kind);
+    return {
+      cwd:
+        uiWorkspace.kind === "ssh" && uiWorkspace.ssh
+          ? formatWorkspaceRef(uiWorkspace.ssh)
+          : uiWorkspace.dir,
+      kind: uiWorkspace.kind,
+      launchRoot: winnowLaunchRoot,
+      capabilities: caps,
+      transcriptDir:
+        uiWorkspace.kind === "ssh" && uiWorkspace.mountPath
+          ? agentTranscriptDirForWorkspaceRoot(uiWorkspace.mountPath)
+          : cursorTranscriptDirForUi(),
+      ssh: uiWorkspace.ssh
+        ? {
+            host: uiWorkspace.ssh.host,
+            user: uiWorkspace.ssh.user ?? null,
+            port: uiWorkspace.ssh.port ?? null,
+            remotePath: uiWorkspace.ssh.remotePath,
+            mountPath: uiWorkspace.mountPath ?? null,
+            cursorHost: "local",
+          }
+        : null,
+    };
+  }
+
+  function sendIfSshGated(
+    res: import("node:http").ServerResponse,
+    feature: keyof ReturnType<typeof workspaceCapabilities>,
+  ): boolean {
+    if (uiWorkspace.kind !== "ssh") {
+      return false;
+    }
+    const caps = workspaceCapabilities("ssh");
+    if (caps[feature]) {
+      return false;
+    }
+    sendJson(res, 400, { ok: false, error: SSH_GATED_FEATURE_ERROR, capabilities: caps });
+    return true;
+  }
+
+  function sshAuthOpts(): { passwordAuth?: boolean; extraEnv?: Record<string, string> } {
+    if (!sshAskpass) {
+      return {};
+    }
+    return { passwordAuth: true, extraEnv: sshAskpass.env };
+  }
+
+  async function replaceSshAskpass(password: string | undefined): Promise<void> {
+    if (sshAskpass) {
+      await sshAskpass.dispose().catch(() => {});
+      sshAskpass = null;
+    }
+    const secret = password?.trim();
+    if (secret) {
+      sshAskpass = await createAskpassSession(secret, join(homedir(), ".winnow", "ssh"));
+    }
+  }
+
+  async function tearDownWorkspaceServices(previousLogical: string) {
+    const mountToDrop = uiWorkspace.mountPath;
+    try {
+      await processManager.stopAll();
+    } catch (error) {
+      process.stderr.write(
+        `[winnow-ui] stopAll on workspace switch failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+    processManager.close();
+    const sqliteRoot = uiWorkspace.kind === "ssh" ? uiWorkspace.localArtifactRoot : previousLogical;
+    closeProjectSqlite(sqliteRoot);
+    if (mountToDrop) {
+      await unmountSshfs(mountToDrop).catch(() => {});
+      uiWorkspace.mountPath = undefined;
+    }
+  }
+
   async function applyWorkspaceDir(nextAbsolute: string, persist: boolean): Promise<string> {
     const resolved = resolve(nextAbsolute);
     const real = await realpath(resolved).catch(() => resolved);
@@ -286,20 +412,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       throw new Error(`Not a directory: ${real}`);
     }
     const previousRoot = uiWorkspace.dir;
-    if (previousRoot !== real) {
-      // Managed shell processes are project-scoped and are stopped. Live cursor-agent
-      // children keep running in the cwd they were spawned with.
-      try {
-        await processManager.stopAll();
-      } catch (error) {
-        process.stderr.write(
-          `[winnow-ui] stopAll on workspace switch failed: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-      }
-      processManager.close();
-      closeProjectSqlite(previousRoot);
+    const kindChanged = uiWorkspace.kind !== "local" || previousRoot !== real;
+    if (kindChanged) {
+      await tearDownWorkspaceServices(previousRoot);
     }
+    await replaceSshAskpass(undefined);
+    uiWorkspace.kind = "local";
+    uiWorkspace.ssh = undefined;
+    uiWorkspace.mountPath = undefined;
     uiWorkspace.dir = real;
+    uiWorkspace.localArtifactRoot = real;
     processManager = new ProcessManager(uiWorkspace.dir);
     await processManager.init();
     telemetryStore = new SystemTelemetryStore(uiWorkspace.dir);
@@ -310,6 +432,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     scriptStore = new ScriptStore(uiWorkspace.dir);
     scriptStore.init();
     await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+    await registerProject(real, { kind: "local", name: basename(real) });
     if (persist) {
       config = { ...config, uiWorkspaceDir: real };
       await saveProjectProfile(config);
@@ -317,18 +440,103 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return real;
   }
 
-  if (config.uiWorkspaceDir?.trim()) {
+  async function applySshWorkspace(ref: SshWorkspaceRef, persist: boolean, password?: string): Promise<string> {
+    await ensureSshControlDir();
+    await replaceSshAskpass(password);
+    const probed = await probeSshWorkspace(ref, sshAuthOpts());
+    if (!probed.ok) {
+      const failed = probed.error;
+      if (!password?.trim() && isSshAuthFailure(failed)) {
+        await replaceSshAskpass(undefined);
+        const err = new Error(failed) as Error & { authRequired?: boolean };
+        err.authRequired = true;
+        throw err;
+      }
+      await replaceSshAskpass(undefined);
+      throw new Error(failed);
+    }
+    const previousRoot = uiWorkspace.dir;
+    const previousKind = uiWorkspace.kind;
+    if (previousKind !== "ssh" || previousRoot !== ref.remotePath || uiWorkspace.ssh?.host !== ref.host) {
+      await tearDownWorkspaceServices(previousRoot);
+    }
+    const mounted = await mountSshfs(ref, { ...sshAuthOpts() });
+    if (!mounted.ok) {
+      await replaceSshAskpass(undefined);
+      throw new Error(mounted.error);
+    }
+    const artifactRoot =
+      previousKind === "local" ? uiWorkspace.dir : uiWorkspace.localArtifactRoot || winnowLaunchRoot;
+    uiWorkspace.kind = "ssh";
+    uiWorkspace.ssh = ref;
+    uiWorkspace.dir = ref.remotePath;
+    uiWorkspace.mountPath = mounted.mountPoint;
+    uiWorkspace.localArtifactRoot = artifactRoot;
+    processManager = new ProcessManager(artifactRoot);
+    await processManager.init();
+    telemetryStore = new SystemTelemetryStore(artifactRoot);
+    await telemetryStore.init();
+    planStore = new PlanStore(artifactRoot);
+    planStore.init();
+    scriptStore = new ScriptStore(artifactRoot);
+    scriptStore.init();
+    const formatted = formatWorkspaceRef(ref);
+    await registerProject(formatted, { kind: "ssh", name: workspaceDisplayName(ref) });
+    if (persist) {
+      config = { ...config, uiWorkspaceDir: formatted };
+      await saveProjectProfile(config);
+    }
+    return formatted;
+  }
+
+  async function applyWorkspaceInput(
+    raw: string,
+    persist: boolean,
+    extras?: { identityFile?: string; password?: string },
+  ): Promise<string> {
+    const ref = parseWorkspaceInput(raw);
+    if (ref.kind === "ssh") {
+      const identity = extras?.identityFile?.trim() || options.sshIdentity?.trim();
+      if (identity && !ref.identityFile) {
+        ref.identityFile = identity;
+      }
+      return applySshWorkspace(ref, persist, extras?.password);
+    }
+    const candidate = resolveUiPath(ref.path);
+    return applyWorkspaceDir(candidate, persist);
+  }
+
+  const bootTarget = options.sshWorkspace?.trim() || config.uiWorkspaceDir?.trim() || "";
+  if (bootTarget) {
     try {
-      await applyWorkspaceDir(expandUserPathSegment(config.uiWorkspaceDir), false);
-    } catch {
+      if (options.sshWorkspace?.trim() || looksLikeSshWorkspace(bootTarget)) {
+        await applyWorkspaceInput(bootTarget, false);
+      } else {
+        await applyWorkspaceDir(expandUserPathSegment(bootTarget), false);
+      }
+    } catch (error) {
+      process.stderr.write(
+        `[winnow-ui] workspace boot failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      if (uiWorkspace.mountPath) {
+        await unmountSshfs(uiWorkspace.mountPath).catch(() => {});
+      }
+      uiWorkspace.kind = "local";
+      uiWorkspace.ssh = undefined;
+      uiWorkspace.mountPath = undefined;
       uiWorkspace.dir = winnowLaunchRoot;
+      uiWorkspace.localArtifactRoot = winnowLaunchRoot;
     }
   }
-  await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+  if (uiWorkspace.kind === "local") {
+    await ensureCursorWorkspaceLayout(uiWorkspace.dir);
+  }
   await processManager.init();
   await telemetryStore.init();
   planStore.init();
-  await planStore.backfillFromMarkdownFiles();
+  if (uiWorkspace.kind === "local") {
+    await planStore.backfillFromMarkdownFiles();
+  }
   scriptStore.init();
 
   const cursorTranscriptDirForUi = (): string =>
@@ -338,7 +546,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   async function readRecentLogEntries(logsDir: string, limit = 50): Promise<string[]> {
     try {
-      const filePath = join(uiWorkspace.dir, logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
+      const filePath = join(sessionFilesRoot(), logsDir, `${new Date().toISOString().slice(0, 10)}.jsonl`);
       const content = await readFile(filePath, "utf8");
       const lines = content.trim().split("\n").filter(Boolean);
       return lines.slice(Math.max(0, lines.length - limit));
@@ -415,7 +623,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return new Promise((resolvePromise) => {
       const child = spawn(cursorExe, args, {
         stdio: ["ignore", "pipe", "pipe"],
-        cwd: uiWorkspace.dir,
+        cwd: sessionFilesRoot(),
         env: process.env,
       });
       let stdout = "";
@@ -484,7 +692,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     cursorLoginOutput = "";
     cursorLoginChild = spawn(cursorExe, ["login"], {
       stdio: ["ignore", "pipe", "pipe"],
-      cwd: uiWorkspace.dir,
+      cwd: sessionFilesRoot(),
       env: process.env,
     });
     const child = cursorLoginChild;
@@ -579,7 +787,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return new Promise((resolvePromise) => {
       const child = spawn("git", args, {
         stdio: ["ignore", "pipe", "pipe"],
-        cwd: uiWorkspace.dir,
+        cwd: agentWorkspaceDir(),
         env: process.env,
       });
       let stdout = "";
@@ -664,15 +872,15 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     return { path: absolute, content };
   }
 
-  function localSessionDir(projectRoot = uiWorkspace.dir): string {
+  function localSessionDir(projectRoot = sessionFilesRoot()): string {
     return join(projectRoot, ".winnow", "sessions");
   }
 
-  function localSessionIndexPath(projectRoot = uiWorkspace.dir): string {
+  function localSessionIndexPath(projectRoot = sessionFilesRoot()): string {
     return join(localSessionDir(projectRoot), "index.json");
   }
 
-  function localSessionRecordPath(id: string, projectRoot = uiWorkspace.dir): string {
+  function localSessionRecordPath(id: string, projectRoot = sessionFilesRoot()): string {
     return join(localSessionDir(projectRoot), `${id}.json`);
   }
 
@@ -749,9 +957,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   async function upsertLocalSessionIndex(
     entry: LocalSessionIndexEntry,
-    projectRoot = uiWorkspace.dir,
+    projectRoot = sessionFilesRoot(),
   ): Promise<void> {
-    const root = projectRoot || uiWorkspace.dir;
+    const root = sessionFilesRoot(projectRoot);
     const run = async (): Promise<void> => {
       const dir = localSessionDir(root);
       const indexPath = localSessionIndexPath(root);
@@ -776,7 +984,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
   const sessionRecordWriteChains = new Map<string, Promise<void>>();
 
   async function writeLocalSessionRecord(record: LocalSessionRecord): Promise<void> {
-    const dir = localSessionDir(record.projectRoot || uiWorkspace.dir);
+    const dir = localSessionDir(sessionFilesRoot(record.projectRoot));
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${record.id}.json`), `${JSON.stringify(record)}\n`, "utf8");
   }
@@ -814,9 +1022,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
   async function readLocalSession(
     id: string,
-    projectRoot = uiWorkspace.dir,
+    projectRoot = sessionFilesRoot(),
   ): Promise<{ id: string; messages: SessionMessage[]; cursorSessionId?: string }> {
-    const content = await readFile(localSessionRecordPath(id, projectRoot), "utf8");
+    const content = await readFile(localSessionRecordPath(id, sessionFilesRoot(projectRoot)), "utf8");
     const record = JSON.parse(content) as LocalSessionRecord;
     if (Array.isArray(record.events) && record.events.length > 0) {
       const messages = record.events.map((event) => ({
@@ -1075,9 +1283,49 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     throw new Error("no executable shell found for PTY");
   };
 
+  const spawnLivefilePane = (): pty.IPty => {
+    const cwd = agentWorkspaceDir();
+    const launch = resolveLivefileLaunch();
+    const ptyOptions = {
+      name: "xterm-256color",
+      cols: 120,
+      rows: 36,
+      cwd,
+      env: process.env as Record<string, string>,
+    };
+    if (!launch) {
+      const message =
+        "LiveFile was not found.\r\n" +
+        "Install the livefile command, set WINNOW_LIVEFILE to its path,\r\n" +
+        "or clone LiveFile next to this Winnow checkout.\r\n";
+      return pty.spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(message)})`], ptyOptions);
+    }
+    logMainPane(`livefile file=${launch.file} cwd=${cwd}`);
+    return pty.spawn(launch.file, launch.args, ptyOptions);
+  };
+
   const spawnMainPane = (paneId: PaneId): pty.IPty => {
-    const shell = resolveInteractiveShellForPty();
+    if (paneId === "6") {
+      return spawnLivefilePane();
+    }
     const rawCommand = (paneCommands[paneId] || "").trim();
+    if (uiWorkspace.kind === "ssh" && uiWorkspace.ssh) {
+      const remoteLaunch = rawCommand
+        ? `cd ${remotePathExpr(uiWorkspace.ssh.remotePath)} && ${rawCommand}; exec bash -l`
+        : `cd ${remotePathExpr(uiWorkspace.ssh.remotePath)} && exec bash -l`;
+      const sshArgv = buildSshArgv(uiWorkspace.ssh, remoteLaunch, {
+        tty: true,
+        passwordAuth: Boolean(sshAskpass),
+      });
+      return pty.spawn("ssh", sshArgv, {
+        name: "xterm-256color",
+        cols: 120,
+        rows: 36,
+        cwd: homedir(),
+        env: { ...process.env, ...sshAskpass?.env } as Record<string, string>,
+      });
+    }
+    const shell = resolveInteractiveShellForPty();
     const launchScript = rawCommand ? `${rawCommand}; exec ${shell}` : `exec ${shell}`;
     try {
       // Use `-c` (not `-lc`) so panes start as normal interactive shells without forcing a login-shell profile pass.
@@ -1119,7 +1367,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${options.port}`);
     const paneId = url.pathname.split("/").pop() as PaneId;
-    if (!paneId || !["1", "2", "3", "4", "5"].includes(paneId)) {
+    if (!paneId || !["1", "2", "3", "4", "5", "6"].includes(paneId)) {
       logMainPane(`reject invalid pane id path=${url.pathname}`);
       ws.close(1008, "invalid pane id");
       return;
@@ -1373,7 +1621,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         // New session or failed to read
       }
     }
-    const spawnCwd = existing?.projectRoot || uiWorkspace.dir;
+    const spawnCwd = existing?.projectRoot || agentWorkspaceDir();
     const storedCursorSessionId = existing?.cursorSessionId || diskCursorSessionId || "";
     let { resumeId: resumeSessionId, droppedArgIds: droppedResumeIds } = resolveCursorResumeId({
       payloadSessionId: requestedResumeId,
@@ -1442,11 +1690,11 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       ? payload.attachmentIds.slice(0, MAX_ATTACHMENTS_PER_SEND).map((value) => String(value))
       : [];
     const attachmentBlock = buildAttachmentPromptBlock(
-      resolveStoredAttachments(uiWorkspace.dir, attachmentIds).map((item) => item.absPath),
+      resolveStoredAttachments(sessionFilesRoot(), attachmentIds).map((item) => item.absPath),
     );
     const customModeSkill = String(payload.customModeSkill || "").trim();
     const slashExpanded = expandSlashPrompt({
-      projectRoot: spawnCwd,
+      projectRoot: sessionFilesRoot(),
       userHomedir: homedir(),
       invocations: payload.slashInvocations,
       customModeSkill,
@@ -1454,7 +1702,8 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
     const prompt = attachmentBlock ? `${slashExpanded}\n\n${attachmentBlock}` : slashExpanded;
     const planId = String(payload.planId || "").trim();
-    const graphSeedEnabled = payload.graphSeed !== false && !resumeSessionId;
+    const graphSeedEnabled =
+      payload.graphSeed !== false && !resumeSessionId && uiWorkspace.kind !== "ssh";
     const graphPreamble = graphSeedEnabled ? buildAgentGraphContextPreamble(graphService, uiWorkspace.dir, prompt) : "";
     const planContext = planId && !resumeSessionId ? await readPlanMarkdown(planId) : null;
     let selectedModelError: string | undefined;
@@ -1745,7 +1994,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     pushEvent(
       "status",
-      `Spawn: ${cursorExe} ${args.join(" ")} | modelPreference=${modelPreference || "(empty)"}`,
+      uiWorkspace.kind === "ssh" && uiWorkspace.ssh
+        ? `Spawn (local cursor-agent, SSH files ${sshDestination(uiWorkspace.ssh)}:${uiWorkspace.ssh.remotePath}): ${cursorExe} ${args.join(" ")} | modelPreference=${modelPreference || "(empty)"}`
+        : `Spawn: ${cursorExe} ${args.join(" ")} | modelPreference=${modelPreference || "(empty)"}`,
     );
     const child = spawn(cursorExe, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -1796,11 +2047,12 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             }
             const reportedLabel = typeof data.model === "string" ? data.model.trim() : "";
             if (!isGenericCursorModel(modelPreference) && expectedCursorLabel) {
-              const expected = expectedCursorLabel.trim().toLowerCase();
               const reported = reportedLabel.toLowerCase();
               if (!reported) {
                 // No label reported (older cursor-agent); skip strict check, fall through to result.
-              } else if (reported === expected) {
+              } else if (
+                cursorModelLabelsMatch(expectedCursorLabel, reportedLabel, modelPreference)
+              ) {
                 initModelVerified = true;
                 pushEvent("status", `Model verified: ${reportedLabel} (${modelPreference}).`);
               } else {
@@ -2182,11 +2434,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     const previewTarget = resolvePreviewTarget(url, req.headers, options.port, options.token);
     if (previewTarget) {
+      if (sendIfSshGated(res, "preview")) {
+        return;
+      }
       proxyPreviewHttp(req, res, previewTarget);
       return;
     }
 
     if (url.pathname === "/api/preview/probe" && req.method === "GET") {
+      if (sendIfSshGated(res, "preview")) {
+        return;
+      }
       const port = Number(url.searchParams.get("port"));
       if (!isValidPreviewPort(port, options.port)) {
         sendJson(res, 400, { ok: false, error: "invalid port" });
@@ -2198,17 +2456,22 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/preview/chrome" && req.method === "GET") {
+      if (sendIfSshGated(res, "preview")) {
+        return;
+      }
       const chromePath = findChromeExecutable();
       sendJson(res, 200, { ok: true, available: Boolean(chromePath), path: chromePath ?? null });
       return;
     }
 
     if (url.pathname === "/api/workspace/cwd" && req.method === "GET") {
-      sendJson(res, 200, {
-        cwd: uiWorkspace.dir,
-        launchRoot: winnowLaunchRoot,
-        transcriptDir: cursorTranscriptDirForUi(),
-      });
+      sendJson(res, 200, workspaceCwdPayload());
+      return;
+    }
+
+    if (url.pathname === "/api/mcp/status" && req.method === "GET") {
+      const status = listConfiguredMcpServers(agentWorkspaceDir());
+      sendJson(res, 200, { ok: true, ...status });
       return;
     }
 
@@ -2289,6 +2552,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/dashboard/disk" && req.method === "GET") {
+      if (sendIfSshGated(res, "fs")) {
+        return;
+      }
       try {
         const body = await buildDiskDashboard({
           volumePath: uiWorkspace.dir,
@@ -2304,6 +2570,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const projects = await listProjects();
       sendJson(res, 200, { projects });
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/plans") && sendIfSshGated(res, "plans")) {
       return;
     }
 
@@ -2450,6 +2720,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname.startsWith("/api/processes") && sendIfSshGated(res, "processes")) {
+      return;
+    }
+
     if (url.pathname === "/api/processes" && req.method === "GET") {
       sendJson(res, 200, { ok: true, processes: processManager.list() });
       return;
@@ -2491,6 +2765,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       const tail = Number(url.searchParams.get("tail") ?? "200");
       const body = await processManager.readLog(id, Number.isFinite(tail) ? tail : 200);
       sendJson(res, body.ok ? 200 : 400, body);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/scripts") && sendIfSshGated(res, "processes")) {
       return;
     }
 
@@ -2786,6 +3064,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
 
+    if (url.pathname.startsWith("/api/graph/") && sendIfSshGated(res, "graph")) {
+      return;
+    }
+
     if (url.pathname === "/api/graph/rebuild" && req.method === "POST") {
       try {
         const result = await graphService.rebuild(uiWorkspace.dir);
@@ -2991,18 +3273,23 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     if (url.pathname === "/api/workspace/cwd" && req.method === "POST") {
       try {
-        const payload = (await readJsonBody(req)) as { path?: string; reset?: boolean };
-        const previousDir = uiWorkspace.dir;
+        const payload = (await readJsonBody(req)) as {
+          path?: string;
+          reset?: boolean;
+          identityFile?: string;
+          password?: string;
+        };
+        const previousDir =
+          uiWorkspace.kind === "ssh" && uiWorkspace.ssh
+            ? formatWorkspaceRef(uiWorkspace.ssh)
+            : uiWorkspace.dir;
         if (payload.reset) {
           const next = await applyWorkspaceDir(winnowLaunchRoot, true);
-          await registerProject(next);
           void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
           notifyRunningAgentsOfCwdChange(previousDir, next);
           sendJson(res, 200, {
             ok: true,
-            cwd: next,
-            transcriptDir: cursorTranscriptDirForUi(),
-            launchRoot: winnowLaunchRoot,
+            ...workspaceCwdPayload(),
             runningCount: countRunningSessions(sessions.values()),
           });
           return;
@@ -3012,20 +3299,26 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           sendJson(res, 400, { ok: false, error: "path is required unless reset is true" });
           return;
         }
-        const candidate = resolveUiPath(raw);
-        const next = await applyWorkspaceDir(candidate, true);
-        await registerProject(next);
-        void rebuildAndWriteProjectDocsIndex(next).catch(() => {});
+        const next = await applyWorkspaceInput(raw, true, {
+          identityFile: payload.identityFile,
+          password: typeof payload.password === "string" ? payload.password : undefined,
+        });
+        if (uiWorkspace.kind === "local") {
+          void rebuildAndWriteProjectDocsIndex(uiWorkspace.dir).catch(() => {});
+        }
         notifyRunningAgentsOfCwdChange(previousDir, next);
         sendJson(res, 200, {
           ok: true,
-          cwd: next,
-          transcriptDir: cursorTranscriptDirForUi(),
-          launchRoot: winnowLaunchRoot,
+          ...workspaceCwdPayload(),
           runningCount: countRunningSessions(sessions.values()),
         });
       } catch (error) {
-        sendJson(res, 400, { ok: false, error: (error as Error).message });
+        const err = error as Error & { authRequired?: boolean };
+        sendJson(res, 400, {
+          ok: false,
+          error: err.message,
+          authRequired: Boolean(err.authRequired),
+        });
       }
       return;
     }
@@ -3045,7 +3338,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     if (url.pathname === "/api/workspace" && req.method === "GET") {
       const workspace = await getWorkspaceChanges();
-      sendJson(res, 200, workspace);
+      sendJson(res, 200, { ...workspace, kind: uiWorkspace.kind, capabilities: workspaceCapabilities(uiWorkspace.kind) });
       return;
     }
 
@@ -3069,6 +3362,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/workspace/docs-index" && req.method === "GET") {
+      if (sendIfSshGated(res, "docs")) {
+        return;
+      }
       try {
         const refresh = url.searchParams.get("refresh") === "1";
         let index = await readProjectDocsIndex(uiWorkspace.dir);
@@ -3083,6 +3379,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/workspace/doc" && req.method === "GET") {
+      if (sendIfSshGated(res, "docs")) {
+        return;
+      }
       try {
         const rel = url.searchParams.get("path") ?? "";
         const abs = resolveDocFilePath(uiWorkspace.dir, rel);
@@ -3116,6 +3415,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/fs/list" && req.method === "GET") {
+      if (sendIfSshGated(res, "fs")) {
+        return;
+      }
       try {
         const target = url.searchParams.get("path") ?? undefined;
         const result = await listDirectory(target);
@@ -3127,6 +3429,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/fs/preview" && req.method === "GET") {
+      if (sendIfSshGated(res, "fs")) {
+        return;
+      }
       try {
         const target = url.searchParams.get("path") ?? undefined;
         if (!target) {
@@ -3142,6 +3447,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
 
     if (url.pathname === "/api/fs/open" && req.method === "POST") {
+      if (sendIfSshGated(res, "fs")) {
+        return;
+      }
       try {
         const payload = (await readJsonBody(req)) as { path: string };
         const raw = payload.path?.trim();
@@ -3409,6 +3717,9 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         } else if (envTranscripts) {
           transcriptDirLabel = getTranscriptDir();
           cursor = await listCursorSessions(max, transcriptDirLabel).catch(() => []);
+        } else if (uiWorkspace.kind === "ssh" && uiWorkspace.mountPath) {
+          transcriptDirLabel = agentTranscriptDirForWorkspaceRoot(uiWorkspace.mountPath);
+          cursor = await listCursorSessionsForWorkspaceRoot(uiWorkspace.mountPath, max).catch(() => []);
         } else {
           transcriptDirLabel = agentTranscriptDirForWorkspaceRoot(uiWorkspace.dir);
           cursor = await listCursorSessionsForWorkspaceRoot(uiWorkspace.dir, max).catch(() => []);
@@ -3551,7 +3862,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     if (url.pathname === "/api/attachments" && req.method === "POST") {
       try {
         const body = (await readJsonBody(req)) as { mime?: string; dataBase64?: string };
-        const saved = await saveAttachment(uiWorkspace.dir, {
+        const saved = await saveAttachment(sessionFilesRoot(), {
           mime: String(body.mime ?? ""),
           dataBase64: String(body.dataBase64 ?? ""),
         });
@@ -3798,6 +4109,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       return;
     }
     if (url.pathname === "/ws/preview/chrome") {
+      if (uiWorkspace.kind === "ssh") {
+        socket.destroy();
+        return;
+      }
       chromePreviewWs.handleUpgrade(req, socket, head, (ws: WebSocket) => {
         chromePreviewWs.emit("connection", ws, req);
       });
@@ -3805,6 +4120,10 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     }
     const previewTarget = resolvePreviewTarget(url, req.headers, options.port, options.token);
     if (previewTarget) {
+      if (uiWorkspace.kind === "ssh") {
+        socket.destroy();
+        return;
+      }
       proxyPreviewWebSocket(req, socket, head, previewTarget);
       return;
     }

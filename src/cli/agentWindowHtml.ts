@@ -209,6 +209,47 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       button:hover { filter: brightness(1.12); }
       button.secondary { background: transparent; border-color: var(--line); color: var(--text); }
       .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .ssh-connect[hidden] { display: none !important; }
+      .ssh-connect {
+        margin: 8px 0 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel2);
+      }
+      .ssh-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .ssh-grid .ssh-span { grid-column: 1 / -1; }
+      .ssh-grid label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .ssh-grid input { width: 100%; }
+      .ssh-modal[hidden] { display: none !important; }
+      .ssh-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.72);
+      }
+      .ssh-modal-card {
+        width: min(420px, calc(100vw - 32px));
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel2);
+      }
+      .ssh-modal-card input[type="password"] { width: 100%; margin: 10px 0; }
       .muted { color: var(--muted); }
       .small { font-size: 11px; }
       .hint { font-size: 11px; color: var(--muted); margin-top: 6px; font-style: italic; }
@@ -794,6 +835,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
                 </span>
                 <span class="kbd">⌘↵</span>
               </div>
+              <div class="hint" style="margin-top:4px">MCP: edit <code>.cursor/mcp.json</code> or <code>~/.cursor/mcp.json</code> manually. Headless runs pass <code>--approve-mcps</code>.</div>
               <select id="agentSessionSelect" hidden aria-hidden="true">
                 <option value="">(new session)</option>
               </select>
@@ -806,9 +848,25 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               <div class="row small" style="margin-top: 8px; align-items: stretch">
                 <label style="align-self: center">Cwd</label>
-                <input id="agentCwdInput" style="flex: 1; min-width: 160px" placeholder="Path or ~/… (same as terminal cd)" />
+                <input id="agentCwdInput" style="flex: 1; min-width: 160px" placeholder="Local path or user@host:/abs/path" />
                 <button type="button" onclick="applyAgentCwd()">Set cwd</button>
+                <button type="button" class="secondary" onclick="toggleAgentSshPanel()">Connect SSH</button>
                 <button type="button" class="secondary" onclick="resetAgentCwd()">Reset</button>
+              </div>
+              <div id="agentSshPanel" class="ssh-connect" hidden>
+                <div class="hint" style="margin-bottom:8px">OpenSSH to a remote folder. Local <code>cursor-agent</code> on this machine; files via sshfs. Use <code>ssh-agent</code>; this is not LAN <code>--remote</code>.</div>
+                <div class="ssh-grid">
+                  <label>User <input id="agentSshUser" placeholder="optional" /></label>
+                  <label>Host <input id="agentSshHost" placeholder="api.internal" /></label>
+                  <label>Port <input id="agentSshPort" placeholder="22" /></label>
+                  <label>Password <input id="agentSshPassword" type="password" autocomplete="current-password" placeholder="optional" /></label>
+                  <label class="ssh-span">Remote path <input id="agentSshRemotePath" placeholder="/var/www/app or ~/src/app" /></label>
+                </div>
+                <div class="row small" style="margin-top:8px">
+                  <button type="button" id="btnAgentSshConnect" onclick="connectAgentSshWorkspace()">Connect</button>
+                  <button type="button" class="secondary" onclick="toggleAgentSshPanel(false)">Cancel</button>
+                </div>
+                <div class="small muted" id="agentSshStatus" style="margin-top:8px"></div>
               </div>
               <div class="small muted" id="agentCwdHint"></div>
               <div class="quickbar">
@@ -1161,8 +1219,9 @@ ${clientApiJavaScript()}
             input.value = d.cwd || "";
           }
           if (hint) {
+            const kind = d.kind === "ssh" ? "SSH workspace (local cursor-agent)" : "local workspace";
             hint.textContent =
-              "transcripts: " + (d.transcriptDir || "") + " · launched: " + (d.launchRoot || "");
+              kind + " · transcripts: " + (d.transcriptDir || "") + " · launched: " + (d.launchRoot || "");
           }
         } catch (_e) {}
       }
@@ -1207,20 +1266,150 @@ ${clientApiJavaScript()}
         if (!trimmed) {
           return;
         }
+        await postAgentWorkspace({ path: trimmed });
+      }
+      function agentSshField(id) {
+        const el = document.getElementById(id);
+        return el ? String(el.value || "").trim() : "";
+      }
+      function toggleAgentSshPanel(force) {
+        const panel = document.getElementById("agentSshPanel");
+        if (!panel) {
+          return;
+        }
+        const next = typeof force === "boolean" ? force : panel.hidden;
+        panel.hidden = !next;
+        if (next) {
+          void hydrateAgentSshForm();
+          document.getElementById("agentSshHost")?.focus();
+        }
+      }
+      async function hydrateAgentSshForm() {
+        try {
+          const d = await fetch(withToken("/api/workspace/cwd")).then((r) => r.json());
+          if (!d || !d.ssh) {
+            return;
+          }
+          const set = (id, value) => {
+            const el = document.getElementById(id);
+            if (el && value != null && value !== "") {
+              el.value = String(value);
+            }
+          };
+          set("agentSshHost", d.ssh.host);
+          set("agentSshUser", d.ssh.user);
+          set("agentSshPort", d.ssh.port);
+          set("agentSshRemotePath", d.ssh.remotePath);
+        } catch (_e) {}
+      }
+      async function connectAgentSshWorkspace() {
+        const status = document.getElementById("agentSshStatus");
+        const btn = document.getElementById("btnAgentSshConnect");
+        const host = agentSshField("agentSshHost");
+        const user = agentSshField("agentSshUser");
+        let remotePath = agentSshField("agentSshRemotePath");
+        const port = agentSshField("agentSshPort");
+        const password = agentSshField("agentSshPassword");
+        if (!host || !remotePath) {
+          if (status) {
+            status.textContent = "Host and remote path are required.";
+          }
+          return;
+        }
+        if (!remotePath.startsWith("/") && !remotePath.startsWith("~/")) {
+          remotePath = "/" + remotePath;
+        }
+        let url = "ssh://";
+        if (user) {
+          url += encodeURIComponent(user) + "@";
+        }
+        url += host;
+        if (port && port !== "22") {
+          url += ":" + port;
+        }
+        url += remotePath.startsWith("/") ? remotePath : "/" + remotePath;
+        if (status) {
+          status.textContent = "Connecting…";
+        }
+        if (btn) {
+          btn.disabled = true;
+        }
+        try {
+          const res = await postAgentWorkspace({ path: url, password: password || undefined });
+          if (res && res.ok) {
+            if (status) {
+              status.textContent = "Connected: " + (res.cwd || url);
+            }
+            const pw = document.getElementById("agentSshPassword");
+            if (pw) {
+              pw.value = "";
+            }
+            toggleAgentSshPanel(false);
+          } else if (status) {
+            status.textContent = (res && res.error) || "Connect failed";
+          }
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+          }
+        }
+      }
+      function promptAgentSshPassword() {
+        return new Promise((resolve) => {
+          const modal = document.getElementById("agentSshPasswordModal");
+          const input = document.getElementById("agentSshPasswordModalInput");
+          const ok = document.getElementById("agentSshPasswordModalOk");
+          const cancel = document.getElementById("agentSshPasswordModalCancel");
+          if (!modal || !input || !ok || !cancel) {
+            resolve("");
+            return;
+          }
+          const finish = (value) => {
+            modal.hidden = true;
+            ok.onclick = null;
+            cancel.onclick = null;
+            input.onkeydown = null;
+            input.value = "";
+            resolve(value);
+          };
+          input.value = "";
+          modal.hidden = false;
+          input.focus();
+          ok.onclick = () => finish(String(input.value || ""));
+          cancel.onclick = () => finish("");
+          input.onkeydown = (evt) => {
+            if (evt.key === "Enter") {
+              evt.preventDefault();
+              finish(String(input.value || ""));
+            }
+            if (evt.key === "Escape") {
+              finish("");
+            }
+          };
+        });
+      }
+      async function postAgentWorkspace(body) {
         const res = await fetch(withToken("/api/workspace/cwd"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: trimmed }),
+          body: JSON.stringify(body),
         }).then((r) => r.json());
         const resultEl = document.getElementById("result");
         if (resultEl) {
           resultEl.textContent = JSON.stringify(res);
+        }
+        if (res.authRequired && !body.password) {
+          const typed = await promptAgentSshPassword();
+          if (typed) {
+            return postAgentWorkspace({ ...body, password: typed });
+          }
         }
         if (res.ok) {
           await refreshAgentCwdBanner();
           await refreshSessions();
           refreshSlashCatalog();
         }
+        return res;
       }
       async function resetAgentCwd() {
         const res = await fetch(withToken("/api/workspace/cwd"), {
@@ -2968,6 +3157,17 @@ ${clientApiJavaScript()}
       }
       syncAgentLoadingHeight();
     </script>
+    <div id="agentSshPasswordModal" class="ssh-modal" hidden>
+      <div class="ssh-modal-card">
+        <div class="title">SSH password</div>
+        <p class="hint">Key or agent login failed. Password is kept in memory for this Winnow session only.</p>
+        <input id="agentSshPasswordModalInput" type="password" autocomplete="current-password" />
+        <div class="row small">
+          <button type="button" id="agentSshPasswordModalOk">Connect</button>
+          <button type="button" class="secondary" id="agentSshPasswordModalCancel">Cancel</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>`;
 }

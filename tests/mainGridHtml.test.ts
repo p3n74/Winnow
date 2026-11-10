@@ -36,11 +36,16 @@ describe("buildMainTerminalHtml", () => {
     expect(html).toContain("/api/preview/chrome");
     expect(html).toContain("data-web-port=\"8081\"");
     expect(html).toContain('id="webFullscreen"');
+    expect(html).toContain('id="btnDocsFullscreen"');
+    expect(html).toContain("toggleDocsFullscreen");
     expect(html).toContain("toggleWebFullscreen");
     expect(html).toContain("fitWebCanvas");
     expect(html).toContain("id=\"webStage\"");
     expect(html).toContain("ensureWebPreviewLoaded");
     expect(html).toContain("2 agent · web · shell");
+    expect(html).toContain("1 ranger · live · trace · docs");
+    expect(html).toContain('id="pane1TabLive"');
+    expect(html).toContain('setPane1Tab("live")');
     expect(html).toContain('new RegExp("^/__preview/');
     expect(html).not.toContain("/^/__preview/");
     expect(html).not.toContain(".replace(/^?/");

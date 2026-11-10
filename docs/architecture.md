@@ -19,6 +19,8 @@ Winnow is a thin wrapper over `cursor-agent`, plus a local companion UI.
 - Default bind is loopback (`127.0.0.1`). `--host 0.0.0.0` is LAN. `--remote` is the network-facing mode (non-loopback bind, access token unless `--no-token`, no auto-open browser).
 - When a token is set, clients present it as `?token=`, `Authorization: Bearer`, or the `winnow_ui` cookie. `GET /api/health` stays public for probes.
 - A later public site (for example Coolify on a VPS) should **reverse-proxy** this UI (HTTP + WebSocket `/ws/main/*` + `/ws/preview/chrome` + SSE + `/__preview/:port`). That site is a separate service; Winnow does not terminate TLS or dial out to the VPS.
+- SSH folders (`winnow ui --ssh user@host:/path`) mount the remote tree with sshfs and run local `cursor-agent` on this machine; PTY panes still SSH to the host. See [ssh-workspace.md](./ssh-workspace.md).
+- MCP is Cursor-owned: users edit `.cursor/mcp.json` (or `~/.cursor/mcp.json`). Headless UI/print spawns pass `--approve-mcps` and `--trust`. See [mcp.md](./mcp.md).
 
 See [remote-access.md](./remote-access.md) for the operator and proxy contract.
 

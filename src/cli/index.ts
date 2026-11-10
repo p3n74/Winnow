@@ -40,6 +40,8 @@ type CliOptions = {
   pane4Cmd?: string;
   pane5Cmd?: string;
   shell?: boolean;
+  ssh?: string;
+  sshIdentity?: string;
 };
 
 export function mergeConfig(base: WinnowConfig, options: CliOptions): WinnowConfig {
@@ -187,9 +189,14 @@ export function buildProgram(): Command {
     .option("--translator-timeout-ms <ms>", "translation request timeout in ms", Number)
     .option("--translator-retries <count>", "translation retry count", Number)
     .option("--cursor-command <cmd>", "cursor command to execute", "cursor-agent")
+    .option("--ssh <target>", "probe an SSH workspace (user@host:/path); not the LAN --remote bind")
+    .option("--ssh-identity <file>", "OpenSSH identity file for --ssh")
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
-      const exitCode = await runDoctor(config);
+      const exitCode = await runDoctor(config, {
+        sshTarget: opts.ssh?.trim(),
+        sshIdentity: opts.sshIdentity?.trim(),
+      });
       process.exit(exitCode);
     });
 
@@ -233,6 +240,11 @@ export function buildProgram(): Command {
       "--shell",
       "open the UI in an embedded Electron window (no system browser tab); first run may download Electron via npx",
     )
+    .option(
+      "--ssh <target>",
+      "open an SSH workspace via sshfs; cursor-agent runs on this machine (user@host:/abs/path or ssh://…); not --remote bind",
+    )
+    .option("--ssh-identity <file>", "OpenSSH identity file for --ssh")
     .action(async (opts: CliOptions) => {
       const config = await getConfig(opts);
       const desktopShell = Boolean(opts.shell);
@@ -260,6 +272,8 @@ export function buildProgram(): Command {
           "4": opts.pane4Cmd ?? "netwatch",
           "5": opts.pane5Cmd ?? (process.platform === "win32" ? "" : (process.env.SHELL ?? "zsh")),
         },
+        sshWorkspace: opts.ssh?.trim() || undefined,
+        sshIdentity: opts.sshIdentity?.trim() || undefined,
       });
     });
 

@@ -4,6 +4,8 @@ Winnow’s companion UI (`winnow ui`) runs on the machine that has your files, t
 
 This document is the operator and integrator contract. It does **not** ship a Coolify app, an outbound tunnel, or TLS inside Winnow.
 
+To **edit a repository that lives on another machine** (Cursor-style SSH folder), see [ssh-workspace.md](./ssh-workspace.md). `--remote` here only means “bind the UI on the network.”
+
 ## Threat model
 
 The UI can:

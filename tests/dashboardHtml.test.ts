@@ -91,6 +91,24 @@ describe("buildDashboardPageHtml", () => {
     expect(html).toContain("Agents keep working after you change the working directory.");
   });
 
+  it("accepts SSH workspace paths in the working-directory control", () => {
+    const html = buildDashboardPageHtml(undefined);
+    expect(html).toContain("user@host:/abs/path");
+    expect(html).toContain("SSH workspace");
+    expect(html).toContain('id="sshConnectPanel"');
+    expect(html).toContain('id="sshHost"');
+    expect(html).toContain("Connect SSH");
+    expect(html).toContain("this machine");
+    expect(html).toContain("local <code>cursor-agent</code>");
+    expect(html).toContain("connectSshWorkspace");
+    expect(html).toContain("toggleSshConnectPanel");
+    expect(html).toContain('id="sshPassword"');
+    expect(html).toContain('id="sshPasswordModal"');
+    expect(html).toContain("promptSshPassword");
+    expect(html).not.toContain("Identity file");
+    expect(html).not.toContain("sshIdentity");
+  });
+
   it("adds a Cursor mode picker, slash palette, and custom mode badge to the Agent Workspace", () => {
     const html = buildDashboardPageHtml(undefined);
     expect(html).toContain('id="agentCursorMode"');

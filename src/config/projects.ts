@@ -6,6 +6,7 @@ export type ProjectRecord = {
   path: string;
   name: string;
   lastOpened: string;
+  kind?: "local" | "ssh";
 };
 
 function globalWinnowDir(): string {
@@ -26,20 +27,30 @@ export async function listProjects(): Promise<ProjectRecord[]> {
   }
 }
 
-export async function registerProject(projectPath: string): Promise<void> {
+export async function registerProject(
+  projectPath: string,
+  opts?: { name?: string; kind?: "local" | "ssh" },
+): Promise<void> {
   const projects = await listProjects();
-  const name = projectPath.split("/").pop() || projectPath;
-  
-  const existingIndex = projects.findIndex(p => p.path === projectPath);
+  const name = opts?.name || projectPath.split("/").pop() || projectPath;
+  const kind = opts?.kind;
+  const existingIndex = projects.findIndex((p) => p.path === projectPath);
   const now = new Date().toISOString();
 
   if (existingIndex > -1) {
     projects[existingIndex].lastOpened = now;
+    if (kind) {
+      projects[existingIndex].kind = kind;
+    }
+    if (opts?.name) {
+      projects[existingIndex].name = opts.name;
+    }
   } else {
     projects.push({
       path: projectPath,
       name,
-      lastOpened: now
+      lastOpened: now,
+      kind,
     });
   }
 

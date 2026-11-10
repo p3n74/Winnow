@@ -65,11 +65,17 @@ describe("pane 1 Trace HTML contract", () => {
   it("includes Browser, Trace, and Docs tabs on pane 1", () => {
     const html = buildMainTerminalHtml();
     expect(html).toContain('data-pane1-tab="browser"');
+    expect(html).toContain('data-pane1-tab="live"');
+    expect(html).toContain('id="pane1Live"');
+    expect(html).toContain('id="pane6"');
     expect(html).toContain('data-pane1-tab="trace"');
     expect(html).toContain('data-pane1-tab="docs"');
     expect(html).toContain('id="pane1TabDocs"');
     expect(html).toContain('id="pane1Docs"');
     expect(html).toContain('id="docsFileSelect"');
+    expect(html).toContain('id="btnDocsFullscreen"');
+    expect(html).toContain("toggleDocsFullscreen");
+    expect(html).toContain("docsFullscreenFallback");
     expect(html).not.toContain('data-pane2-tab="docs"');
     expect(html).not.toContain('id="pane2Docs"');
     expect(html).toContain('id="pane1Trace"');

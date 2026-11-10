@@ -9,10 +9,16 @@ export type UiOptions = {
   remote?: boolean;
   /** When set, send CORS headers for this origin (off by default). */
   corsOrigin?: string;
-  paneCommands?: Record<"1" | "2" | "3" | "4" | "5", string>;
+  paneCommands?: Partial<Record<PaneId, string>>;
+  /**
+   * SSH workspace target (`user@host:/path` or `ssh://…`). Distinct from `remote`
+   * (LAN bind / reverse-proxy mode).
+   */
+  sshWorkspace?: string;
+  sshIdentity?: string;
 };
 
-export type PaneId = "1" | "2" | "3" | "4" | "5";
+export type PaneId = "1" | "2" | "3" | "4" | "5" | "6";
 
 export const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
   "1": "ranger",
@@ -21,6 +27,8 @@ export const DEFAULT_PANE_COMMANDS: Record<PaneId, string> = {
   "3": "htop",
   "4": "netwatch",
   "5": process.platform === "win32" ? "" : process.env.SHELL || "zsh",
+  /** Pane 6 is the LiveFile terminal inside pane 1. The command is resolved at spawn. */
+  "6": "",
 };
 
 export type ProfileUpdateRequest = {

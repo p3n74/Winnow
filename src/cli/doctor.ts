@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 import { WinnowConfig } from "../config/schema.js";
 import { isNativeAbiMismatch, NATIVE_PACKAGES } from "../../scripts/nativeAbi.mjs";
+import { formatMcpDoctorLine, listConfiguredMcpServers } from "../cursor/mcpConfig.js";
 
 function runCommand(command: string, args: string[]): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
@@ -90,7 +92,12 @@ export async function probeNativeModules(
   return results;
 }
 
-export async function runDoctor(config: WinnowConfig): Promise<number> {
+export type DoctorOptions = {
+  sshTarget?: string;
+  sshIdentity?: string;
+};
+
+export async function runDoctor(config: WinnowConfig, options: DoctorOptions = {}): Promise<number> {
   let hasFailure = false;
 
   const cursorCheck = await runCommand(config.cursorCommand, ["--help"]);
@@ -151,5 +158,52 @@ export async function runDoctor(config: WinnowConfig): Promise<number> {
 
   process.stdout.write(`Translator retries/timeout: ${config.translatorRetries}/${config.translatorTimeoutMs}ms\n`);
   process.stdout.write(`Session logs: ${config.logsEnabled ? "enabled" : "disabled"} (${config.logsDir})\n`);
+
+  const mcpWorkspace = (config.uiWorkspaceDir || "").trim() || process.cwd();
+  const mcpStatus = listConfiguredMcpServers(resolve(mcpWorkspace));
+  process.stdout.write(`${formatMcpDoctorLine(mcpStatus)}\n`);
+  if (mcpStatus.errors.length > 0 && mcpStatus.servers.length === 0) {
+    hasFailure = true;
+  }
+
+  const sshTarget = options.sshTarget?.trim();
+  if (sshTarget) {
+    const { parseWorkspaceInput } = await import("../workspace/workspaceRef.js");
+    const { probeSshWorkspace } = await import("../ssh/openSsh.js");
+    try {
+      const ref = parseWorkspaceInput(sshTarget);
+      if (ref.kind !== "ssh") {
+        process.stdout.write(`SSH workspace: FAIL — not an SSH target: ${sshTarget}\n`);
+        hasFailure = true;
+      } else {
+        if (options.sshIdentity?.trim()) {
+          ref.identityFile = options.sshIdentity.trim();
+        }
+        const probed = await probeSshWorkspace(ref);
+        if (!probed.ok) {
+          process.stdout.write(`SSH workspace: FAIL — ${probed.error}\n`);
+          hasFailure = true;
+        } else {
+          process.stdout.write(`SSH workspace (${sshTarget}): OK (remote dir reachable; cursor-agent runs locally)\n`);
+        }
+        const { whichSshfs } = await import("../ssh/sshfsMount.js");
+        const sshfsPath = await whichSshfs();
+        if (!sshfsPath) {
+          process.stdout.write(
+            "sshfs: FAIL — install sshfs so local cursor-agent can see the remote folder\n",
+          );
+          hasFailure = true;
+        } else {
+          process.stdout.write(`sshfs: OK (${sshfsPath})\n`);
+        }
+      }
+    } catch (error) {
+      process.stdout.write(
+        `SSH workspace: FAIL — ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      hasFailure = true;
+    }
+  }
+
   return hasFailure ? 1 : 0;
 }

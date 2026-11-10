@@ -3,6 +3,7 @@ import { WinnowConfig } from "../config/schema.js";
 import { createTranslator } from "../translator/factory.js";
 import { runCursorAgent } from "../cursor/runCursor.js";
 import { SessionLogger } from "../logging/sessionLogger.js";
+import { ensureHeadlessPrintArgs } from "../cli/ui/sessionDto.js";
 
 type SessionOptions = {
   config: WinnowConfig;
@@ -162,7 +163,12 @@ async function runWithStreamingTranslation(
   });
 }
 
-function getEffectiveArgs(config: WinnowConfig, args: string[], isInteractiveLoop: boolean): string[] {
+/** Exported for unit tests. */
+export function getEffectiveArgs(
+  config: WinnowConfig,
+  args: string[],
+  isInteractiveLoop: boolean,
+): string[] {
   let effectiveArgs = [...args];
   if (config.sessionId) {
     if (!effectiveArgs.includes("--resume")) {
@@ -172,11 +178,15 @@ function getEffectiveArgs(config: WinnowConfig, args: string[], isInteractiveLoo
       effectiveArgs.push("--print");
     }
   } else if (isInteractiveLoop || isTranslationActive(config)) {
-    // If we are in an interactive loop or translating, we generally want --print 
+    // If we are in an interactive loop or translating, we generally want --print
     // so we can capture and process the output.
     if (!effectiveArgs.includes("--print")) {
       effectiveArgs.push("--print");
     }
+  }
+  // Headless print mode: trust workspace + auto-approve MCP so prompts cannot block piped stdio.
+  if (effectiveArgs.includes("--print")) {
+    effectiveArgs = ensureHeadlessPrintArgs(effectiveArgs);
   }
   return effectiveArgs;
 }
