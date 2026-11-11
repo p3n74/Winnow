@@ -40,6 +40,8 @@ describe("buildDashboardPageHtml", () => {
     expect(html).toContain('id="agentSubagentsPanel"');
     expect(html).toContain("s.liveSubagents");
     expect(html).toMatch(/id="agentSubagentsPanel"[^>]*hidden/);
+    expect(html).toContain("Keep the inline chat panel hidden");
+    expect(html).not.toMatch(/const show = rows\.length > 0/);
   });
 
   it("loads GitHub inbox from /api/plans/inbox instead of per-plan /tasks", () => {

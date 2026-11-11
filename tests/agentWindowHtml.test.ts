@@ -28,6 +28,9 @@ describe("buildAgentWindowPageHtml", () => {
     expect(html).toMatch(/id="agentSubagentsPanel"[^>]*hidden/);
     expect(html).toContain(".subagents-panel");
     expect(html).toContain("display: none !important");
+    expect(html).toContain("Keep the inline chat panel hidden");
+    expect(html).not.toMatch(/const show = rows\.length > 0/);
+    expect(html).toContain("function openSubagentTrace");
   });
 
   it("continues via stored Cursor UUID instead of injecting Winnow ids into --resume args", () => {

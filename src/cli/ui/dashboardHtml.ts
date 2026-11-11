@@ -2870,89 +2870,20 @@ ${agentQuestionJavaScript()}
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
-      let liveSubagentMap = {};
-      function appendSubagentCard(parent, row){
-        const card = document.createElement('article');
-        card.className = 'subagent-card';
-        const head = document.createElement('div');
-        head.className = 'subagent-card-head';
-        const dot = document.createElement('span');
-        dot.className = 'subagent-dot';
-        const status = String((row && row.status) || 'running');
-        dot.dataset.status = status === 'done' ? 'done' : 'running';
-        const nameEl = document.createElement('span');
-        nameEl.className = 'subagent-name';
-        nameEl.textContent = String((row && (row.name || row.id)) || 'subagent');
-        const statusEl = document.createElement('span');
-        statusEl.className = 'muted';
-        statusEl.textContent = status === 'done' ? 'finished' : status;
-        head.appendChild(dot);
-        head.appendChild(nameEl);
-        head.appendChild(statusEl);
-        card.appendChild(head);
-        const steps = row && Array.isArray(row.steps) ? row.steps : [];
-        if(steps.length){
-          const list = document.createElement('ol');
-          list.className = 'subagent-steps';
-          const visible = steps.slice(-12);
-          const hiddenCount = steps.length - visible.length;
-          if(hiddenCount > 0){
-            const more = document.createElement('li');
-            more.textContent = '… ' + hiddenCount + ' earlier';
-            list.appendChild(more);
-          }
-          visible.forEach(function(step){
-            const li = document.createElement('li');
-            if(step && step.kind === 'tool'){ li.className = 'is-tool'; }
-            li.textContent = String((step && step.label) || '');
-            list.appendChild(li);
-          });
-          card.appendChild(list);
-        } else if(row && row.summary){
-          const sum = document.createElement('div');
-          sum.className = 'subagent-steps';
-          sum.textContent = String(row.summary);
-          card.appendChild(sum);
-        }
-        parent.appendChild(card);
-      }
       function renderSubagentsPanel(){
+        // Keep the inline chat panel hidden — open the monitor from the Agents list instead.
         const panel = document.getElementById('agentSubagentsPanel');
-        const liveEl = document.getElementById('agentSubagentsLive');
-        const rows = Object.keys(liveSubagentMap).map(function(key){ return liveSubagentMap[key]; });
-        if(liveEl){
-          liveEl.textContent = '';
-          rows.forEach(function(row){ appendSubagentCard(liveEl, row); });
-        }
         if(panel){
-          const show = rows.length > 0;
-          panel.hidden = !show;
-          panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+          panel.hidden = true;
+          panel.setAttribute('aria-hidden', 'true');
         }
       }
-      function applyLiveSubagents(rows){
-        liveSubagentMap = {};
-        (rows || []).forEach(function(row){
-          if(!row){ return; }
-          const id = String(row.id || row.name || '');
-          if(!id){ return; }
-          liveSubagentMap[id] = row;
-        });
+      function applyLiveSubagents(_rows){
         renderSubagentsPanel();
       }
       function noteLiveSubagentFromEvent(ev){
         const content = String((ev && ev.content) || '');
         if(!content.startsWith('subagent ')){ return; }
-        const rest = content.slice('subagent '.length);
-        const colon = rest.indexOf(':');
-        if(colon < 0){ return; }
-        const name = rest.slice(0, colon).trim();
-        const after = rest.slice(colon + 1).trim();
-        const space = after.indexOf(' ');
-        const status = space < 0 ? after : after.slice(0, space);
-        const summary = space < 0 ? '' : after.slice(space + 1).trim();
-        const id = name || 'subagent';
-        liveSubagentMap[id] = { id: id, name: name || id, status: status, summary: summary };
         renderSubagentsPanel();
       }
       function estimateTokens(chars){
@@ -3997,7 +3928,6 @@ ${agentQuestionJavaScript()}
           selectedResumeSessionId = activeSessionId;
         } else {
           clearChat();
-          liveSubagentMap = {};
           renderSubagentsPanel();
         }
         thinkingEvents = [];

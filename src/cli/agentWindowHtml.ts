@@ -1693,127 +1693,15 @@ ${agentQuestionJavaScript()}
       let thinkingEvents = [];
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
-      let definedSubagents = [];
-      let subagentsHint = "";
-      let liveSubagentMap = {};
-      function appendSubagentCard(parent, row) {
-        const card = document.createElement("article");
-        card.className = "subagent-card";
-        const head = document.createElement("div");
-        head.className = "subagent-card-head";
-        const dot = document.createElement("span");
-        dot.className = "subagent-dot";
-        const status = String((row && row.status) || "running");
-        dot.dataset.status = status === "done" ? "done" : "running";
-        const nameEl = document.createElement("span");
-        nameEl.className = "subagent-name";
-        nameEl.textContent = String((row && (row.name || row.id)) || "subagent");
-        const statusEl = document.createElement("span");
-        statusEl.className = "muted";
-        statusEl.textContent = status === "done" ? "finished" : status;
-        head.appendChild(dot);
-        head.appendChild(nameEl);
-        head.appendChild(statusEl);
-        const openBtn = document.createElement("button");
-        openBtn.type = "button";
-        openBtn.className = "secondary";
-        openBtn.textContent = "Open";
-        openBtn.onclick = (evt) => {
-          evt.preventDefault();
-          evt.stopPropagation();
-          if (activeSessionId) {
-            openSubagentTrace(activeSessionId, String((row && row.id) || ""));
-          }
-        };
-        head.appendChild(openBtn);
-        card.appendChild(head);
-        const steps = row && Array.isArray(row.steps) ? row.steps : [];
-        if (steps.length) {
-          const list = document.createElement("ol");
-          list.className = "subagent-steps";
-          const visible = steps.slice(-12);
-          const hiddenCount = steps.length - visible.length;
-          if (hiddenCount > 0) {
-            const more = document.createElement("li");
-            more.textContent = "… " + hiddenCount + " earlier";
-            list.appendChild(more);
-          }
-          visible.forEach((step) => {
-            const li = document.createElement("li");
-            if (step && step.kind === "tool") {
-              li.className = "is-tool";
-            }
-            li.textContent = String((step && step.label) || "");
-            list.appendChild(li);
-          });
-          card.appendChild(list);
-        } else if (row && row.summary) {
-          const sum = document.createElement("div");
-          sum.className = "subagent-steps";
-          sum.textContent = String(row.summary);
-          card.appendChild(sum);
-        }
-        parent.appendChild(card);
-      }
       function renderSubagentsPanel() {
+        // Keep the inline chat panel hidden — open the monitor from the Agents list instead.
         const panel = document.getElementById("agentSubagentsPanel");
-        const hintEl = document.getElementById("agentSubagentsHint");
-        const definedEl = document.getElementById("agentSubagentsDefined");
-        const liveEl = document.getElementById("agentSubagentsLive");
-        const rows = Object.keys(liveSubagentMap).map((key) => liveSubagentMap[key]);
-        if (hintEl) {
-          hintEl.hidden = rows.length > 0;
-          hintEl.textContent = rows.length ? "" : (subagentsHint || "");
-        }
-        if (definedEl) {
-          definedEl.hidden = rows.length > 0;
-          definedEl.textContent = "";
-          if (!rows.length) {
-            if (!definedSubagents.length) {
-              const empty = document.createElement("div");
-              empty.className = "small muted";
-              empty.textContent = "No agent definitions found.";
-              definedEl.appendChild(empty);
-            } else {
-              definedSubagents.forEach((agent) => {
-                const row = document.createElement("div");
-                row.className = "subagent-row";
-                const nameEl = document.createElement("span");
-                nameEl.className = "subagent-name";
-                nameEl.textContent = String(agent.name || "");
-                const meta = document.createElement("span");
-                meta.className = "muted";
-                const bits = [agent.description, agent.model].filter(Boolean);
-                meta.textContent = bits.length ? " — " + bits.join(" · ") : "";
-                row.appendChild(nameEl);
-                row.appendChild(meta);
-                definedEl.appendChild(row);
-              });
-            }
-          }
-        }
-        if (liveEl) {
-          liveEl.textContent = "";
-          rows.forEach((row) => appendSubagentCard(liveEl, row));
-        }
         if (panel) {
-          const show = rows.length > 0;
-          panel.hidden = !show;
-          panel.setAttribute("aria-hidden", show ? "false" : "true");
+          panel.hidden = true;
+          panel.setAttribute("aria-hidden", "true");
         }
       }
-      function applyLiveSubagents(rows) {
-        liveSubagentMap = {};
-        (rows || []).forEach((row) => {
-          if (!row) {
-            return;
-          }
-          const id = String(row.id || row.name || "");
-          if (!id) {
-            return;
-          }
-          liveSubagentMap[id] = row;
-        });
+      function applyLiveSubagents(_rows) {
         renderSubagentsPanel();
       }
       function noteLiveSubagentFromEvent(ev) {
@@ -1821,30 +1709,7 @@ ${agentQuestionJavaScript()}
         if (!content.startsWith("subagent ")) {
           return;
         }
-        const rest = content.slice("subagent ".length);
-        const colon = rest.indexOf(":");
-        if (colon < 0) {
-          return;
-        }
-        const name = rest.slice(0, colon).trim();
-        const after = rest.slice(colon + 1).trim();
-        const space = after.indexOf(" ");
-        const status = space < 0 ? after : after.slice(0, space);
-        const summary = space < 0 ? "" : after.slice(space + 1).trim();
-        const id = name || "subagent";
-        liveSubagentMap[id] = { id: id, name: name || id, status: status, summary: summary };
         renderSubagentsPanel();
-      }
-      async function loadSubagentDefinitions() {
-        try {
-          const data = await fetch(withToken("/api/cursor/subagents")).then((r) => r.json());
-          if (!data || !data.ok) {
-            return;
-          }
-          definedSubagents = Array.isArray(data.agents) ? data.agents : [];
-          subagentsHint = data.hint || "";
-          renderSubagentsPanel();
-        } catch (_e) {}
       }
       function estimateTokens(chars) {
         return Math.max(0, Math.ceil(chars / 4));
@@ -2081,7 +1946,6 @@ ${agentQuestionJavaScript()}
         clearChat();
         thinkingEvents = [];
         lastTraceAtMs = Date.now();
-        liveSubagentMap = {};
         renderSubagentsPanel();
         const thinkingBlock = document.getElementById("agentThinking");
         if (thinkingBlock) {
@@ -2570,7 +2434,6 @@ ${agentQuestionJavaScript()}
           clearChat();
           thinkingEvents = [];
           lastTraceAtMs = Date.now();
-          liveSubagentMap = {};
           renderSubagentsPanel();
           const thinkingBlock = document.getElementById("agentThinking");
           if (thinkingBlock) {
