@@ -105,6 +105,95 @@ function toGoalLabel(name: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+const ACTION_SYMBOL_PREFIXES = [
+  "start",
+  "run",
+  "build",
+  "refresh",
+  "load",
+  "save",
+  "apply",
+  "create",
+  "update",
+  "delete",
+  "sync",
+  "submit",
+  "process",
+  "handle",
+] as const;
+const ACTION_SYMBOL_PREFIX_RE = new RegExp(`^(${ACTION_SYMBOL_PREFIXES.join("|")})`);
+
+const BL_NODE_KIND_LIMIT = 2000;
+const BL_SYMBOL_LIMIT = 800;
+const BL_EDGE_LIMIT = 1500;
+const BL_CALLS_EDGE_LIMIT = 800;
+const BL_MISSING_ENDPOINT_CAP = 3000;
+const BL_CONCEPT_FILES_CAP = 12;
+const BL_WORKFLOWS_CAP = 24;
+const BL_WORKFLOW_SYMBOLS_CAP = 12;
+const BL_FILE_HINTS_CAP = 40;
+const BL_FILE_HINT_SYMBOLS_CAP = 8;
+
+const NODE_COLUMNS = `id, kind, name, path, signature, summary_en AS summaryEn, description_en AS descriptionEn, detail_level AS detailLevel,
+  tags_json AS tagsJson, state, confidence, created_at AS createdAt, updated_at AS updatedAt`;
+const EDGE_COLUMNS = `e.id AS id, e.from_id AS fromId, e.to_id AS toId, e.kind AS kind, e.summary_en AS summaryEn, e.weight AS weight,
+  e.state AS state, e.confidence AS confidence, e.evidence_json AS evidenceJson, e.created_at AS createdAt, e.updated_at AS updatedAt`;
+
+const TEST_PATH_RES = [/\/__tests__\//, /\/tests?\//, /\.test\./, /\.spec\./, /\/mocks?\//, /\/fixtures?\//];
+
+function isTestPath(path: string): boolean {
+  const normalized = `/${path.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+  return TEST_PATH_RES.some((re) => re.test(normalized));
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Kahn's algorithm; ready queue is stable by node name. Leftover (cyclic) nodes are appended sorted by name. */
+function topologicalOrder(
+  nodes: BusinessLogicGraph["nodes"],
+  indegreeInput: Map<string, number>,
+  outgoing: Map<string, string[]>,
+): string[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const indegree = new Map(indegreeInput);
+  const cmp = (a: string, b: string): number => {
+    const na = byId.get(a);
+    const nb = byId.get(b);
+    return compareStrings(na?.name ?? "", nb?.name ?? "") || compareStrings(a, b);
+  };
+  // Sorted descending so the smallest is popped from the end.
+  const ready: string[] = nodes.filter((n) => (indegree.get(n.id) ?? 0) === 0).map((n) => n.id).sort((a, b) => cmp(b, a));
+  const insertReady = (id: string) => {
+    let lo = 0;
+    let hi = ready.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cmp(ready[mid] as string, id) > 0) lo = mid + 1;
+      else hi = mid;
+    }
+    ready.splice(lo, 0, id);
+  };
+  const order: string[] = [];
+  const emitted = new Set<string>();
+  while (ready.length > 0) {
+    const id = ready.pop() as string;
+    order.push(id);
+    emitted.add(id);
+    for (const to of outgoing.get(id) ?? []) {
+      const next = (indegree.get(to) ?? 0) - 1;
+      indegree.set(to, next);
+      if (next === 0 && !emitted.has(to)) insertReady(to);
+    }
+  }
+  if (order.length < nodes.length) {
+    const leftover = nodes.filter((n) => !emitted.has(n.id)).map((n) => n.id).sort(cmp);
+    order.push(...leftover);
+  }
+  return order;
+}
+
 export class ProjectGraphService {
   private currentRoot: string | null = null;
   private db: Database.Database | null = null;
@@ -405,12 +494,210 @@ export class ProjectGraphService {
     return this.reconcile(projectRoot, "rumination");
   }
 
+  /**
+   * Loads the business-map source rows by kind so no single global ORDER BY/LIMIT can evict whole kinds.
+   * `promotable` are nodes eligible for business nodes; `nodeById` additionally holds endpoint nodes (files, driven symbols).
+   */
+  private loadBusinessSource(projectRoot: string): {
+    promotable: GraphNode[];
+    nodeById: Map<string, GraphNode>;
+    edges: GraphEdge[];
+    drivenSymbolIds: Set<string>;
+  } {
+    const db = this.ensureDb(projectRoot);
+    const promotable: GraphNode[] = [];
+    const nodeById = new Map<string, GraphNode>();
+    const addNodes = (rows: GraphNode[], promote: boolean) => {
+      for (const row of rows) {
+        if (nodeById.has(row.id)) continue;
+        nodeById.set(row.id, row);
+        if (promote) promotable.push(row);
+      }
+    };
+
+    for (const kind of ["Concept", "Workflow", "DataEntity", "ExternalSystem"] as const) {
+      addNodes(
+        db
+          .prepare(`SELECT ${NODE_COLUMNS} FROM nodes WHERE kind = ? ORDER BY name ASC, id ASC LIMIT ${BL_NODE_KIND_LIMIT}`)
+          .all(kind) as GraphNode[],
+        true,
+      );
+    }
+    // Prefer orphan action symbols (no workflow drives them) so driven ones do not use up the symbol budget.
+    const prefixClauses = ACTION_SYMBOL_PREFIXES.map(() => "lower(name) LIKE ?").join(" OR ");
+    addNodes(
+      db
+        .prepare(
+          `SELECT ${NODE_COLUMNS} FROM nodes
+           WHERE kind = 'Symbol' AND (${prefixClauses})
+           ORDER BY EXISTS(SELECT 1 FROM edges d WHERE d.kind = 'drives' AND d.to_id = nodes.id) ASC, name ASC, id ASC
+           LIMIT ${BL_SYMBOL_LIMIT}`,
+        )
+        .all(...ACTION_SYMBOL_PREFIXES.map((p) => `${p}%`)) as GraphNode[],
+      true,
+    );
+
+    const drivenSymbolIds = new Set<string>();
+    const rawEdges: GraphEdge[] = [];
+    const seenEdgeIds = new Set<string>();
+    const collect = (rows: GraphEdge[]) => {
+      for (const row of rows) {
+        if (seenEdgeIds.has(row.id)) continue;
+        seenEdgeIds.add(row.id);
+        rawEdges.push(row);
+      }
+    };
+
+    db.exec("CREATE TEMP TABLE IF NOT EXISTS winnow_bl_ids (id TEXT PRIMARY KEY, kind TEXT NOT NULL)");
+    try {
+      db.exec("DELETE FROM temp.winnow_bl_ids");
+      const insertId = db.prepare("INSERT OR IGNORE INTO temp.winnow_bl_ids(id, kind) VALUES (?, ?)");
+      db.transaction(() => {
+        for (const n of nodeById.values()) insertId.run(n.id, n.kind);
+      })();
+
+      const driven = db
+        .prepare(
+          `SELECT DISTINCT e.to_id AS id FROM edges e
+           WHERE e.kind = 'drives'
+             AND e.to_id IN (SELECT id FROM temp.winnow_bl_ids WHERE kind = 'Symbol')
+             AND e.from_id IN (SELECT id FROM nodes WHERE kind = 'Workflow')`,
+        )
+        .all() as Array<{ id: string }>;
+      for (const row of driven) drivenSymbolIds.add(row.id);
+
+      const loadedIds = "SELECT id FROM temp.winnow_bl_ids";
+      const order = "ORDER BY e.confidence DESC, e.id ASC";
+      const queryEdges = (kind: string, condition: string, limit: number): GraphEdge[] =>
+        db
+          .prepare(`SELECT ${EDGE_COLUMNS} FROM edges e WHERE e.kind = ? AND ${condition} ${order} LIMIT ${limit}`)
+          .all(kind) as GraphEdge[];
+
+      // Endpoint-loading kinds: a workflow drives symbols; files relate to concepts.
+      const drives = queryEdges(
+        "drives",
+        "e.from_id IN (SELECT id FROM temp.winnow_bl_ids WHERE kind = 'Workflow')",
+        BL_EDGE_LIMIT,
+      );
+      const relatedTo = queryEdges("related_to", `(e.to_id IN (${loadedIds}) OR e.from_id IN (${loadedIds}))`, BL_EDGE_LIMIT);
+      collect(drives);
+      collect(relatedTo);
+
+      const bothLoaded = `e.from_id IN (${loadedIds}) AND e.to_id IN (${loadedIds})`;
+      for (const kind of ["reads", "writes", "emits", "uses_external", "depends_on"]) {
+        collect(queryEdges(kind, bothLoaded, BL_EDGE_LIMIT));
+      }
+      collect(queryEdges("calls", bothLoaded, BL_CALLS_EDGE_LIMIT));
+    } finally {
+      db.exec("DROP TABLE IF EXISTS temp.winnow_bl_ids");
+    }
+
+    const missing: string[] = [];
+    const missingSeen = new Set<string>();
+    for (const row of rawEdges.filter((e) => e.kind === "drives" || e.kind === "related_to")) {
+      for (const id of [row.fromId, row.toId]) {
+        if (nodeById.has(id) || missingSeen.has(id) || missing.length >= BL_MISSING_ENDPOINT_CAP) continue;
+        missingSeen.add(id);
+        missing.push(id);
+      }
+    }
+    addNodes(this.getNodesByIds(projectRoot, missing), false);
+    for (const row of rawEdges) {
+      if (row.kind !== "drives") continue;
+      if (nodeById.get(row.toId)?.kind === "Symbol") drivenSymbolIds.add(row.toId);
+    }
+
+    const edges = rawEdges.filter((e) => nodeById.has(e.fromId) && nodeById.has(e.toId));
+    return { promotable, nodeById, edges, drivenSymbolIds };
+  }
+
+  private buildConceptToFiles(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    nodeById: Map<string, GraphNode>,
+  ): Array<{ concept: string; files: string[] }> {
+    const filesByConcept = new Map<string, Set<string>>();
+    for (const e of edges) {
+      if (e.kind !== "related_to") continue;
+      const from = nodeById.get(e.fromId);
+      const to = nodeById.get(e.toId);
+      if (!from || !to || from.kind !== "File" || to.kind !== "Concept" || !from.path) continue;
+      const set = filesByConcept.get(to.id) ?? new Set<string>();
+      set.add(from.path);
+      filesByConcept.set(to.id, set);
+    }
+    const rows: Array<{ concept: string; files: string[] }> = [];
+    for (const concept of nodes) {
+      if (concept.kind !== "Concept") continue;
+      const paths = filesByConcept.get(concept.id);
+      if (!paths || paths.size === 0) continue;
+      const files = [...paths]
+        .sort((a, b) => Number(isTestPath(a)) - Number(isTestPath(b)) || compareStrings(a, b))
+        .slice(0, BL_CONCEPT_FILES_CAP);
+      rows.push({ concept: concept.name, files });
+    }
+    return rows;
+  }
+
+  private buildWorkflowToSymbols(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    nodeById: Map<string, GraphNode>,
+  ): Array<{ workflow: string; symbols: string[] }> {
+    const symbolsByWorkflow = new Map<string, Map<string, string>>();
+    for (const e of edges) {
+      if (e.kind !== "drives") continue;
+      const wf = nodeById.get(e.fromId);
+      const sym = nodeById.get(e.toId);
+      if (!wf || !sym || wf.kind !== "Workflow" || sym.kind !== "Symbol") continue;
+      const map = symbolsByWorkflow.get(wf.id) ?? new Map<string, string>();
+      map.set(sym.id, sym.name);
+      symbolsByWorkflow.set(wf.id, map);
+    }
+    return nodes
+      .filter((n) => n.kind === "Workflow" && symbolsByWorkflow.has(n.id))
+      .map((wf) => {
+        const names = [...(symbolsByWorkflow.get(wf.id) as Map<string, string>).values()].sort(compareStrings);
+        return { workflow: wf.name, count: names.length, symbols: names.slice(0, BL_WORKFLOW_SYMBOLS_CAP) };
+      })
+      .sort((a, b) => b.count - a.count || compareStrings(a.workflow, b.workflow))
+      .slice(0, BL_WORKFLOWS_CAP)
+      .map(({ workflow, symbols }) => ({ workflow, symbols }));
+  }
+
+  /** Top files by number of contained symbols (SQL aggregate; not limited by the loaded node slice). */
+  private buildFileHints(projectRoot: string): Array<{ file: string; symbols: string[] }> {
+    const db = this.ensureDb(projectRoot);
+    const top = db
+      .prepare(
+        `SELECT f.id AS id, f.path AS path, COUNT(DISTINCT s.id) AS symbolCount
+         FROM edges e
+         JOIN nodes f ON f.id = e.from_id AND f.kind = 'File' AND f.path IS NOT NULL
+         JOIN nodes s ON s.id = e.to_id AND s.kind = 'Symbol'
+         WHERE e.kind = 'contains'
+         GROUP BY f.id
+         ORDER BY symbolCount DESC, f.path ASC
+         LIMIT ${BL_FILE_HINTS_CAP}`,
+      )
+      .all() as Array<{ id: string; path: string; symbolCount: number }>;
+    const symbolStmt = db.prepare(
+      `SELECT s.name AS name FROM edges e JOIN nodes s ON s.id = e.to_id
+       WHERE e.kind = 'contains' AND e.from_id = ? AND s.kind = 'Symbol'
+       ORDER BY s.name ASC LIMIT ${BL_FILE_HINT_SYMBOLS_CAP}`,
+    );
+    return top.map((row) => ({
+      file: row.path,
+      symbols: (symbolStmt.all(row.id) as Array<{ name: string }>).map((r) => r.name),
+    }));
+  }
+
   businessLogicGraph(projectRoot: string, layer: "full" | "goal" = "full"): BusinessLogicGraph {
     const generatedAt = new Date().toISOString();
-    const sourceNodes = this.listNodes(projectRoot, { limit: 2000 });
-    const sourceEdges = this.listEdges(projectRoot, { limit: 4000 });
+    const loaded = this.loadBusinessSource(projectRoot);
+    const sourceNodes = loaded.promotable;
+    const sourceEdges = loaded.edges;
+    const sourceNodeById = loaded.nodeById;
 
-    const sourceNodeById = new Map(sourceNodes.map((n) => [n.id, n]));
     const businessNodeMap = new Map<string, BusinessLogicGraph["nodes"][number]>();
     const sourceToBusiness = new Map<string, string>();
 
@@ -444,7 +731,8 @@ export class ProjectGraphService {
         ensureBusinessNode(node, "ExternalActor");
       } else if (node.kind === "Symbol") {
         const lower = node.name.toLowerCase();
-        if (/^(start|run|build|refresh|load|save|apply|create|update|delete|sync|submit|process|handle)/.test(lower)) {
+        // Workflow-driven symbols are already represented by their Workflow (BusinessProcess); avoid process+step duplicates.
+        if (ACTION_SYMBOL_PREFIX_RE.test(lower) && !loaded.drivenSymbolIds.has(node.id)) {
           ensureBusinessNode(node, "BusinessStep");
         }
       }
@@ -537,7 +825,53 @@ export class ProjectGraphService {
     }
 
     const fullNodes = [...businessNodeMap.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-    const fullEdges = [...businessEdgeMap.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+    const allEdgeMap = new Map(businessEdgeMap);
+
+    if (layer === "goal") {
+      // Process/step nodes are dropped in the goal layer; bridge kept -> dropped -> kept paths so goals stay connected.
+      const droppedKinds = new Set<BusinessLogicNodeKind>(["BusinessProcess", "BusinessStep"]);
+      const droppedIds = new Set(fullNodes.filter((n) => droppedKinds.has(n.kind)).map((n) => n.id));
+      const inByDropped = new Map<string, BusinessLogicGraph["edges"]>();
+      const outByDropped = new Map<string, BusinessLogicGraph["edges"]>();
+      for (const e of businessEdgeMap.values()) {
+        if (droppedIds.has(e.toId) && !droppedIds.has(e.fromId)) {
+          const list = inByDropped.get(e.toId) ?? [];
+          list.push(e);
+          inByDropped.set(e.toId, list);
+        }
+        if (droppedIds.has(e.fromId) && !droppedIds.has(e.toId)) {
+          const list = outByDropped.get(e.fromId) ?? [];
+          list.push(e);
+          outByDropped.set(e.fromId, list);
+        }
+      }
+      for (const droppedId of [...droppedIds].sort()) {
+        const ins = inByDropped.get(droppedId) ?? [];
+        const outs = outByDropped.get(droppedId) ?? [];
+        for (const inEdge of ins) {
+          for (const outEdge of outs) {
+            if (inEdge.fromId === outEdge.toId) continue;
+            const kind: BusinessLogicEdgeKind = outEdge.kind === "achieves" ? "achieves" : "enables";
+            const id = `${inEdge.fromId}::${kind}::${outEdge.toId}`;
+            if (allEdgeMap.has(id)) continue;
+            allEdgeMap.set(id, {
+              id,
+              fromId: inEdge.fromId,
+              toId: outEdge.toId,
+              kind,
+              summaryEn:
+                kind === "achieves"
+                  ? "Bridged through a process/step: contributes to this higher-level goal."
+                  : "Bridged through a process/step: enables this node.",
+              confidence: Math.min(inEdge.confidence, outEdge.confidence),
+              sourceEdgeIds: [...new Set([...inEdge.sourceEdgeIds, ...outEdge.sourceEdgeIds])],
+            });
+          }
+        }
+      }
+    }
+
+    const fullEdges = [...allEdgeMap.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 
     const keepKinds = new Set<BusinessLogicNodeKind>(
       layer === "goal"
@@ -549,58 +883,24 @@ export class ProjectGraphService {
     const edges = fullEdges.filter((e) => keepNodeIds.has(e.fromId) && keepNodeIds.has(e.toId));
 
     const indegree = new Map<string, number>();
+    const outgoing = new Map<string, string[]>();
     for (const n of nodes) indegree.set(n.id, 0);
     for (const e of edges) {
       indegree.set(e.toId, (indegree.get(e.toId) ?? 0) + 1);
+      const list = outgoing.get(e.fromId) ?? [];
+      list.push(e.toId);
+      outgoing.set(e.fromId, list);
     }
 
     const startNodeIds = nodes
       .filter((n) => (layer === "goal" ? n.kind === "BusinessGoal" : n.kind === "BusinessProcess" || n.kind === "BusinessStep"))
       .filter((n) => (indegree.get(n.id) ?? 0) === 0)
       .map((n) => n.id);
-    const topologicalHintIds = nodes.map((n) => n.id);
+    const topologicalHintIds = topologicalOrder(nodes, indegree, outgoing);
 
-    const conceptToFiles = sourceNodes
-      .filter((n) => n.kind === "Concept")
-      .map((concept) => {
-        const relatedFileIds = sourceEdges
-          .filter((e) => e.kind === "related_to" && e.toId === concept.id)
-          .map((e) => e.fromId);
-        const files = relatedFileIds
-          .map((fileId) => sourceNodeById.get(fileId))
-          .filter((n): n is GraphNode => Boolean(n && n.kind === "File" && n.path))
-          .map((n) => n.path as string)
-          .slice(0, 12);
-        return { concept: concept.name, files };
-      })
-      .filter((row) => row.files.length > 0);
-
-    const workflowToSymbols = sourceNodes
-      .filter((n) => n.kind === "Workflow")
-      .map((wf) => {
-        const symbolIds = sourceEdges.filter((e) => e.kind === "drives" && e.fromId === wf.id).map((e) => e.toId);
-        const symbols = symbolIds
-          .map((id) => sourceNodeById.get(id))
-          .filter((n): n is GraphNode => Boolean(n && n.kind === "Symbol"))
-          .map((n) => n.name)
-          .slice(0, 12);
-        return { workflow: wf.name, symbols };
-      })
-      .filter((row) => row.symbols.length > 0);
-
-    const fileHints = sourceNodes
-      .filter((n) => n.kind === "File" && n.path)
-      .map((file) => {
-        const symbolIds = sourceEdges.filter((e) => e.kind === "contains" && e.fromId === file.id).map((e) => e.toId);
-        const symbols = symbolIds
-          .map((id) => sourceNodeById.get(id))
-          .filter((n): n is GraphNode => Boolean(n && n.kind === "Symbol"))
-          .map((n) => n.name)
-          .slice(0, 8);
-        return { file: file.path as string, symbols };
-      })
-      .filter((row) => row.symbols.length > 0)
-      .slice(0, 40);
+    const conceptToFiles = this.buildConceptToFiles(sourceNodes, sourceEdges, sourceNodeById);
+    const workflowToSymbols = this.buildWorkflowToSymbols(sourceNodes, sourceEdges, sourceNodeById);
+    const fileHints = this.buildFileHints(projectRoot);
 
     const keyCapabilities = nodes
       .filter((n) => n.kind === "BusinessCapability")
