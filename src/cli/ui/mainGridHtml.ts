@@ -3542,6 +3542,7 @@ ${clientApiJavaScript()}
         const wrap = document.querySelector(".graphCanvasWrap");
         if(!wrap) return;
         wrap.addEventListener("mousedown", (e) => {
+          if(e.target && e.target.closest && e.target.closest(".graphNodeHotspot, .graphNodeCard, button, a, summary")){ return; }
           graphDrag.active = true;
           graphDrag.startX = e.clientX;
           graphDrag.startY = e.clientY;
@@ -3576,7 +3577,18 @@ ${clientApiJavaScript()}
           const svgX = graphViewBox.x + (mouseX / rect.width) * graphViewBox.w;
           const svgY = graphViewBox.y + (mouseY / rect.height) * graphViewBox.h;
           
-          const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+          let zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
+          if(graphViewBox.baseW > 0){
+            const minFactor = Math.max(
+              (graphViewBox.baseW * 0.2) / graphViewBox.w,
+              graphViewBox.baseH > 0 ? (graphViewBox.baseH * 0.2) / graphViewBox.h : 0,
+            );
+            const maxFactor = Math.min(
+              (graphViewBox.baseW * 6) / graphViewBox.w,
+              graphViewBox.baseH > 0 ? (graphViewBox.baseH * 6) / graphViewBox.h : Infinity,
+            );
+            zoomFactor = Math.max(minFactor, Math.min(maxFactor, zoomFactor));
+          }
           
           graphViewBox.w *= zoomFactor;
           graphViewBox.h *= zoomFactor;
@@ -3919,32 +3931,38 @@ ${clientApiJavaScript()}
           return { ok: false, nodes: [], edges: [], error: (summaryRes && summaryRes.error) || "summary unavailable" };
         }
         const projectRes = await apiJson("/api/graph/nodes?kind=Project&limit=5");
-        let seedNode = (projectRes && projectRes.ok && (projectRes.nodes || [])[0]) || null;
-        if(!seedNode){
-          const moduleRes = await apiJson("/api/graph/nodes?kind=Module&limit=1");
-          seedNode = (moduleRes && moduleRes.ok && (moduleRes.nodes || [])[0]) || null;
-        }
-        if(!seedNode){
+        const moduleRes = await apiJson("/api/graph/nodes?kind=Module&limit=80");
+        const projectNode = (projectRes && projectRes.ok && (projectRes.nodes || [])[0]) || null;
+        const moduleNodes = (moduleRes && moduleRes.ok ? (moduleRes.nodes || []) : [])
+          .filter((n)=>n && n.id)
+          .sort((a,b)=>{
+            const byName = String(a.name || a.path || a.id).localeCompare(String(b.name || b.path || b.id));
+            return byName || String(a.id).localeCompare(String(b.id));
+          });
+        if(!projectNode && !moduleNodes.length){
           return { ok: true, nodes: [], edges: [], error: null };
         }
-        const hop1 = await apiJson("/api/graph/node/" + encodeURIComponent(seedNode.id) + "/neighbors");
-        if(!hop1 || !hop1.ok){
-          return { ok: true, nodes: [seedNode], edges: [], error: null };
+        let merged = mergeGraphData([], [], projectNode ? [projectNode].concat(moduleNodes) : moduleNodes, []);
+        graphNodeCache = { nodes: merged.nodes, edges: merged.edges };
+        async function mergeSeedNeighbors(node){
+          const res = await apiJson("/api/graph/node/" + encodeURIComponent(node.id) + "/neighbors");
+          if(!res || !res.ok){ return false; }
+          merged = mergeGraphData(merged.nodes, merged.edges, res.nodes || [], res.edges || []);
+          graphNodeCache = { nodes: merged.nodes, edges: merged.edges };
+          graphExpandedNodeIds.add(node.id);
+          return true;
         }
-        graphExpandedNodeIds.add(seedNode.id);
-        let nodes = (hop1.nodes && hop1.nodes.length) ? hop1.nodes : [seedNode];
-        let edges = hop1.edges || [];
-        const nextModule = nodes.find((n)=>n && n.kind === "Module" && n.id !== seedNode.id);
-        if(nextModule){
-          const hop2 = await apiJson("/api/graph/node/" + encodeURIComponent(nextModule.id) + "/neighbors");
-          if(hop2 && hop2.ok){
-            const merged = mergeGraphData(nodes, edges, hop2.nodes || [], hop2.edges || []);
-            nodes = merged.nodes;
-            edges = merged.edges;
-            graphExpandedNodeIds.add(nextModule.id);
+        if(projectNode){
+          await mergeSeedNeighbors(projectNode);
+        }
+        let expandedModules = 0;
+        for(const moduleNode of moduleNodes){
+          if(merged.nodes.length > 500 || expandedModules >= 24){ break; }
+          if(await mergeSeedNeighbors(moduleNode)){
+            expandedModules += 1;
           }
         }
-        return { ok: true, nodes: nodes, edges: edges, error: null };
+        return { ok: true, nodes: merged.nodes, edges: merged.edges, error: null };
       }
       function collectNodeConnectionGraph(nodeId){
         const allNodes = graphNodeCache.nodes || [];
@@ -4010,14 +4028,15 @@ ${clientApiJavaScript()}
         const nodeSvg = (nodes || []).map((n)=>{
           const p = positions.get(n.id);
           if(!p){ return ""; }
-          const title = escHtml(n.name || n.path || n.id);
+          const rawTitle = String(n.name || n.path || n.id);
+          const title = escHtml(rawTitle.length > 32 ? rawTitle.slice(0, 32) + "…" : rawTitle);
           const fill = nodeColor(n.kind);
           const active = n.id === focusId ? " graphNodeFocus" : "";
           return '<g class="graphNodeCard' + active + '">' +
             '<rect x="' + p.x + '" y="' + p.y + '" rx="10" ry="10" width="' + p.w + '" height="' + p.h + '" fill="rgba(0,0,0,0.92)" stroke="' + fill + '" stroke-width="1.6"></rect>' +
             '<rect x="' + p.x + '" y="' + p.y + '" rx="10" ry="10" width="' + p.w + '" height="22" fill="' + fill + '" fill-opacity="0.28"></rect>' +
             '<text x="' + (p.x + 10) + '" y="' + (p.y + 15) + '" fill="' + fill + '" font-size="10" font-weight="600" font-family="ui-monospace, Menlo, monospace">' + escHtml(n.kind || "Node").toUpperCase() + '</text>' +
-            '<text x="' + (p.x + 10) + '" y="' + (p.y + 43) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 34) + '</text>' +
+            '<text x="' + (p.x + 10) + '" y="' + (p.y + 43) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + title + '</text>' +
             '</g>';
         }).join("");
         svg.innerHTML = markerDefs + '<g>' + edgeSvg + '</g><g>' + nodeSvg + '</g>';
@@ -4330,6 +4349,13 @@ ${clientApiJavaScript()}
           emits: "rgba(34,211,238,0.72)",
           drives: "rgba(255,45,45,0.65)",
           related_to: "rgba(34,211,238,0.72)",
+          enables: "rgba(245,158,11,0.55)",
+          achieves: "rgba(244,114,182,0.58)",
+          triggers: "rgba(245,158,11,0.78)",
+          flows_to: "rgba(34,211,238,0.72)",
+          interacts_with: "rgba(167,139,250,0.68)",
+          defines: "rgba(34,211,238,0.42)",
+          implements: "rgba(34,211,238,0.5)",
         };
         return map[kind] || "rgba(34,211,238,0.4)";
       }
@@ -4443,7 +4469,9 @@ ${clientApiJavaScript()}
         const nodeSvg = nodes.map((n)=>{
           const p = layout.positions.get(n.id);
           if(!p){ return ""; }
-          const title = escHtml(n.name || n.id);
+          const rawTitle = String(n.name || n.id);
+          const title = escHtml(rawTitle);
+          const displayTitle = escHtml(rawTitle.length > 32 ? rawTitle.slice(0, 32) + "…" : rawTitle);
           const subtitle = escHtml(n.kind || "Node");
           const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
           const fill = nodeColor(n.kind);
@@ -4451,7 +4479,7 @@ ${clientApiJavaScript()}
             '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="#000000" stroke="' + fill + '" stroke-width="1.4"></rect>' +
             '<rect x="' + p.x + '" y="' + p.y + '" width="' + p.w + '" height="20" fill="' + fill + '" fill-opacity="0.22"></rect>' +
             '<text x="' + (p.x + 8) + '" y="' + (p.y + 14) + '" fill="#67e8f9" font-size="11" font-family="ui-monospace, Menlo, monospace">' + subtitle + '</text>' +
-            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#67e8f9" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 30) + '</text>' +
+            '<text x="' + (p.x + 8) + '" y="' + (p.y + 36) + '" fill="#67e8f9" font-size="12" font-family="ui-sans-serif, system-ui">' + displayTitle + '</text>' +
             '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '">' +
             '<rect x="' + p.x + '" y="' + p.y + '" rx="8" ry="8" width="' + p.w + '" height="' + p.h + '" fill="transparent"></rect>' +
             '</g>' +
@@ -4933,7 +4961,9 @@ ${clientApiJavaScript()}
           const nodeSvg = layoutNodes.map((n)=>{
             const x = (n.x || 0) - n.w / 2;
             const y = (n.y || 0) - n.h / 2;
-            const title = escHtml(n.name || n.id);
+            const rawTitle = String(n.name || n.id);
+            const title = escHtml(rawTitle);
+            const displayTitle = escHtml(rawTitle.length > 32 ? rawTitle.slice(0, 32) + "…" : rawTitle);
             const subtitle = escHtml(n.kind || "Node");
             const summary = escHtml((n.descriptionEn || n.summaryEn || "No overview available.").slice(0, 220));
             const fill = nodeColor(n.kind);
@@ -4942,7 +4972,7 @@ ${clientApiJavaScript()}
               '<rect x="' + x + '" y="' + y + '" rx="10" ry="10" width="' + n.w + '" height="22" fill="' + fill + '" fill-opacity="0.28"></rect>' +
               '<rect x="' + x + '" y="' + (y + 22) + '" width="' + n.w + '" height="1" fill="' + fill + '" fill-opacity="0.55"></rect>' +
               '<text x="' + (x + 10) + '" y="' + (y + 15) + '" fill="' + fill + '" font-size="10" font-weight="600" font-family="ui-monospace, Menlo, monospace" letter-spacing="0.6">' + subtitle.toUpperCase() + '</text>' +
-              '<text x="' + (x + 10) + '" y="' + (y + 42) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + title.slice(0, 32) + '</text>' +
+              '<text x="' + (x + 10) + '" y="' + (y + 42) + '" fill="#e2e8f0" font-size="12" font-family="ui-sans-serif, system-ui">' + displayTitle + '</text>' +
               '<g class="graphNodeHotspot" data-summary="' + summary + '" data-node="' + title + '" data-node-id="' + escHtml(n.id || "") + '" data-kind="' + escHtml(n.kind || "") + '">' +
               '<rect x="' + x + '" y="' + y + '" rx="10" ry="10" width="' + n.w + '" height="' + n.h + '" fill="transparent"></rect>' +
               '</g>' +
@@ -4972,8 +5002,18 @@ ${clientApiJavaScript()}
                 const nodeKind = el.getAttribute("data-kind") || "";
                 hoverCard.innerHTML = "<strong>" + nodeName + "</strong><br><span style='color:#94a3b8'>" + escHtml(kind) + "</span><br>" + summary;
                 hoverCard.style.display = "block";
-                hoverCard.style.left = (event.offsetX + 14) + "px";
-                hoverCard.style.top = (event.offsetY + 14) + "px";
+                const wrap = svg.closest(".graphCanvasWrap");
+                const wrapRect = wrap ? wrap.getBoundingClientRect() : null;
+                let cardLeft = wrapRect ? event.clientX - wrapRect.left + 14 : 14;
+                let cardTop = wrapRect ? event.clientY - wrapRect.top + 14 : 14;
+                if(wrapRect && wrapRect.width){
+                  cardLeft = Math.max(0, Math.min(cardLeft, wrapRect.width - hoverCard.offsetWidth));
+                }
+                if(wrapRect && wrapRect.height){
+                  cardTop = Math.max(0, Math.min(cardTop, wrapRect.height - hoverCard.offsetHeight));
+                }
+                hoverCard.style.left = cardLeft + "px";
+                hoverCard.style.top = cardTop + "px";
                 window.__graphSelectedFnId = (window.__graphSelectedFnId === nodeId) ? "" : nodeId;
                 applyHighlight(nodeId);
                 if(graphViewMode === "technical" && nodeId){
@@ -5023,8 +5063,17 @@ ${clientApiJavaScript()}
             const edges = graph.edges || [];
             renderGraphErd(nodes, edges);
             if(hint){
+              const heuristicIndex = graph.heuristicIndex || {};
+              const conceptCount = Array.isArray(heuristicIndex.conceptToFiles) ? heuristicIndex.conceptToFiles.length : 0;
+              const workflowCount = Array.isArray(heuristicIndex.workflowToSymbols) ? heuristicIndex.workflowToSymbols.length : 0;
+              const fileHintCount = Array.isArray(heuristicIndex.fileHints) ? heuristicIndex.fileHints.length : 0;
+              const lookupHint = Array.isArray(heuristicIndex.lookupHints) && heuristicIndex.lookupHints.length
+                ? String(heuristicIndex.lookupHints[0])
+                : "";
               hint.textContent = (graphViewMode === "business-goal" ? "Business goal layer" : "Business flow") +
-                " rendered with " + nodes.length + " node(s) and " + edges.length + " edge(s).";
+                " rendered with " + nodes.length + " node(s) and " + edges.length + " edge(s). Index: " +
+                conceptCount + " concept(s), " + workflowCount + " workflow(s), " + fileHintCount + " file hint(s)." +
+                (lookupHint ? " " + lookupHint : "");
             }
           } else {
             stopGraphSimulation();
