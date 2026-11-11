@@ -91,6 +91,8 @@ export function buildMainTerminalHtml(token?: string): string {
       }
       .back:hover { background: var(--line-faint); color: var(--text-neon); }
       .root { display: grid; grid-template-columns: 45fr 55fr; gap: 16px; padding: 16px; min-width: 0; min-height: 0; }
+      .root.subagentTraceOpen { grid-template-columns: 1fr; }
+      .root.subagentTraceOpen #gridLeft { display: none; }
       .left { display: grid; grid-template-rows: 1fr 1fr; gap: 16px; min-width: 0; min-height: 0; }
       .left.pane1Expanded { grid-template-rows: minmax(0, 1fr); }
       .leftBottom { display: grid; grid-template-columns: 40fr 60fr; gap: 16px; min-width: 0; min-height: 0; }
@@ -2013,7 +2015,9 @@ ${clientApiJavaScript()}
           if(pane1TraceSeen.has(id)){ return; }
           pane1TraceSeen.add(id);
         }
-        pane1TraceLines.push("[" + formatPane1TraceTime(ev.ts) + "] " + String(ev.content || ""));
+        const body = String(ev.content || "");
+        const prefix = body.startsWith("▸ ") ? "  " : "";
+        pane1TraceLines.push(prefix + "[" + formatPane1TraceTime(ev.ts) + "] " + body);
         if(pane1TraceLines.length > 500){
           pane1TraceLines = pane1TraceLines.slice(-500);
         }
@@ -5246,7 +5250,11 @@ ${clientApiJavaScript()}
       document.getElementById("btnPane1Expand")?.addEventListener("click",()=>setPane1Expanded(!pane1Expanded));
       window.addEventListener("message",(event)=>{
         const data = event.data;
-        if(!data || data.type !== "winnow-agent-session"){ return; }
+        if(!data || (data.type !== "winnow-agent-session" && data.type !== "winnow-subagent-trace")){ return; }
+        if(data.type === "winnow-subagent-trace"){
+          document.querySelector(".root")?.classList.toggle("subagentTraceOpen", Boolean(data.open));
+          return;
+        }
         const sessionId = data.sessionId ? String(data.sessionId) : "";
         if(typeof data.runningCount === "number"){
           pane1RunningCount = data.runningCount;

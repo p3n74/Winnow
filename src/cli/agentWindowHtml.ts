@@ -410,9 +410,10 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         font-style: italic;
       }
       .subagents-panel {
-        display: none !important;
+        display: flex;
+        flex-direction: column;
         flex-shrink: 0;
-        max-height: 120px;
+        max-height: 280px;
         overflow: auto;
         margin: 6px 12px 0;
         padding: 6px 8px;
@@ -420,6 +421,42 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         border-radius: 4px;
         background: var(--panel2);
       }
+      .subagents-panel[hidden] { display: none !important; }
+      .subagent-card {
+        border-top: 1px solid var(--line);
+        padding: 6px 0 4px;
+      }
+      .subagent-card:first-child { border-top: 0; }
+      .subagent-card-head {
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+        font-size: 12px;
+      }
+      .subagent-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: 0 0 auto;
+        transform: translateY(1px);
+      }
+      .subagent-dot[data-status="running"] {
+        background: var(--accent);
+      }
+      .subagent-dot[data-status="done"] {
+        background: #3dd68c;
+      }
+      .subagent-steps {
+        margin: 4px 0 0 13px;
+        padding: 0;
+        list-style: none;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .subagent-steps li { margin: 1px 0; }
+      .subagent-steps .is-tool { color: var(--text); }
       .subagents-head {
         font-size: 10px;
         text-transform: uppercase;
@@ -705,6 +742,119 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         color: var(--muted);
       }
       .thread-actions button:hover { color: var(--text-neon); border-color: var(--line); }
+      .thread-group { border-bottom: 1px solid var(--line-faint); }
+      .thread-sub-toggle {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: 0;
+        color: var(--muted);
+        font-size: 10px;
+        padding: 0 8px 6px 22px;
+        cursor: pointer;
+      }
+      .thread-sub-toggle:hover { color: var(--text-neon); }
+      .thread-sub {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: 0;
+        color: var(--text);
+        font-size: 11px;
+        padding: 4px 8px 4px 28px;
+        cursor: pointer;
+      }
+      .thread-sub:hover,
+      .thread-sub.is-open { background: rgba(34, 211, 238, 0.08); color: var(--text-neon); }
+      .thread-sub-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .thread-sub-status { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+      #subagentTraceScreen[hidden] { display: none !important; }
+      #subagentTraceScreen {
+        position: fixed;
+        inset: 0;
+        z-index: 80;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .subagent-screen-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel2);
+      }
+      .subagent-screen-parent {
+        color: var(--muted);
+        font-size: 12px;
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .subagent-screen-tabs {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        flex: 1;
+      }
+      .subagent-screen-tab {
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .subagent-screen-tab.is-active {
+        border-color: var(--accent);
+        color: var(--text-neon);
+        background: rgba(34, 211, 238, 0.12);
+      }
+      .subagent-screen-body {
+        flex: 1;
+        overflow: auto;
+        padding: 16px 22px 32px;
+      }
+      .subagent-screen-status {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .trace-step {
+        padding: 8px 0;
+        border-bottom: 1px solid var(--line-faint);
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+      .trace-step.is-tool {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 12px;
+      }
+      .trace-kind {
+        display: inline-block;
+        min-width: 42px;
+        margin-right: 8px;
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
       #agentOverlapBanner {
         margin: 8px;
         padding: 8px;
@@ -890,8 +1040,8 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
               </div>
               </div>
             </div>
-            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagents">
-              <div class="subagents-head">Subagents</div>
+            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagent trace">
+              <div class="subagents-head">Subagent trace</div>
               <p class="subagents-hint" id="agentSubagentsHint"></p>
               <div id="agentSubagentsDefined"></div>
               <div id="agentSubagentsLive"></div>
@@ -933,6 +1083,14 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
           </main>
         </div>
       </div>
+    </div>
+    <div id="subagentTraceScreen" hidden>
+      <header class="subagent-screen-bar">
+        <button type="button" class="secondary" id="btnCloseSubagentTrace">← Agents</button>
+        <div id="subagentTraceParent" class="subagent-screen-parent"></div>
+        <div id="subagentTraceTabs" class="subagent-screen-tabs" role="tablist"></div>
+      </header>
+      <div id="subagentTraceBody" class="subagent-screen-body"></div>
     </div>
     <script>
       const AUTH_TOKEN = ${tokenJson};
@@ -1538,54 +1696,110 @@ ${agentQuestionJavaScript()}
       let definedSubagents = [];
       let subagentsHint = "";
       let liveSubagentMap = {};
+      function appendSubagentCard(parent, row) {
+        const card = document.createElement("article");
+        card.className = "subagent-card";
+        const head = document.createElement("div");
+        head.className = "subagent-card-head";
+        const dot = document.createElement("span");
+        dot.className = "subagent-dot";
+        const status = String((row && row.status) || "running");
+        dot.dataset.status = status === "done" ? "done" : "running";
+        const nameEl = document.createElement("span");
+        nameEl.className = "subagent-name";
+        nameEl.textContent = String((row && (row.name || row.id)) || "subagent");
+        const statusEl = document.createElement("span");
+        statusEl.className = "muted";
+        statusEl.textContent = status === "done" ? "finished" : status;
+        head.appendChild(dot);
+        head.appendChild(nameEl);
+        head.appendChild(statusEl);
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.className = "secondary";
+        openBtn.textContent = "Open";
+        openBtn.onclick = (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          if (activeSessionId) {
+            openSubagentTrace(activeSessionId, String((row && row.id) || ""));
+          }
+        };
+        head.appendChild(openBtn);
+        card.appendChild(head);
+        const steps = row && Array.isArray(row.steps) ? row.steps : [];
+        if (steps.length) {
+          const list = document.createElement("ol");
+          list.className = "subagent-steps";
+          const visible = steps.slice(-12);
+          const hiddenCount = steps.length - visible.length;
+          if (hiddenCount > 0) {
+            const more = document.createElement("li");
+            more.textContent = "… " + hiddenCount + " earlier";
+            list.appendChild(more);
+          }
+          visible.forEach((step) => {
+            const li = document.createElement("li");
+            if (step && step.kind === "tool") {
+              li.className = "is-tool";
+            }
+            li.textContent = String((step && step.label) || "");
+            list.appendChild(li);
+          });
+          card.appendChild(list);
+        } else if (row && row.summary) {
+          const sum = document.createElement("div");
+          sum.className = "subagent-steps";
+          sum.textContent = String(row.summary);
+          card.appendChild(sum);
+        }
+        parent.appendChild(card);
+      }
       function renderSubagentsPanel() {
+        const panel = document.getElementById("agentSubagentsPanel");
         const hintEl = document.getElementById("agentSubagentsHint");
         const definedEl = document.getElementById("agentSubagentsDefined");
         const liveEl = document.getElementById("agentSubagentsLive");
+        const rows = Object.keys(liveSubagentMap).map((key) => liveSubagentMap[key]);
         if (hintEl) {
-          hintEl.textContent = subagentsHint || "";
+          hintEl.hidden = rows.length > 0;
+          hintEl.textContent = rows.length ? "" : (subagentsHint || "");
         }
         if (definedEl) {
+          definedEl.hidden = rows.length > 0;
           definedEl.textContent = "";
-          if (!definedSubagents.length) {
-            const empty = document.createElement("div");
-            empty.className = "small muted";
-            empty.textContent = "No agent definitions found.";
-            definedEl.appendChild(empty);
-          } else {
-            definedSubagents.forEach((agent) => {
-              const row = document.createElement("div");
-              row.className = "subagent-row";
-              const nameEl = document.createElement("span");
-              nameEl.className = "subagent-name";
-              nameEl.textContent = String(agent.name || "");
-              const meta = document.createElement("span");
-              meta.className = "muted";
-              const bits = [agent.description, agent.model].filter(Boolean);
-              meta.textContent = bits.length ? " — " + bits.join(" · ") : "";
-              row.appendChild(nameEl);
-              row.appendChild(meta);
-              definedEl.appendChild(row);
-            });
+          if (!rows.length) {
+            if (!definedSubagents.length) {
+              const empty = document.createElement("div");
+              empty.className = "small muted";
+              empty.textContent = "No agent definitions found.";
+              definedEl.appendChild(empty);
+            } else {
+              definedSubagents.forEach((agent) => {
+                const row = document.createElement("div");
+                row.className = "subagent-row";
+                const nameEl = document.createElement("span");
+                nameEl.className = "subagent-name";
+                nameEl.textContent = String(agent.name || "");
+                const meta = document.createElement("span");
+                meta.className = "muted";
+                const bits = [agent.description, agent.model].filter(Boolean);
+                meta.textContent = bits.length ? " — " + bits.join(" · ") : "";
+                row.appendChild(nameEl);
+                row.appendChild(meta);
+                definedEl.appendChild(row);
+              });
+            }
           }
         }
         if (liveEl) {
           liveEl.textContent = "";
-          const rows = Object.keys(liveSubagentMap).map((key) => liveSubagentMap[key]);
-          if (rows.length) {
-            const label = document.createElement("div");
-            label.className = "small muted";
-            label.textContent = "Live";
-            liveEl.appendChild(label);
-            rows.forEach((row) => {
-              const el = document.createElement("div");
-              el.className = "subagent-row subagent-live";
-              const status = row.status ? " · " + row.status : "";
-              const summary = row.summary ? " — " + row.summary : "";
-              el.textContent = (row.name || row.id || "subagent") + status + summary;
-              liveEl.appendChild(el);
-            });
-          }
+          rows.forEach((row) => appendSubagentCard(liveEl, row));
+        }
+        if (panel) {
+          const show = rows.length > 0;
+          panel.hidden = !show;
+          panel.setAttribute("aria-hidden", show ? "false" : "true");
         }
       }
       function applyLiveSubagents(rows) {
@@ -2695,15 +2909,166 @@ ${agentQuestionJavaScript()}
         renderThreadList(data.sessions || []);
       }
       let lastThreadRenderKey = "";
+      const expandedThreadIds = new Set();
+      let subagentCache = {};
+      let subagentTraceSessionId = "";
+      let subagentTraceAgentId = "";
+      let subagentTraceStick = false;
+      function subagentDigest() {
+        return Object.keys(subagentCache).sort().map((id) => {
+          const rows = subagentCache[id] || [];
+          return id + "=" + rows.map((row) => String(row.id || "") + ":" + String(row.status || "") + ":" + String((row.steps || []).length)).join(",");
+        }).join(";");
+      }
       function threadListRenderKey(rows) {
         const pinned = readJsonArray(PINNED_THREADS_KEY).join(",");
         const closed = readJsonArray(CLOSED_THREADS_KEY).join(",");
         const running = [...runningSessionIds].sort().join(",");
         const selected = draftThread ? "draft" : String(selectedResumeSessionId || activeSessionId || "");
+        const expanded = [...expandedThreadIds].sort().join(",");
         const rowKey = (rows || [])
-          .map((s) => String(s.id || "") + ":" + String(s.status || "") + ":" + String(s.updatedAt || "") + ":" + String(s.projectRoot || ""))
+          .map((s) => String(s.id || "") + ":" + String(s.status || "") + ":" + String(s.updatedAt || "") + ":" + String(s.projectRoot || "") + ":" + String(s.subagentCount || 0))
           .join(";");
-        return [pinned, closed, running, selected, lastSessionsCwd, rowKey].join("|");
+        return [pinned, closed, running, selected, lastSessionsCwd, expanded, subagentDigest(), subagentTraceAgentId, rowKey].join("|");
+      }
+      function agentsForSession(sessionId) {
+        return subagentCache[sessionId] || [];
+      }
+      async function loadSubagents(sessionId) {
+        if (!sessionId) {
+          return;
+        }
+        try {
+          const data = await apiJson("/api/sessions/" + encodeURIComponent(sessionId) + "/subagents");
+          if (!data || data.ok === false) {
+            return;
+          }
+          const nextAgents = Array.isArray(data.agents) ? data.agents : [];
+          const signature = (rows) => (rows || []).map((row) =>
+            String(row.id || "") + String(row.status || "") + (row.steps || []).map((step) => String(step.label || "")).join("|")
+          ).join(";");
+          if (signature(subagentCache[sessionId]) === signature(nextAgents)) {
+            return;
+          }
+          subagentCache[sessionId] = nextAgents;
+          const row = (cachedSessionRows || []).find((item) => item && item.id === sessionId);
+          if (row) {
+            row.subagentCount = subagentCache[sessionId].length;
+          }
+        } catch (_err) {
+          return;
+        }
+        renderThreadList(cachedSessionRows, true);
+        if (subagentTraceSessionId === sessionId) {
+          renderSubagentTraceScreen();
+        }
+      }
+      function toggleThreadSubagents(sessionId, evt) {
+        if (evt) {
+          evt.preventDefault();
+          evt.stopPropagation();
+        }
+        if (expandedThreadIds.has(sessionId)) {
+          expandedThreadIds.delete(sessionId);
+        } else {
+          expandedThreadIds.add(sessionId);
+          void loadSubagents(sessionId);
+        }
+        renderThreadList(cachedSessionRows, true);
+      }
+      function notifyParentSubagentTrace(open) {
+        if (window.parent === window) {
+          return;
+        }
+        window.parent.postMessage({ type: "winnow-subagent-trace", open: Boolean(open) }, "*");
+      }
+      function openSubagentTrace(sessionId, agentId) {
+        if (!sessionId) {
+          return;
+        }
+        expandedThreadIds.add(sessionId);
+        subagentTraceSessionId = sessionId;
+        subagentTraceAgentId = agentId || "";
+        subagentTraceStick = false;
+        const screen = document.getElementById("subagentTraceScreen");
+        if (screen) {
+          screen.hidden = false;
+        }
+        notifyParentSubagentTrace(true);
+        void loadSubagents(sessionId);
+        renderSubagentTraceScreen();
+      }
+      function closeSubagentTrace() {
+        subagentTraceSessionId = "";
+        subagentTraceAgentId = "";
+        const screen = document.getElementById("subagentTraceScreen");
+        if (screen) {
+          screen.hidden = true;
+        }
+        notifyParentSubagentTrace(false);
+      }
+      function renderSubagentTraceScreen() {
+        const screen = document.getElementById("subagentTraceScreen");
+        const tabs = document.getElementById("subagentTraceTabs");
+        const body = document.getElementById("subagentTraceBody");
+        const parentEl = document.getElementById("subagentTraceParent");
+        if (!screen || !tabs || !body || screen.hidden) {
+          return;
+        }
+        const sessionId = subagentTraceSessionId;
+        const agents = agentsForSession(sessionId);
+        const parent = (cachedSessionRows || []).find((item) => item && item.id === sessionId);
+        if (parentEl) {
+          parentEl.textContent = parent ? String(parent.preview || parent.id || "").replace(/\\s+/g, " ").slice(0, 80) : sessionId;
+        }
+        if (!subagentTraceAgentId && agents[0]) {
+          subagentTraceAgentId = agents[0].id;
+        }
+        const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+        tabs.textContent = "";
+        agents.forEach((agent) => {
+          const tab = document.createElement("button");
+          tab.type = "button";
+          tab.className = "subagent-screen-tab" + (agent.id === subagentTraceAgentId ? " is-active" : "");
+          tab.setAttribute("role", "tab");
+          tab.setAttribute("aria-selected", agent.id === subagentTraceAgentId ? "true" : "false");
+          const status = agent.status === "done" ? "finished" : (agent.status || "running");
+          tab.textContent = String(agent.name || agent.id || "subagent") + " · " + status;
+          tab.onclick = () => {
+            subagentTraceAgentId = agent.id;
+            subagentTraceStick = false;
+            renderSubagentTraceScreen();
+          };
+          tabs.appendChild(tab);
+        });
+        const agent = agents.find((item) => item.id === subagentTraceAgentId) || null;
+        body.textContent = "";
+        if (!agent) {
+          const empty = document.createElement("div");
+          empty.className = "subagent-screen-status";
+          empty.textContent = agents.length ? "Select a subagent." : "No subagent transcript yet.";
+          body.appendChild(empty);
+          return;
+        }
+        const status = document.createElement("div");
+        status.className = "subagent-screen-status";
+        const stepCount = Array.isArray(agent.steps) ? agent.steps.length : 0;
+        status.textContent = (agent.status === "done" ? "Finished" : "Running") + " · " + stepCount + " steps";
+        body.appendChild(status);
+        (agent.steps || []).forEach((step) => {
+          const line = document.createElement("div");
+          line.className = "trace-step" + (step && step.kind === "tool" ? " is-tool" : "");
+          const kind = document.createElement("span");
+          kind.className = "trace-kind";
+          kind.textContent = step && step.kind === "tool" ? "tool" : "note";
+          line.appendChild(kind);
+          line.appendChild(document.createTextNode(String((step && step.label) || "")));
+          body.appendChild(line);
+        });
+        if (subagentTraceStick && nearBottom) {
+          body.scrollTop = body.scrollHeight;
+        }
+        subagentTraceStick = agent.status !== "done";
       }
       function renderThreadList(rows, force) {
         const listEl = document.getElementById("sessionList");
@@ -2750,6 +3115,8 @@ ${agentQuestionJavaScript()}
         }
         visible.forEach((s) => {
           const running = runningSessionIds.has(s.id) || s.status === "running";
+          const group = document.createElement("div");
+          group.className = "thread-group";
           const row = document.createElement("div");
           row.className = "thread-row" + (!draftThread && (s.id === selectedResumeSessionId || s.id === activeSessionId) ? " is-active" : "");
           row.setAttribute("data-session-id", s.id);
@@ -2800,7 +3167,46 @@ ${agentQuestionJavaScript()}
           row.appendChild(dot);
           row.appendChild(main);
           row.appendChild(actions);
-          listEl.appendChild(row);
+          group.appendChild(row);
+          const known = agentsForSession(s.id);
+          const subCount = Math.max(Number(s.subagentCount) || 0, known.length);
+          if (subCount > 0) {
+            const expanded = expandedThreadIds.has(s.id);
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "thread-sub-toggle";
+            toggle.textContent = (expanded ? "▾ " : "▸ ") + subCount + " subagent" + (subCount === 1 ? "" : "s");
+            toggle.onclick = (evt) => toggleThreadSubagents(s.id, evt);
+            group.appendChild(toggle);
+            if (expanded) {
+              if (!known.length) {
+                const pending = document.createElement("div");
+                pending.className = "thread-sub";
+                pending.textContent = "Loading traces…";
+                group.appendChild(pending);
+              }
+              known.forEach((agent) => {
+                const sub = document.createElement("button");
+                sub.type = "button";
+                sub.className = "thread-sub" + (subagentTraceSessionId === s.id && subagentTraceAgentId === agent.id ? " is-open" : "");
+                const name = document.createElement("span");
+                name.className = "thread-sub-name";
+                name.textContent = String(agent.name || agent.id || "subagent");
+                const st = document.createElement("span");
+                st.className = "thread-sub-status";
+                st.textContent = agent.status === "done" ? "finished" : (agent.status || "running");
+                sub.appendChild(name);
+                sub.appendChild(st);
+                sub.onclick = (evt) => {
+                  evt.preventDefault();
+                  evt.stopPropagation();
+                  openSubagentTrace(s.id, agent.id);
+                };
+                group.appendChild(sub);
+              });
+            }
+          }
+          listEl.appendChild(group);
         });
       }
       function togglePinnedThread(id) {
@@ -2901,6 +3307,9 @@ ${agentQuestionJavaScript()}
           }
           updateRunningCountChip();
           renderThreadList(cachedSessionRows);
+          ids.forEach((id) => {
+            void loadSubagents(id);
+          });
           applyAgentRunUi();
           if (selectedIsRunning() && activeSessionId && !streamSource) {
             attachStream(activeSessionId);
@@ -3190,6 +3599,12 @@ ${agentQuestionJavaScript()}
       restoreCursorMode();
       restoreCustomModeSkill();
       bootstrapCursorAndModels();
+      document.getElementById("btnCloseSubagentTrace")?.addEventListener("click", () => closeSubagentTrace());
+      document.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape" && subagentTraceSessionId) {
+          closeSubagentTrace();
+        }
+      });
       document.getElementById("btnCursorLogin")?.addEventListener("click", () => { void startCursorLoginFlow(); });
       document.getElementById("btnStartResolver")?.addEventListener("click", () => { void startResolverAgent(); });
       updateExecutionModeUi();

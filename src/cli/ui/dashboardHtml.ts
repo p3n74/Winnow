@@ -220,8 +220,10 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         margin: 0;
       }
       .subagents-panel {
+        display: flex;
+        flex-direction: column;
         flex-shrink: 0;
-        max-height: 120px;
+        max-height: 280px;
         overflow: auto;
         margin: 8px 0 0;
         padding: 6px 8px;
@@ -229,6 +231,37 @@ export function buildDashboardPageHtml(token: string | undefined): string {
         border-radius: var(--radius-sm);
         background: var(--panel2);
       }
+      .subagent-card {
+        border-top: 1px solid var(--line);
+        padding: 6px 0 4px;
+      }
+      .subagent-card:first-child { border-top: 0; }
+      .subagent-card-head {
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+        font-size: 12px;
+      }
+      .subagent-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: 0 0 auto;
+        transform: translateY(1px);
+      }
+      .subagent-dot[data-status="running"] { background: var(--accent); }
+      .subagent-dot[data-status="done"] { background: #3dd68c; }
+      .subagent-steps {
+        margin: 4px 0 0 13px;
+        padding: 0;
+        list-style: none;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .subagent-steps li { margin: 1px 0; }
+      .subagent-steps .is-tool { color: var(--text); }
       .subagents-panel[hidden] { display: none !important; }
       .subagents-head {
         font-size: 10px;
@@ -1530,8 +1563,8 @@ export function buildDashboardPageHtml(token: string | undefined): string {
               <div class="metric"><div class="metricLabel">Chunks</div><div class="metricValue" id="metricChunks">0</div></div>
               <div class="metric"><div class="metricLabel">Elapsed</div><div class="metricValue" id="metricElapsed">0s</div></div>
             </div>
-            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagents">
-              <div class="subagents-head">Subagents</div>
+            <section class="subagents-panel" id="agentSubagentsPanel" hidden aria-hidden="true" aria-label="Subagent trace">
+              <div class="subagents-head">Subagent trace</div>
               <div id="agentSubagentsLive"></div>
             </section>
             <div class="small muted">Thinking trace</div>
@@ -2838,27 +2871,63 @@ ${agentQuestionJavaScript()}
       let lastTraceAtMs = 0;
       const seenTimelineIds = new Set();
       let liveSubagentMap = {};
+      function appendSubagentCard(parent, row){
+        const card = document.createElement('article');
+        card.className = 'subagent-card';
+        const head = document.createElement('div');
+        head.className = 'subagent-card-head';
+        const dot = document.createElement('span');
+        dot.className = 'subagent-dot';
+        const status = String((row && row.status) || 'running');
+        dot.dataset.status = status === 'done' ? 'done' : 'running';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'subagent-name';
+        nameEl.textContent = String((row && (row.name || row.id)) || 'subagent');
+        const statusEl = document.createElement('span');
+        statusEl.className = 'muted';
+        statusEl.textContent = status === 'done' ? 'finished' : status;
+        head.appendChild(dot);
+        head.appendChild(nameEl);
+        head.appendChild(statusEl);
+        card.appendChild(head);
+        const steps = row && Array.isArray(row.steps) ? row.steps : [];
+        if(steps.length){
+          const list = document.createElement('ol');
+          list.className = 'subagent-steps';
+          const visible = steps.slice(-12);
+          const hiddenCount = steps.length - visible.length;
+          if(hiddenCount > 0){
+            const more = document.createElement('li');
+            more.textContent = '… ' + hiddenCount + ' earlier';
+            list.appendChild(more);
+          }
+          visible.forEach(function(step){
+            const li = document.createElement('li');
+            if(step && step.kind === 'tool'){ li.className = 'is-tool'; }
+            li.textContent = String((step && step.label) || '');
+            list.appendChild(li);
+          });
+          card.appendChild(list);
+        } else if(row && row.summary){
+          const sum = document.createElement('div');
+          sum.className = 'subagent-steps';
+          sum.textContent = String(row.summary);
+          card.appendChild(sum);
+        }
+        parent.appendChild(card);
+      }
       function renderSubagentsPanel(){
         const panel = document.getElementById('agentSubagentsPanel');
         const liveEl = document.getElementById('agentSubagentsLive');
+        const rows = Object.keys(liveSubagentMap).map(function(key){ return liveSubagentMap[key]; });
         if(liveEl){
           liveEl.textContent = '';
-          const rows = Object.keys(liveSubagentMap).map(function(key){ return liveSubagentMap[key]; });
-          if(rows.length){
-            rows.forEach(function(row){
-              const el = document.createElement('div');
-              el.className = 'subagent-row subagent-live';
-              const status = row.status ? ' · ' + row.status : '';
-              const summary = row.summary ? ' — ' + row.summary : '';
-              el.textContent = (row.name || row.id || 'subagent') + status + summary;
-              liveEl.appendChild(el);
-            });
-          }
-          if(panel){
-            const show = rows.length > 0;
-            panel.hidden = !show;
-            panel.setAttribute('aria-hidden', show ? 'false' : 'true');
-          }
+          rows.forEach(function(row){ appendSubagentCard(liveEl, row); });
+        }
+        if(panel){
+          const show = rows.length > 0;
+          panel.hidden = !show;
+          panel.setAttribute('aria-hidden', show ? 'false' : 'true');
         }
       }
       function applyLiveSubagents(rows){

@@ -10,11 +10,18 @@ export type SubagentDefinition = {
   fileName?: string;
 };
 
+export type SubagentTraceStep = {
+  kind: "say" | "tool";
+  label: string;
+};
+
 export type LiveSubagentRow = {
   id: string;
   name: string;
   status: string;
   summary: string;
+  /** Chronological work log, newest last. Present when read from a Cursor subagent transcript. */
+  steps?: SubagentTraceStep[];
 };
 
 /** Built-in Cursor subagents (conceptual). Winnow does not spawn them. */

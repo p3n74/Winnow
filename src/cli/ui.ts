@@ -108,6 +108,7 @@ import {
   normalizeCursorMode,
 } from "../cursor/cursorMode.js";
 import { expandSlashPrompt, listSlashCatalog } from "../cursor/slashCatalog.js";
+import { countCursorSubagentFiles, readCursorSubagentTraces } from "../cursor/subagentTrace.js";
 import {
   extractLiveSubagentEvents,
   listSubagentDefinitionFiles,
@@ -2007,6 +2008,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     agentRunChildProcesses.set(id, child);
 
     child.on("error", (error) => {
+      stopSubagentPoll();
       agentRunChildProcesses.delete(id);
       session.status = "error";
       session.error = error.message;
@@ -2017,7 +2019,57 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
     });
 
     const seenQuestionKeys = new Set<string>();
+    const launchedSubagentTitles: string[] = [];
     let stdoutBuffer = "";
+    let subagentPoll: ReturnType<typeof setInterval> | undefined;
+
+    const transcriptBacked = () =>
+      (session.liveSubagents ?? []).some((row) => (row.steps?.length ?? 0) > 0);
+
+    let subagentSyncChain: Promise<void> = Promise.resolve();
+    const syncSubagentTraces = (parentFinished = false) => {
+      const run = subagentSyncChain.then(async () => {
+        const chatId = session.cursorSessionId || "";
+        if (!isCursorChatSessionId(chatId)) {
+          return;
+        }
+        let traces: LiveSubagentRow[] = [];
+        try {
+          traces = await readCursorSubagentTraces({
+            workspaceRoot: spawnCwd,
+            cursorSessionId: chatId,
+            titles: launchedSubagentTitles,
+            parentFinished,
+          });
+        } catch {
+          return;
+        }
+        if (!traces.length) {
+          return;
+        }
+        const previous = new Map((session.liveSubagents ?? []).map((row) => [row.id, row]));
+        session.liveSubagents = traces;
+        for (const trace of traces) {
+          const prev = previous.get(trace.id);
+          const prevCount = prev?.steps?.length ?? 0;
+          for (const step of (trace.steps ?? []).slice(prevCount)) {
+            pushEvent("tool", `▸ ${trace.name} · ${step.label}`);
+          }
+          if (trace.status === "done" && prev?.status !== "done") {
+            pushEvent("status", `▸ ${trace.name} · finished`);
+          }
+        }
+      });
+      subagentSyncChain = run.catch(() => undefined);
+      return run;
+    };
+
+    const stopSubagentPoll = () => {
+      if (subagentPoll) {
+        clearInterval(subagentPoll);
+        subagentPoll = undefined;
+      }
+    };
     child.stdout?.on("data", (buf: Buffer) => {
       stdoutBuffer += buf.toString("utf8");
       if (stdoutBuffer.length > MAX_STDOUT_LINE_BUFFER) {
@@ -2041,11 +2093,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           }
           const liveSubagent = extractLiveSubagentEvents(data);
           if (liveSubagent) {
-            upsertLiveSubagent(liveSubagent);
-            pushEvent(
-              "system",
-              `subagent ${liveSubagent.name}: ${liveSubagent.status} ${liveSubagent.summary}`.trim(),
-            );
+            const title = liveSubagent.summary.trim();
+            if (title && title.length <= 120 && !launchedSubagentTitles.includes(title)) {
+              launchedSubagentTitles.push(title);
+            }
+            if (!transcriptBacked()) {
+              upsertLiveSubagent(liveSubagent);
+              pushEvent(
+                "system",
+                `subagent ${liveSubagent.name}: ${liveSubagent.status} ${liveSubagent.summary}`.trim(),
+              );
+            }
           }
           if (data.type === "system" && data.subtype === "init") {
             const cursorChatId = typeof data.session_id === "string" ? data.session_id.trim() : "";
@@ -2183,10 +2241,16 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
 
     child.stdin?.write(`${effectivePrompt}\n`);
     child.stdin?.end();
+    void syncSubagentTraces(false);
+    subagentPoll = setInterval(() => {
+      void syncSubagentTraces(false);
+    }, 1500);
 
     child.on("close", (code: number | null) => {
+      stopSubagentPoll();
       agentRunChildProcesses.delete(id);
       void (async () => {
+        await syncSubagentTraces(true);
         session.exitCode = selectedModelError ? 1 : code ?? 1;
         session.status = selectedModelError ? "error" : session.exitCode === 0 ? "done" : "error";
         session.endedAt = new Date().toISOString();
@@ -3766,7 +3830,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
             projectRoot,
           });
         }
-        const merged = [...byId.values()]
+        const ranked = [...byId.values()]
           .sort((a, b) => {
             const ar = a.status === "running" ? 1 : 0;
             const br = b.status === "running" ? 1 : 0;
@@ -3787,6 +3851,17 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
               projectRoot: live?.projectRoot ?? s.projectRoot,
             };
           });
+        const merged = await Promise.all(
+          ranked.map(async (sessionRow) => {
+            const chatId = sessionRow.cursorSessionId || "";
+            const root = sessionRow.projectRoot || uiWorkspace.dir;
+            if (!isCursorChatSessionId(chatId)) {
+              return { ...sessionRow, subagentCount: 0 };
+            }
+            const subagentCount = await countCursorSubagentFiles(root, chatId);
+            return { ...sessionRow, subagentCount };
+          }),
+        );
         sendJson(res, 200, {
           sessions: merged,
           dir: transcriptDirLabel,
@@ -3794,6 +3869,52 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
           cwd: uiWorkspace.dir,
           runningCount: countRunningSessions(sessions.values()),
           maxConcurrent: MAX_CONCURRENT_AGENT_RUNS,
+        });
+      } catch (error) {
+        sendJson(res, 400, { ok: false, error: (error as Error).message });
+      }
+      return;
+    }
+
+    const subagentListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents$/);
+    if (subagentListMatch && req.method === "GET") {
+      try {
+        const id = decodeURIComponent(subagentListMatch[1] || "").trim();
+        const live = sessions.get(id);
+        let cursorSessionId = live?.cursorSessionId || "";
+        let projectRoot = live?.projectRoot || uiWorkspace.dir;
+        if (!isCursorChatSessionId(cursorSessionId)) {
+          try {
+            const record = JSON.parse(await readFile(localSessionRecordPath(id, projectRoot), "utf8")) as LocalSessionRecord;
+            cursorSessionId = record.cursorSessionId || cursorSessionId;
+            projectRoot = record.projectRoot || projectRoot;
+          } catch {
+            if (isCursorChatSessionId(id)) {
+              cursorSessionId = id;
+            }
+          }
+        }
+        if (!isCursorChatSessionId(cursorSessionId)) {
+          sendJson(res, 200, { ok: true, sessionId: id, cursorSessionId: null, agents: [] });
+          return;
+        }
+        const traces = await readCursorSubagentTraces({
+          workspaceRoot: projectRoot,
+          cursorSessionId,
+          parentFinished: live ? live.status !== "running" : true,
+        });
+        const named = traces.map((trace) => {
+          const liveRow = live?.liveSubagents?.find((row) => row.id === trace.id);
+          if (!liveRow?.name || liveRow.name === trace.id) {
+            return trace;
+          }
+          return { ...trace, name: liveRow.name };
+        });
+        sendJson(res, 200, {
+          ok: true,
+          sessionId: id,
+          cursorSessionId,
+          agents: named,
         });
       } catch (error) {
         sendJson(res, 400, { ok: false, error: (error as Error).message });
