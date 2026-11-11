@@ -63,7 +63,7 @@ export type AgentStartRequest = {
 export type AgentEvent = {
   id: string;
   ts: string;
-  kind: "user" | "assistant" | "stderr" | "status" | "tool" | "system";
+  kind: "user" | "assistant" | "stderr" | "status" | "tool" | "system" | "question";
   content: string;
 };
 

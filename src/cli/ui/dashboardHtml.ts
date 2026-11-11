@@ -1,7 +1,7 @@
 /**
  * Root dashboard HTML (`/`).
  */
-import { clientApiJavaScript } from "./clientApiSnippet.js";
+import { agentQuestionJavaScript, clientApiJavaScript } from "./clientApiSnippet.js";
 
 export function buildDashboardPageHtml(token: string | undefined): string {
   const authTokenLiteral = JSON.stringify(token ?? "");
@@ -878,6 +878,12 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       .chatMsg:last-child { margin-bottom: 0; }
       .chatRole { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; font-style: italic; }
       .chatText { white-space: pre-wrap; font-size: 13px; font-family: var(--font-mono); line-height: 1.5; color: var(--text); }
+      .agentQuestion { border-color: var(--accent); }
+      .agentQuestion .qTitle { font-size: 14px; font-weight: 650; margin-bottom: 8px; }
+      .agentQuestion .qPrompt { margin: 10px 0 6px; font-size: 13px; }
+      .agentQuestion .qOptions label { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; font-size: 13px; cursor: pointer; }
+      .agentQuestion .qActions { display: flex; gap: 8px; margin-top: 12px; }
+      .agentQuestion .qNote { margin-top: 8px; font-size: 12px; color: var(--danger); }
       @keyframes winnow-spin {
         to { transform: rotate(360deg); }
       }
@@ -1565,6 +1571,7 @@ export function buildDashboardPageHtml(token: string | undefined): string {
       const INITIAL_VIEW = PAGE_PARAMS.get('view') || 'os';
       let currentDashboardView = INITIAL_VIEW;
 ${clientApiJavaScript()}
+${agentQuestionJavaScript()}
       function formatLocalDateTime(value, opts){
         const dt = new Date(value || '');
         if(!Number.isFinite(dt.getTime())){
@@ -2964,6 +2971,10 @@ ${clientApiJavaScript()}
         seenTimelineIds.add(ev.id);
         const kind = String(ev.kind || 'system');
         
+        if (kind === 'question') {
+          renderAgentQuestion(ev.content || '');
+          return;
+        }
         if (kind === 'tool' || kind === 'status' || kind === 'system') {
           pushTrace(ev.content || "");
           if(kind === 'system'){ noteLiveSubagentFromEvent(ev); }
@@ -2992,6 +3003,10 @@ ${clientApiJavaScript()}
           }
           const role = String(msg.kind || msg.role || '').toLowerCase();
           if(!role || role === 'entry'){
+            continue;
+          }
+          if (role === 'question') {
+            renderAgentQuestion(msg.content || '');
             continue;
           }
           if (role === 'tool' || role === 'status' || role === 'system') {
@@ -3507,10 +3522,13 @@ ${clientApiJavaScript()}
           refreshMetrics();
         });
         streamSource.addEventListener('done', () => {
+          const queued = queuedQuestionAnswer;
+          queuedQuestionAnswer = '';
           pushTrace('stream completed');
           closeStream();
           if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
           pollAgent();
+          if(queued){ void submitAgentQuestionAnswer(queued); }
         });
         streamSource.onerror = () => {
           closeStream();
@@ -3809,6 +3827,26 @@ ${clientApiJavaScript()}
           openSlashPaletteAt(triggerStart);
         } else {
           renderSlashPaletteItems();
+        }
+      }
+      let queuedQuestionAnswer = '';
+      async function submitAgentQuestionAnswer(text){
+        if(agentSessionRunning || agentStartInFlight){
+          queuedQuestionAnswer = text;
+          appendChat('system', 'Answer queued until this run finishes.');
+          return;
+        }
+        const area = document.getElementById('agentPrompt');
+        const cont = document.getElementById('continueMode');
+        const previous = area ? area.value : '';
+        const wasContinue = cont ? cont.checked : false;
+        if(area){ area.value = text; }
+        if(cont){ cont.checked = true; }
+        try {
+          await startAgentRun();
+        } finally {
+          if(area){ area.value = previous; }
+          if(cont){ cont.checked = wasContinue; }
         }
       }
       async function startAgentRun(){

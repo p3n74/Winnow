@@ -3,7 +3,7 @@
  * (title bar, activity rail, session sidebar, editor stack, bottom composer).
  */
 
-import { clientApiJavaScript } from "./ui/clientApiSnippet.js";
+import { agentQuestionJavaScript, clientApiJavaScript } from "./ui/clientApiSnippet.js";
 
 export function buildAgentWindowPageHtml(authToken: string | undefined): string {
   const tokenJson = JSON.stringify(authToken ?? "");
@@ -303,6 +303,12 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
         line-height: 1.45;
         color: var(--text);
       }
+      .agentQuestion { border-color: var(--accent); }
+      .agentQuestion .qTitle { font-size: 14px; font-weight: 650; margin-bottom: 8px; }
+      .agentQuestion .qPrompt { margin: 10px 0 6px; font-size: 13px; }
+      .agentQuestion .qOptions label { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; font-size: 13px; cursor: pointer; }
+      .agentQuestion .qActions { display: flex; gap: 8px; margin-top: 12px; }
+      .agentQuestion .qNote { margin-top: 8px; font-size: 12px; color: var(--danger); }
       @keyframes winnow-spin {
         to {
           transform: rotate(360deg);
@@ -938,6 +944,7 @@ export function buildAgentWindowPageHtml(authToken: string | undefined): string 
       const PINNED_THREADS_KEY = "winnow.agentPinnedIds";
       const CLOSED_THREADS_KEY = "winnow.agentClosedIds";
 ${clientApiJavaScript()}
+${agentQuestionJavaScript()}
       function formatLocalDateTime(value) {
         const dt = new Date(value || "");
         if (!Number.isFinite(dt.getTime())) {
@@ -1741,6 +1748,10 @@ ${clientApiJavaScript()}
         seenTimelineIds.add(ev.id);
         const kind = String(ev.kind || "system");
         
+        if (kind === "question") {
+          renderAgentQuestion(ev.content || "");
+          return;
+        }
         if (kind === "tool" || kind === "status" || kind === "system") {
           pushTrace(ev.content || "");
           if (kind === "system") {
@@ -1775,6 +1786,10 @@ ${clientApiJavaScript()}
           }
           const role = String(msg.kind || msg.role || "").toLowerCase();
           if (!role || role === "entry") {
+            continue;
+          }
+          if (role === "question") {
+            renderAgentQuestion(msg.content || "");
             continue;
           }
           if (role === "tool" || role === "status" || role === "system") {
@@ -2021,6 +2036,8 @@ ${clientApiJavaScript()}
           renderThreadList(cachedSessionRows);
         });
         streamSource.addEventListener("done", () => {
+          const queued = queuedQuestionAnswer;
+          queuedQuestionAnswer = "";
           pushTrace("stream completed");
           closeStream();
           if (pollTimer) {
@@ -2028,6 +2045,9 @@ ${clientApiJavaScript()}
             pollTimer = null;
           }
           pollAgent();
+          if (queued) {
+            void submitAgentQuestionAnswer(queued);
+          }
         });
         streamSource.onerror = () => {
           closeStream();
@@ -2222,6 +2242,35 @@ ${clientApiJavaScript()}
             renderAttachmentStrip();
           } catch (err) {
             appendChat("system", "Attach failed: " + (err && err.message ? err.message : String(err)));
+          }
+        }
+      }
+      let queuedQuestionAnswer = "";
+      async function submitAgentQuestionAnswer(text) {
+        if (agentSessionRunning || agentStartInFlight) {
+          queuedQuestionAnswer = text;
+          appendChat("system", "Answer queued until this run finishes.");
+          return;
+        }
+        draftThread = false;
+        const area = document.getElementById("agentPrompt");
+        const cont = document.getElementById("continueMode");
+        const previous = area ? area.value : "";
+        const wasContinue = cont ? cont.checked : false;
+        if (area) {
+          area.value = text;
+        }
+        if (cont) {
+          cont.checked = true;
+        }
+        try {
+          await startAgentRun();
+        } finally {
+          if (area) {
+            area.value = previous;
+          }
+          if (cont) {
+            cont.checked = wasContinue;
           }
         }
       }

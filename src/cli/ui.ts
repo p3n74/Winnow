@@ -116,6 +116,7 @@ import {
   type LiveSubagentRow,
 } from "../cursor/subagents.js";
 import { assistantTextFromStreamEvent, shouldAppendAssistantStreamEvent } from "../cursor/streamJson.js";
+import { parseStreamAskQuestion } from "../cursor/askQuestion.js";
 
 import {
   DEFAULT_PANE_COMMANDS,
@@ -2015,6 +2016,7 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
       finalizeRun(id, "error", 1, session.endedAt);
     });
 
+    const seenQuestionKeys = new Set<string>();
     let stdoutBuffer = "";
     child.stdout?.on("data", (buf: Buffer) => {
       stdoutBuffer += buf.toString("utf8");
@@ -2030,6 +2032,13 @@ export async function runUiServer(baseConfig: WinnowConfig, options: UiOptions):
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
+          const asked = parseStreamAskQuestion(data);
+          if (asked) {
+            if (!seenQuestionKeys.has(asked.key)) {
+              seenQuestionKeys.add(asked.key);
+              pushEvent("question", JSON.stringify({ state: "pending", title: asked.title, questions: asked.questions }));
+            }
+          }
           const liveSubagent = extractLiveSubagentEvents(data);
           if (liveSubagent) {
             upsertLiveSubagent(liveSubagent);
