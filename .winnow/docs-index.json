@@ -1,7 +1,17 @@
 {
-  "scannedAt": "2026-04-28T16:01:48.305Z",
+  "scannedAt": "2026-10-06T11:20:50.030Z",
   "root": "/Users/bastionii/Documents/Github/winnow",
   "files": [
+    {
+      "relPath": ".cursor/skills/winnow-codebase-audit/cursor-cli-traps.md",
+      "kind": "md",
+      "size": 4982
+    },
+    {
+      "relPath": ".cursor/skills/winnow-codebase-audit/SKILL.md",
+      "kind": "md",
+      "size": 6717
+    },
     {
       "relPath": ".winnow/plans/untitled-plan.md",
       "kind": "md",
@@ -10,7 +20,17 @@
     {
       "relPath": "docs/architecture.md",
       "kind": "md",
-      "size": 864
+      "size": 1930
+    },
+    {
+      "relPath": "docs/audit-fix-plan.md",
+      "kind": "md",
+      "size": 10726
+    },
+    {
+      "relPath": "docs/companion-ux-plan.md",
+      "kind": "md",
+      "size": 7264
     },
     {
       "relPath": "docs/dashboard-backlog.md",
@@ -48,14 +68,29 @@
       "size": 1942
     },
     {
+      "relPath": "docs/modes-and-commands-plan.md",
+      "kind": "md",
+      "size": 24135
+    },
+    {
       "relPath": "docs/plans/plan-store-stable-schema-and-workflow.md",
       "kind": "md",
       "size": 9675
     },
     {
+      "relPath": "docs/remote-access.md",
+      "kind": "md",
+      "size": 6387
+    },
+    {
+      "relPath": "docs/ssh-workspace.md",
+      "kind": "md",
+      "size": 2821
+    },
+    {
       "relPath": "README.md",
       "kind": "md",
-      "size": 11955
+      "size": 14083
     }
   ]
 }

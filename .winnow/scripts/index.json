@@ -1,0 +1,156 @@
+{
+  "scannedAt": "2026-09-02T03:11:34.421Z",
+  "root": "/Users/bastionii/Documents/Github/winnow",
+  "files": [
+    {
+      "relPath": "count_to_10.py",
+      "size": 36,
+      "shebang": "",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "python3 -u count_to_10.py"
+    },
+    {
+      "relPath": "scripts/check-node-version.js",
+      "size": 495,
+      "shebang": "/usr/bin/env node",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/check-node-version.js"
+    },
+    {
+      "relPath": "scripts/copy-electron-main.mjs",
+      "size": 425,
+      "shebang": "",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/copy-electron-main.mjs"
+    },
+    {
+      "relPath": "scripts/native-modules-check.mjs",
+      "size": 254,
+      "shebang": "",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/native-modules-check.mjs"
+    },
+    {
+      "relPath": "scripts/nativeAbi.mjs",
+      "size": 625,
+      "shebang": "",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/nativeAbi.mjs"
+    },
+    {
+      "relPath": "scripts/pty-check.mjs",
+      "size": 1457,
+      "shebang": "",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/pty-check.mjs"
+    },
+    {
+      "relPath": "scripts/run-setup.js",
+      "size": 744,
+      "shebang": "/usr/bin/env node",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/run-setup.js"
+    },
+    {
+      "relPath": "scripts/run-ui.js",
+      "size": 3313,
+      "shebang": "/usr/bin/env node",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/run-ui.js"
+    },
+    {
+      "relPath": "scripts/setup.sh",
+      "size": 4496,
+      "shebang": "/usr/bin/env bash",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/setup.sh"
+    },
+    {
+      "relPath": "scripts/ui.sh",
+      "size": 1998,
+      "shebang": "/usr/bin/env bash",
+      "hasCli": false,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/ui.sh"
+    },
+    {
+      "relPath": "scripts/winnow-ui.sh",
+      "size": 606,
+      "shebang": "/usr/bin/env bash",
+      "hasCli": false,
+      "blurb": "Open the Winnow web UI in an embedded Electron window (see: winnow ui --shell). Installed into ~/.local/bin by scripts/setup.sh (symlink) so you can run `winnow-ui` from any directory.",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "scripts/winnow-ui.sh"
+    },
+    {
+      "relPath": "src/cli/agentWindowHtml.ts",
+      "size": 113320,
+      "shebang": "",
+      "hasCli": true,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "src/cli/agentWindowHtml.ts"
+    },
+    {
+      "relPath": "src/cli/scriptIndex.ts",
+      "size": 14402,
+      "shebang": "",
+      "hasCli": true,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "src/cli/scriptIndex.ts"
+    },
+    {
+      "relPath": "src/cli/ui/dashboardHtml.ts",
+      "size": 164834,
+      "shebang": "",
+      "hasCli": true,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "src/cli/ui/dashboardHtml.ts"
+    },
+    {
+      "relPath": "src/cli/ui/mainGridHtml.ts",
+      "size": 261150,
+      "shebang": "",
+      "hasCli": true,
+      "blurb": "",
+      "knobs": [],
+      "linkedConfigs": [],
+      "sampleCommand": "src/cli/ui/mainGridHtml.ts"
+    }
+  ]
+}
